@@ -1,0 +1,64 @@
+name: Verify Godot project
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - bootstrap/ios-foundation-20260907
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-godot-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: "4.7.2"
+
+jobs:
+  verify:
+    name: Parse and smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download pinned Godot
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/godot.zip"
+          DEST="$RUNNER_TEMP/godot"
+          URL="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          mkdir -p "$DEST"
+          curl --fail --location --retry 3 --retry-delay 2 "$URL" --output "$ARCHIVE"
+          unzip -q "$ARCHIVE" -d "$DEST"
+          GODOT_BIN="$DEST/Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+
+      - name: Engine identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --version
+
+      - name: Import and parse project
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless --path . --editor --quit
+
+      - name: Run mechanical smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless --path . --script res://tests/smoke_project.gd

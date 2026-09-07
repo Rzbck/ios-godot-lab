@@ -2,7 +2,7 @@
 
 Date : **2026-09-07**.
 
-État : **première application Godot réelle implémentée ; chaîne Windows -> GitHub Actions macOS -> Godot iOS -> Xcode -> IPA unsigned VALIDÉE sur un SHA exact ; bootstrap local Windows et SideStore en cours ; aucune installation sur iPhone encore validée.**
+État : **première application Godot réelle implémentée ; chaîne Windows -> GitHub Actions macOS -> Godot iOS -> Xcode -> IPA unsigned VALIDÉE sur un SHA exact ; bootstrap local Windows et installation SideStore terminés ; login Apple dans SideStore actuellement bloqué par une erreur upstream de format ; aucune installation de l'app Godot sur iPhone encore validée.**
 
 > Porte d'entrée canonique : `/HANDOFF.md`.
 
@@ -48,6 +48,7 @@ Le `application/app_store_team_id="0000000000"` du preset est un **placeholder n
 7. SideStore = sideload principal gratuit, pour signature Personal Team et rafraîchissement périodique des profils 7 jours après installation initiale.
 8. TestFlight/App Store ne font pas partie de la chaîne 0 €.
 9. Accès iPhone = APIs Godot natives quand disponibles + un bridge iOS natif ciblé pour les frameworks Apple publics supplémentaires.
+10. Si SideStore est temporairement bloqué côté login/refresh, `iloader` peut servir de fallback de sideload USB pour installer l'IPA exacte et poursuivre la validation iPhone ; cela ne remplace pas le refresh périodique SideStore.
 
 ## Application actuelle
 
@@ -102,21 +103,39 @@ Deux autres pièges observés pendant ce bootstrap :
 
 ## Bootstrap SideStore — état réel
 
-Sur l'iPhone :
-
-- `LocalDevVPN` installé ;
-- tunnel LocalDevVPN connecté.
-
 Sur Windows :
 
-- iTunes `12.13.10.3` a été téléchargé depuis le package `Apple.iTunes` via winget, installer Apple officiel ;
-- hash de l'installer validé par winget ;
-- installation iTunes annoncée réussie ;
-- immédiatement après installation, `Apple Mobile Device Service` n'était pas encore visible avec `Get-Service` ;
-- le script s'est arrêté volontairement à ce point avant iLoader ;
-- **iloader n'est donc pas encore considéré installé/validé par cette session**.
+- iTunes `12.13.10.3` installé via `winget` depuis le package Apple officiel ; hash installer validé par winget ;
+- juste après installation, le service historique `Apple Mobile Device Service` n'était pas visible, mais l'iPhone était ensuite bien reconnu par Windows avec `Apple iPhone`, `Apple Mobile Device USB Device`, `Apple Mobile Device USB Composite Device` et `Apple Mobile Device Ethernet`, tous `OK` ;
+- `iloader` officiel **v2.3.1** téléchargé dans `E:\_Project\IOS APP\_Tools\iloader\releases\v2.3.1\` ;
+- MSI `iloader-windows-x64.msi` vérifié SHA-256 `d5d20f74ba906047f3567d3a47caf1c6473a53dabe083392f56d33ecf089e3c5` ;
+- installation MSI : PASS ;
+- iLoader voit l'iPhone et le compte Apple ;
+- `SideStore (Stable)` installé avec succès par iLoader ; les étapes Download / Sign & Install / Place Pairing File ont toutes PASS.
 
-Prochaine reprise SideStore : diagnostiquer la présence réelle de `Apple Mobile Device Service`/Apple Mobile Device Support après l'installation iTunes. Apple recommande un redémarrage Windows dans le diagnostic AMDS ; ne pas réinstaller iTunes à l'aveugle avant vérification. Une fois le support USB Apple visible et l'iPhone reconnu, reprendre l'installation officielle d'iloader puis SideStore.
+Sur l'iPhone :
+
+- iOS observé : **26.6.1** ;
+- profil développeur SideStore approuvé / SideStore affiché **Vérifié** ;
+- Mode développeur activé ;
+- `LocalDevVPN` installé et connecté ;
+- SideStore s'ouvre correctement.
+
+### BLOCKER ACTUEL — login Apple dans SideStore
+
+Lors du login Apple dans SideStore, après saisie des identifiants puis du code 2FA à 6 chiffres, SideStore échoue avec :
+
+`Failed to login — The data couldn’t be read because it isn’t in the correct format.`
+
+- plusieurs serveurs Anisette ont été essayés, dont Macley, sans changement ;
+- ne plus faire tourner les serveurs Anisette au hasard : ce test a déjà été fait ;
+- un issue upstream SideStore **#1485**, ouvert le 2026-09-07, reproduit exactement `NSCocoaErrorDomain 3840 / The data couldn’t be read because it isn’t in the correct format` sur **SideStore 0.6.2 + iOS 26.6.1**, avec échec login/refresh même avec/sans VPN ;
+- un incident AltStore séparé ouvert le 2026-09-05 rapporte la même erreur et a observé un **HTTP 503** pendant le flux de login, ce qui renforce l'hypothèse d'un problème temporaire de service/réponse Apple plutôt que d'un mauvais mot de passe, mauvais code 2FA ou pairing local ;
+- classification : **BUG / BLOCKER UPSTREAM PROBABLE**, pas une validation d'échec de notre app Godot.
+
+### Fallback immédiat retenu
+
+Pour ne pas bloquer la validation iPhone de l'app Godot sur cet incident SideStore : utiliser `iloader -> Import IPA` avec l'IPA exacte `IOSGodotLab-unsigned-8899a4bb4ad8.ipa`. iLoader sait déjà signer/installer avec le compte Apple et a réussi l'installation de SideStore. Ce fallback permet de valider l'app sur l'iPhone dès maintenant ; il faudra revenir à SideStore quand le login/refresh upstream refonctionnera pour le rafraîchissement 7 jours sans PC.
 
 ## VALIDÉ
 
@@ -124,7 +143,8 @@ Prochaine reprise SideStore : diagnostiquer la présence réelle de `Apple Mobil
 - **BUILD CI VALIDÉ (DESKTOP/HEADLESS)** : Godot 4.7.2 import/parse + smoke PASS.
 - **BUILD IOS VALIDÉ** : `8899a4bb4ad8addecf20a36d91b8d2055346cef5`, run `34160430197`, export Godot PASS, Xcode Release iphoneos PASS, app confirmée unsigned, IPA créée et artifact uploadé.
 - **VALIDÉ LOCAL WINDOWS** : Godot local 4.7.1 importe le projet et exécute le smoke test avec succès dans le worktree actif.
-- **VALIDÉ SUR IPHONE** : rien pour l'instant.
+- **VALIDÉ BOOTSTRAP SIDELOAD** : iLoader v2.3.1 installé, iPhone reconnu, SideStore Stable installé et profil vérifié sur l'iPhone, Developer Mode actif, LocalDevVPN connecté.
+- **VALIDÉ SUR IPHONE** : app Godot pas encore installée/testée ; aucune capacité applicative classée VALIDÉE SUR IPHONE.
 
 ## Incidents de bootstrap résolus
 
@@ -140,10 +160,10 @@ Le build Xcode réussi contient encore des warnings non bloquants : descriptions
 
 ## PROCHAIN TEST
 
-1. terminer le bootstrap SideStore Windows : vérifier AMDS/support USB Apple, puis installer iLoader officiel ;
-2. installer/configurer SideStore sur l'iPhone ;
-3. récupérer l'artifact exact du run `34160430197` ;
-4. signer/installer `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
-5. vérifier que l'app lance et affiche le SHA `8899a4bb4ad8` ;
-6. tester tactile, mouvement réel (accéléromètre/gravity/gyro/magnétomètre) et vibration ;
-7. seulement après, classer les capacités réellement observées en **VALIDÉ SUR IPHONE**.
+1. ne plus insister sur le login SideStore tant que l'erreur upstream `NSCocoaErrorDomain 3840` persiste ;
+2. récupérer l'artifact exact du run `34160430197` ;
+3. utiliser `iloader -> Import IPA` pour signer/installer `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
+4. vérifier que l'app lance et affiche le SHA `8899a4bb4ad8` ;
+5. tester tactile, mouvement réel (accéléromètre/gravity/gyro/magnétomètre) et vibration ;
+6. seulement après, classer les capacités réellement observées en **VALIDÉ SUR IPHONE** ;
+7. retester SideStore plus tard pour rétablir le refresh périodique 7 jours.

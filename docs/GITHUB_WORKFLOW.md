@@ -6,6 +6,7 @@
 - Le dépôt réel prime sur l'ancien chat.
 - Toute reprise commence par `/HANDOFF.md`.
 - Tout build/test doit être attribuable à un SHA exact.
+- Le handoff ne s'auto-déclare jamais HEAD : le HEAD réel est toujours re-fetché.
 
 ## 2. Branches
 
@@ -53,24 +54,45 @@ Interprétation obligatoire :
 - secrets/pairing/certificats exclus ;
 - inspecter `git diff --cached` avant commit.
 
-## 5. CI iOS
+## 5. CI Godot rapide
 
-Le workflow cible doit :
+`verify-godot.yml` :
 
-1. tourner sur runner macOS standard explicite ;
+1. checkout SHA exact ;
+2. Godot 4.7.2 verrouillé ;
+3. import/parse ;
+4. `tests/smoke_project.gd` ;
+5. aucune conclusion hardware/iPhone à partir de ce PASS.
+
+## 6. CI iOS
+
+`build-ios-unsigned.yml` est **manuel (`workflow_dispatch`)** après le bootstrap.
+
+Le workflow :
+
+1. tourne sur `macos-26` ;
 2. checkout le SHA exact déclencheur ;
-3. installer une version Godot verrouillée ;
-4. installer les export templates correspondants ;
-5. exporter le projet Godot vers Xcode ;
-6. lancer `xcodebuild` avec signature désactivée ;
-7. empaqueter `Payload/*.app` en `.ipa` ;
-8. produire `BUILD-METADATA.json` contenant repo/ref/SHA/Godot/Xcode/date ;
-9. uploader l'IPA + manifeste comme artifact ;
-10. échouer si une précondition manque au lieu de produire un artifact ambigu.
+3. installe Godot 4.7.2 verrouillé ;
+4. installe les export templates correspondants ;
+5. stamp le SHA dans `config/build_info.json` ;
+6. exporte le projet Godot vers Xcode ;
+7. construit le scheme `IOSGodotLab` Release / `generic/platform=iOS` avec signature désactivée ;
+8. exige que `codesign --verify` échoue ;
+9. empaquette `Payload/*.app` en `.ipa` ;
+10. produit `BUILD-METADATA.json` contenant repo/ref/SHA/Godot/Xcode/SDK ;
+11. produit le SHA-256 de l'IPA ;
+12. upload l'IPA + manifeste + hash comme artifact ;
+13. échoue si une précondition manque au lieu de produire un artifact ambigu.
 
-Au bootstrap, privilégier `workflow_dispatch` manuel. Le build automatique sur tags/releases pourra venir ensuite.
+Premier BUILD IOS VALIDÉ :
 
-## 6. Publication `main`
+- SHA `8899a4bb4ad8addecf20a36d91b8d2055346cef5` ;
+- run `34160430197` ;
+- `BUILD SUCCEEDED` ;
+- IPA `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
+- SHA-256 `40e8b799779de2a9cf6b8b0973e6308875d4006223cbceaa43b4f001c187e14d`.
+
+## 7. Publication `main`
 
 Avant merge/promotion :
 
@@ -82,15 +104,29 @@ Avant merge/promotion :
 - handoff/state/log réconciliés ;
 - accord humain.
 
-## 7. Test iPhone exact-SHA
+Aucun merge automatique de la branche bootstrap n'est autorisé simplement parce que le build iOS passe.
+
+## 8. Test iPhone exact-SHA
 
 Lorsqu'une IPA est installée : consigner au minimum :
 
 - SHA Git ;
 - nom artifact ;
-- version Godot ;
+- SHA-256 IPA ;
+- version Godot/Xcode ;
 - modèle/iOS si pertinent ;
 - résultat lancement ;
 - capacités réellement testées.
 
 Ne jamais reporter une validation d'une IPA vers un autre SHA.
+
+## 9. SideStore
+
+SideStore signe/installera l'IPA unsigned avec le compte Apple gratuit de l'utilisateur. Le refresh 7 jours est un mécanisme de distribution/test, pas une preuve que les fonctions iPhone marchent.
+
+## 10. Nettoyage / rollback
+
+- jamais `reset --hard`, `clean -fd[x]`, force-push ou rebase destructif automatique ;
+- worktree DIRTY = HOLD jusqu'à inventaire ;
+- rollback publié = nouveau commit/revert propre ;
+- branche/worktree supprimable uniquement après identité, CLEAN, publication/préservation et absence d'usage actif.

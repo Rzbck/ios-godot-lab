@@ -115,8 +115,10 @@ jobs:
 
           xcodebuild \
             -project "$XCODEPROJ" \
+            -scheme "$PROJECT_NAME" \
             -configuration Release \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath "$DERIVED_DATA" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \

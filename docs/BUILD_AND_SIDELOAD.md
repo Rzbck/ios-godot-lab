@@ -6,53 +6,91 @@ Date de recherche initiale : 2026-09-07.
 
 **Windows + Godot + GitHub Actions macOS + IPA unsigned + SideStore.**
 
-### Pourquoi GitHub Actions
+## État : chaîne jusqu'à l'IPA réellement validée
+
+La partie build n'est plus théorique. Elle est **BUILD IOS VALIDÉE** sur le SHA exact :
+
+`8899a4bb4ad8addecf20a36d91b8d2055346cef5`
+
+Preuve :
+
+- GitHub Actions run `34160430197` ;
+- Godot `4.7.2.stable.official.ed1daf0bf` ;
+- Xcode `26.6` (`17F113`) ;
+- iPhoneOS SDK `26.5` ;
+- cible `arm64-apple-ios16.0` ;
+- `BUILD SUCCEEDED` ;
+- app volontairement unsigned, vérifiée par la CI ;
+- IPA `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
+- SHA-256 IPA `40e8b799779de2a9cf6b8b0973e6308875d4006223cbceaa43b4f001c187e14d` ;
+- artifact GitHub `ios-unsigned-8899a4bb4ad8addecf20a36d91b8d2055346cef5`, ID `10032441877`.
+
+Cette preuve ne vaut **pas** `VALIDÉ SUR IPHONE` tant que cette IPA exacte n'a pas été signée/installée/lancée sur le vrai téléphone.
+
+## Pipeline désormais utilisé
+
+Le workflow `.github/workflows/build-ios-unsigned.yml` est déclenché manuellement via `workflow_dispatch` après le bootstrap.
+
+Il effectue :
+
+1. checkout du SHA exact ;
+2. identité du runner macOS/Xcode/SDK ;
+3. téléchargement de Godot 4.7.2 + templates correspondants ;
+4. stamp éphémère de `config/build_info.json` avec le SHA exact ;
+5. import Godot ;
+6. export iOS project-only vers Xcode ;
+7. `xcodebuild` Release, scheme `IOSGodotLab`, `generic/platform=iOS` ;
+8. `CODE_SIGNING_ALLOWED=NO`, `CODE_SIGNING_REQUIRED=NO`, identité/team vides ;
+9. assertion que `codesign --verify` échoue ;
+10. empaquetage `Payload/*.app` en IPA ;
+11. génération `BUILD-METADATA.json` + SHA-256 ;
+12. upload artifact GitHub.
+
+Le preset Godot contient `application/app_store_team_id="0000000000"` uniquement comme **placeholder non secret** pour satisfaire le validateur d'export Godot. Ce n'est pas un Team ID Apple réel et Xcode compile ensuite avec team/signature vides.
+
+## Correctifs découverts par le vrai build
+
+### ETC2/ASTC
+
+L'export Apple Embedded refusait initialement la configuration. Le projet fixe maintenant :
+
+`textures/vram_compression/import_etc2_astc=true`
+
+### Icône iOS
+
+L'export iOS exigeait une source d'icône. `assets/icon.svg` est versionné et référencé par `application/config/icon`; Godot génère ensuite les variantes AppIcon.
+
+### Xcode 26.6
+
+Avec `-derivedDataPath`, Xcode 26.6 exige un scheme explicite. Le workflow utilise donc `-scheme IOSGodotLab` et `-destination 'generic/platform=iOS'`.
+
+## Warnings non bloquants actuels
+
+Le premier build réussi signale encore :
+
+- `NSCameraUsageDescription` vide ;
+- `NSMicrophoneUsageDescription` vide ;
+- `NSPhotoLibraryUsageDescription` vide ;
+- warning de template Godot sur `application/boot_splash/fullsize` ;
+- warning `#pragma once` dans le dummy header généré.
+
+Les warnings de template n'empêchent pas le build. Les descriptions Camera/Micro/Photo devront être renseignées **avant d'activer et tester ces permissions sur iPhone**.
+
+## Pourquoi GitHub Actions
 
 GitHub documente que les runners standards sont gratuits pour les repositories publics. Les runners macOS Apple Silicon standards sont disponibles, avec Xcode préinstallé.
 
 Source : https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 
-### Pourquoi un IPA unsigned
+## Pourquoi un IPA unsigned
 
-Le compte Apple gratuit est utilisé au moment du sideload, pas dans la CI. La CI doit pouvoir compiler sans certificat Apple privé stocké sur GitHub.
-
-Pattern `xcodebuild` à valider sur notre projet :
-
-```bash
-xcodebuild archive \
-  -project build/ios/MyApp.xcodeproj \
-  -scheme MyApp \
-  -archivePath build/ios/App.xcarchive \
-  -configuration Release \
-  CODE_SIGN_STYLE=Manual \
-  CODE_SIGN_IDENTITY="" \
-  PROVISIONING_PROFILE_SPECIFIER="" \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGNING_ALLOWED=NO
-```
-
-Puis :
-
-```bash
-mkdir -p Payload
-cp -R App.xcarchive/Products/Applications/*.app Payload/
-zip -r MyApp.ipa Payload
-```
-
-Ce pattern existe dans des pipelines communautaires Godot unsigned ; il doit être **validé chez nous avant d'être classé BUILD CI VALIDÉ**.
+Le compte Apple gratuit est utilisé au moment du sideload, pas dans la CI. Aucun certificat Apple privé n'a donc besoin d'être stocké sur GitHub.
 
 ## Godot
 
 Version de base choisie : **4.7.2 stable** (maintenance release du 18 août 2026).
 
 Godot demande officiellement macOS + Xcode pour l'export iOS. Notre runner GitHub remplit cette exigence.
-
-L'exporteur demande notamment :
-
-- bundle identifier ;
-- App Store Team ID au format 10 caractères.
-
-Le traitement propre du Team ID pour notre build unsigned reste un point à résoudre/valider avant premier build.
 
 Sources :
 
@@ -106,3 +144,7 @@ Excellent pour bêta/distribution, mais nécessite l'Apple Developer Program pay
 ### Mac cloud payant / AWS EC2 Mac / MacStadium
 
 Inutile pour le bootstrap car le repo public donne accès aux runners standards macOS GitHub gratuitement.
+
+## Prochaine étape
+
+SideStore -> récupérer l'artifact exact -> signer/installer l'IPA -> lancer -> vérifier le SHA affiché -> tester tactile/capteurs/haptique -> seulement alors marquer les capacités observées **VALIDÉ SUR IPHONE**.

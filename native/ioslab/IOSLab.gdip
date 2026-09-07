@@ -1,0 +1,18 @@
+[config]
+name="IOSLab"
+binary="IOSLab.xcframework"
+initialization="ios_lab_init"
+deinitialization="ios_lab_deinit"
+
+[dependencies]
+linked=[]
+embedded=[]
+system=["CoreLocation.framework","CoreBluetooth.framework","ARKit.framework","CoreNFC.framework"]
+capabilities=[]
+files=[]
+linker_flags=["-ObjC"]
+
+[plist]
+NSLocationWhenInUseUsageDescription="Location is used only when you start the GPS test in iOS Godot Lab."
+NSBluetoothAlwaysUsageDescription="Bluetooth is used only when you start the BLE scanner in iOS Godot Lab."
+NSBluetoothPeripheralUsageDescription="Bluetooth is used only when you start the BLE scanner in iOS Godot Lab."

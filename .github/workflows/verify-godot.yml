@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - bootstrap/ios-foundation-20260907
+      - feat/iphone-lab-v2-20260908
 
 permissions:
   contents: read

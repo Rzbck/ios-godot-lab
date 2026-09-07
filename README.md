@@ -59,6 +59,7 @@ Le workflow `.github/workflows/build-ios-unsigned.yml` est volontairement manuel
 - `main` = état publié ; tout changement réel passe par branche dédiée ;
 - **1 chantier = 1 branche = 1 worktree local** ;
 - un build/test ne valide que son SHA exact ;
+- le handoff ne s'auto-déclare jamais HEAD : le HEAD réel est toujours re-fetché ;
 - SideStore retenu pour le rafraîchissement périodique en arrière-plan après installation initiale ;
 - compte Apple gratuit : profils 7 jours, 3 apps max par appareil, 10 App IDs.
 

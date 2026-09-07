@@ -1,0 +1,35 @@
+# Godot
+.godot/
+.import/
+
+# Builds / exports
+build/
+dist/
+*.ipa
+*.xcarchive
+
+# Godot confidential export credentials
+.godot/export_credentials.cfg
+
+# Apple signing / provisioning / pairing
+*.p12
+*.mobileprovision
+*.cer
+*.certSigningRequest
+*.pairing
+pairing*.plist
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs / temp
+*.log
+*.tmp

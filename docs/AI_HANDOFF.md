@@ -11,7 +11,6 @@ Date : **2026-09-07**.
 - repo : `Rzbck/ios-godot-lab` ;
 - `main` publié : `1a7c6e7b947cf2177eb56cbb43e924e7c39fd83f` ;
 - branche de travail : `bootstrap/ios-foundation-20260907` ;
-- **HEAD documentaire/tooling au moment de ce handoff : `e4da527dfbfbc07ff8a238dae8f841a551b16486`** ;
 - premier écran app : `b530c3b718b19b0bb4468519e6ccba0a75eb9f8e` ;
 - premier parse/smoke desktop validé : `bf7bfa29482704408fad7b994d4772b573480e49` ;
 - **dernier produit BUILD IOS VALIDÉ : `8899a4bb4ad8addecf20a36d91b8d2055346cef5`** ;
@@ -20,7 +19,7 @@ Date : **2026-09-07**.
 - artifact ID : `10032441877` ;
 - IPA : `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
 - SHA-256 IPA : `40e8b799779de2a9cf6b8b0973e6308875d4006223cbceaa43b4f001c187e14d` ;
-- toujours re-fetcher le HEAD courant de branche avant toute reprise : des commits de documentation/tooling peuvent être postérieurs au dernier produit iOS validé.
+- **le HEAD courant de la branche n'est jamais auto-figé dans ce fichier** : toujours re-fetcher GitHub avant reprise, car des commits de documentation/tooling peuvent être postérieurs au dernier produit iOS validé.
 
 ## Toolchain iOS réellement validée
 

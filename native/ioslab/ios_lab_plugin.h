@@ -29,11 +29,14 @@ public:
 	bool is_lidar_supported() const;
 	bool is_nfc_available() const;
 
+	float get_battery_level() const;
+	int get_battery_state() const;
+
 	void emit_location_authorization(int status);
 	void emit_location(double latitude, double longitude, double accuracy, double altitude, double speed);
 	void emit_ble_state(int state);
 	void emit_ble_device(const String &name, const String &uuid, int rssi);
 };
 
-extern "C" void ios_lab_init();
-extern "C" void ios_lab_deinit();
+void ios_lab_init();
+void ios_lab_deinit();

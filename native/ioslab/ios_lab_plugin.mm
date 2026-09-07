@@ -3,6 +3,7 @@
 #import <CoreLocation/CoreLocation.h>
 #import <CoreNFC/CoreNFC.h>
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
 #include "core/config/engine.h"
 #include "core/object/class_db.h"
@@ -119,6 +120,8 @@ void IOSLabPlugin::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_arkit_supported"), &IOSLabPlugin::is_arkit_supported);
 	ClassDB::bind_method(D_METHOD("is_lidar_supported"), &IOSLabPlugin::is_lidar_supported);
 	ClassDB::bind_method(D_METHOD("is_nfc_available"), &IOSLabPlugin::is_nfc_available);
+	ClassDB::bind_method(D_METHOD("get_battery_level"), &IOSLabPlugin::get_battery_level);
+	ClassDB::bind_method(D_METHOD("get_battery_state"), &IOSLabPlugin::get_battery_state);
 
 	ADD_SIGNAL(MethodInfo(
 		"location_authorization_changed",
@@ -153,6 +156,7 @@ IOSLabPlugin *IOSLabPlugin::get_singleton() {
 IOSLabPlugin::IOSLabPlugin() {
 	singleton = this;
 	ios_lab_delegate = [[IOSLabDelegate alloc] initWithOwner:this];
+	[UIDevice currentDevice].batteryMonitoringEnabled = YES;
 }
 
 
@@ -165,6 +169,7 @@ IOSLabPlugin::~IOSLabPlugin() {
 		ios_lab_delegate.owner = nullptr;
 		ios_lab_delegate = nil;
 	}
+	[UIDevice currentDevice].batteryMonitoringEnabled = NO;
 	singleton = nullptr;
 }
 
@@ -242,6 +247,20 @@ bool IOSLabPlugin::is_nfc_available() const {
 }
 
 
+float IOSLabPlugin::get_battery_level() const {
+	UIDevice *device = [UIDevice currentDevice];
+	device.batteryMonitoringEnabled = YES;
+	return device.batteryLevel;
+}
+
+
+int IOSLabPlugin::get_battery_state() const {
+	UIDevice *device = [UIDevice currentDevice];
+	device.batteryMonitoringEnabled = YES;
+	return (int)device.batteryState;
+}
+
+
 void IOSLabPlugin::emit_location_authorization(int status) {
 	emit_signal("location_authorization_changed", status);
 }
@@ -262,7 +281,7 @@ void IOSLabPlugin::emit_ble_device(const String &name, const String &uuid, int r
 }
 
 
-extern "C" void ios_lab_init() {
+void ios_lab_init() {
 	if (ios_lab_plugin_instance != nullptr) {
 		return;
 	}
@@ -271,7 +290,7 @@ extern "C" void ios_lab_init() {
 }
 
 
-extern "C" void ios_lab_deinit() {
+void ios_lab_deinit() {
 	if (ios_lab_plugin_instance != nullptr) {
 		memdelete(ios_lab_plugin_instance);
 		ios_lab_plugin_instance = nullptr;

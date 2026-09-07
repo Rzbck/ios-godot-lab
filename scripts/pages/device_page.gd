@@ -16,6 +16,8 @@ var _power: Label
 var _locale: Label
 var _clipboard_status: Label
 var _haptic_status: Label
+var _ioslab: Object
+var _system_refresh_accumulator := 0.0
 
 
 func _ready() -> void:
@@ -23,10 +25,15 @@ func _ready() -> void:
 	add_theme_constant_override("separation", 16)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+	if OS.get_name() == "iOS" and Engine.has_singleton("IOSLab"):
+		_ioslab = Engine.get_singleton("IOSLab")
+	else:
+		_ioslab = null
+
 	UI.section_title(
 		self,
 		"Device",
-		"Camera, microphone, power, clipboard and system-level probes exposed by Godot on iOS."
+		"Camera, microphone, battery, clipboard and system-level probes exposed by Godot and the IOSLab bridge on iOS."
 	)
 
 	_build_camera_card()
@@ -124,9 +131,14 @@ func _build_system_card() -> void:
 	actions.add_child(settings)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not is_visible_in_tree():
 		return
+
+	_system_refresh_accumulator += delta
+	if _system_refresh_accumulator >= 5.0:
+		_system_refresh_accumulator = 0.0
+		_refresh_system_info()
 
 	if _capture != null:
 		var available := _capture.get_frames_available()
@@ -216,15 +228,33 @@ func _stop_microphone() -> void:
 
 
 func _refresh_system_info() -> void:
-	var percent := OS.get_power_percent_left()
-	var state := OS.get_power_state()
-	_power.text = "%d%% · state %d" % [percent, state]
+	if _ioslab != null and _ioslab.has_method("get_battery_level") and _ioslab.has_method("get_battery_state"):
+		var level := float(_ioslab.call("get_battery_level"))
+		var state := int(_ioslab.call("get_battery_state"))
+		if level >= 0.0:
+			_power.text = "%d%% · %s" % [int(round(level * 100.0)), _battery_state_name(state)]
+		else:
+			_power.text = "unknown · %s" % _battery_state_name(state)
+	else:
+		_power.text = "iOS bridge unavailable"
 
 	var timezone := Time.get_time_zone_from_system()
 	_locale.text = "%s · %s" % [
 		TranslationServer.get_locale(),
 		str(timezone.get("name", "timezone"))
 	]
+
+
+func _battery_state_name(state: int) -> String:
+	match state:
+		1:
+			return "unplugged"
+		2:
+			return "charging"
+		3:
+			return "full"
+		_:
+			return "unknown"
 
 
 func _copy_test_text() -> void:

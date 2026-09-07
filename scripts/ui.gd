@@ -271,7 +271,7 @@ static func terminal_log(min_height: float = 160.0) -> RichTextLabel:
 
 
 static func section_title(parent: Container, title_text: String, subtitle: String = "") -> void:
-	var eyebrow := label("IOSLAB // RUNTIME", 10, ACCENT)
+	var eyebrow := label("IOSLAB // RUNTIME", 11, ACCENT)
 	parent.add_child(eyebrow)
 	var title := label(title_text, 22, TEXT)
 	parent.add_child(title)

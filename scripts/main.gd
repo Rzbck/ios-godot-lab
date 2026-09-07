@@ -76,7 +76,7 @@ func _build_shell() -> void:
 	title_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	header.add_child(title_stack)
 
-	title_stack.add_child(UI.label("IOSLAB // DEVICE CONSOLE", 10, UI.ACCENT))
+	title_stack.add_child(UI.label("IOSLAB // DEVICE CONSOLE", 11, UI.ACCENT))
 	title_stack.add_child(UI.label("iPhone Lab", 24, UI.TEXT))
 
 	var right_stack := VBoxContainer.new()

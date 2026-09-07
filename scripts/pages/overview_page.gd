@@ -101,7 +101,7 @@ func _add_status(parent: Container, name: String, state: String, color: Color) -
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(left)
 
-	var right := UI.label(state, 10, color)
+	var right := UI.label(state, 11, color)
 	right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(right)
 

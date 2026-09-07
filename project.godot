@@ -1,0 +1,29 @@
+; Engine configuration file.
+; Edit through Godot when possible.
+config_version=5
+
+[application]
+
+config/name="iOS Godot Lab"
+config/description="Personal iPhone capability laboratory built with Godot."
+config/version="0.1.0-dev"
+config/icon="res://assets/icon.svg"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.7")
+
+[display]
+
+window/size/viewport_width=720
+window/size/viewport_height=1280
+window/size/window_width_override=390
+window/size/window_height_override=844
+window/handheld/orientation=1
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
+environment/defaults/default_clear_color=Color(0.035, 0.043, 0.055, 1)

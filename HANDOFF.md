@@ -55,6 +55,20 @@ Règle permanente : **1 chantier actif = 1 branche = 1 worktree dédié**.
 - un detached HEAD sert aux validations exact-SHA, pas à un chantier long ;
 - aucun `reset --hard`, `clean -fd[x]`, force-push ou autre nettoyage destructif automatique.
 
+### Invariant PowerShell interactif
+
+Quand l'utilisateur doit **copier-coller un gros bloc directement dans une console PowerShell interactive**, tout bloc contenant `if / elseif / else`, `try / catch / finally`, fonctions ou boucles doit être encapsulé dans un bloc unique :
+
+```powershell
+& {
+    # tout le script ici
+}
+```
+
+Ne jamais fournir `if { ... }`, puis `elseif { ... }`, puis `else { ... }` comme unités interactives séparées : lors d'un collage, PowerShell peut exécuter le `if` dès qu'il est syntaxiquement complet puis interpréter `else` comme une nouvelle commande. Cette panne a été reproduite le 2026-09-07 pendant le bootstrap Windows du projet.
+
+Après toute erreur dans un gros collage, vérifier l'état réel avant de « relancer tout » : certaines instructions suivantes peuvent quand même avoir été exécutées. Voir `docs/POWERSHELL_WORKTREE_WORKFLOW.md` pour les règles détaillées.
+
 ## 6. But permanent
 
 Développer depuis Windows des applications iPhone avec Godot, compiler sur un runner macOS GitHub Actions standard d'un repository public, produire un IPA testable et l'installer sur un iPhone personnel avec une chaîne gratuite quand Apple le permet.

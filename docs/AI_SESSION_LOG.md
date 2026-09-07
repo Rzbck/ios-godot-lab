@@ -26,6 +26,8 @@ INCIDENTS RÉSOLUS AVANT PASS : activation ETC2/ASTC requise par export Apple ; 
 
 DÉCISION CI : après validation du bootstrap, le workflow iOS passe en `workflow_dispatch` manuel pour éviter un Mac build à chaque petit commit.
 
+HANDOFF : ne jamais écrire le HEAD documentaire courant dans le handoff lui-même ; re-fetch obligatoire. Le SHA durable de preuve reste celui du produit iOS réellement testé.
+
 MAIN : inchangé à `1a7c6e7b947cf2177eb56cbb43e924e7c39fd83f`.
 
 PROCHAIN : SideStore -> signature Personal Team -> installation IPA exacte -> lancement/touch/capteurs/haptique sur iPhone.

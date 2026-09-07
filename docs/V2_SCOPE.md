@@ -8,8 +8,8 @@ This branch turns the bootstrap probe into a reusable iPhone capability lab.
 - Godot boot image is disabled in `project.godot`.
 
 ## iPhone APIs
-- direct Godot: touch/drag, accelerometer, gravity, gyroscope, magnetometer, haptics, camera feed, microphone level, power/system/clipboard;
-- native `IOSLab` bridge: CoreLocation, BLE discovery with CoreBluetooth, ARKit availability, LiDAR scene-reconstruction availability, NFC reader availability;
+- direct Godot: touch/drag, accelerometer, gravity, gyroscope, magnetometer, haptics, camera feed, microphone level, system/locale and clipboard;
+- native `IOSLab` bridge: CoreLocation, BLE discovery with CoreBluetooth, battery level/state, ARKit availability, LiDAR scene-reconstruction availability, NFC reader availability;
 - GPS page includes a small OpenStreetMap tile viewer and Apple Maps handoff.
 
 ## Networking

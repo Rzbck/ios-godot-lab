@@ -27,7 +27,7 @@ var _transport_status: Label
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_constant_override("separation", 16)
+	add_theme_constant_override("separation", 12)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	UI.section_title(
@@ -62,7 +62,7 @@ func _ready() -> void:
 	)
 	td.add_child(UI.label(
 		"Nothing is hard-coded: host, port, path, headers and payload stay editable so the same app can connect to SIGNAL, TouchDesigner, a local Python service, Tailscale peers or web APIs.",
-		14,
+		13,
 		UI.MUTED
 	))
 
@@ -77,10 +77,7 @@ func _build_http_card() -> void:
 	_http_url = UI.line_edit("https://example.net/api or http://192.168.x.x:port/path")
 	card.add_child(_http_url)
 
-	_http_method = OptionButton.new()
-	for method in ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]:
-		_http_method.add_item(method)
-	_http_method.custom_minimum_size.y = 48
+	_http_method = UI.option_button(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
 	card.add_child(_http_method)
 
 	_http_headers = UI.text_edit("One header per line\nContent-Type: application/json", 90)
@@ -122,7 +119,7 @@ func _build_websocket_card() -> void:
 
 	var disconnect_button := UI.button("DISCONNECT")
 	disconnect_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	disconnect_button.pressed.connect(_client.websocket_disconnect)
+	disconnect_button.pressed.connect(_disconnect_ws)
 	buttons.add_child(disconnect_button)
 
 	_ws_message = UI.text_edit('{"type":"ping"}', 90)
@@ -164,7 +161,7 @@ func _build_udp_card() -> void:
 	raw.pressed.connect(_send_udp)
 	card.add_child(raw)
 
-	card.add_child(UI.label("OSC string message", 14, UI.MUTED))
+	card.add_child(UI.label("OSC string message", 13, UI.MUTED))
 
 	_osc_address = UI.line_edit("/iphone/value")
 	card.add_child(_osc_address)
@@ -180,6 +177,7 @@ func _send_http() -> void:
 	var url := _http_url.text.strip_edges()
 	if url.is_empty():
 		_transport_status.text = "HTTP URL is empty"
+		_telemetry_event("network_http_error", "HTTP URL is empty")
 		return
 
 	var headers := PackedStringArray()
@@ -190,6 +188,11 @@ func _send_http() -> void:
 
 	var method := _http_method.get_item_text(_http_method.selected)
 	_transport_status.text = "HTTP %s → %s" % [method, url]
+	_telemetry_event(
+		"network_http_request",
+		"HTTP %s request started" % method,
+		{"method": method, "url": url, "body_bytes": _http_body.text.to_utf8_buffer().size()}
+	)
 	_client.http_request(url, method, headers, _http_body.text)
 
 
@@ -197,12 +200,21 @@ func _connect_ws() -> void:
 	var url := _ws_url.text.strip_edges()
 	if url.is_empty():
 		_transport_status.text = "WebSocket URL is empty"
+		_telemetry_event("network_ws_error", "WebSocket URL is empty")
 		return
 	_append_ws_log("CONNECT → %s" % url)
+	_telemetry_event("network_ws_connect", "WebSocket connect requested", {"url": url})
 	_client.websocket_connect(url)
 
 
+func _disconnect_ws() -> void:
+	_telemetry_event("network_ws_disconnect", "WebSocket disconnect requested")
+	_client.websocket_disconnect()
+
+
 func _send_ws() -> void:
+	var bytes := _ws_message.text.to_utf8_buffer().size()
+	_telemetry_event("network_ws_tx", "WebSocket text send requested", {"bytes": bytes})
 	_client.websocket_send_text(_ws_message.text)
 	_append_ws_log("TX: %s" % _ws_message.text)
 
@@ -211,21 +223,31 @@ func _send_udp() -> void:
 	var port := _udp_port.text.to_int()
 	if port <= 0 or port > 65535:
 		_transport_status.text = "invalid UDP port"
+		_telemetry_event("network_udp_error", "invalid UDP port", {"port": port})
 		return
-	_client.udp_send(_udp_host.text.strip_edges(), port, _udp_payload.text)
+	var host := _udp_host.text.strip_edges()
+	_telemetry_event(
+		"network_udp_tx",
+		"UDP send requested",
+		{"host": host, "port": port, "bytes": _udp_payload.text.to_utf8_buffer().size()}
+	)
+	_client.udp_send(host, port, _udp_payload.text)
 
 
 func _send_osc() -> void:
 	var port := _udp_port.text.to_int()
 	if port <= 0 or port > 65535:
 		_transport_status.text = "invalid OSC/UDP port"
+		_telemetry_event("network_osc_error", "invalid OSC/UDP port", {"port": port})
 		return
-	_client.osc_send_string(
-		_udp_host.text.strip_edges(),
-		port,
-		_osc_address.text.strip_edges(),
-		_osc_value.text
+	var host := _udp_host.text.strip_edges()
+	var address := _osc_address.text.strip_edges()
+	_telemetry_event(
+		"network_osc_tx",
+		"OSC string send requested",
+		{"host": host, "port": port, "address": address}
 	)
+	_client.osc_send_string(host, port, address, _osc_value.text)
 
 
 func _on_http_finished(ok: bool, status_code: int, headers: PackedStringArray, body: String) -> void:
@@ -234,25 +256,34 @@ func _on_http_finished(ok: bool, status_code: int, headers: PackedStringArray, b
 	_http_response.text = "STATUS: %d\n\n%s\n\n%s" % [status_code, header_text, body]
 	if _http_response.text.length() > 12000:
 		_http_response.text = _http_response.text.left(12000) + "\n… truncated …"
+	_telemetry_event(
+		"network_http_result",
+		"HTTP request completed",
+		{"ok": ok, "status": status_code, "response_bytes": body.to_utf8_buffer().size()}
+	)
 
 
 func _on_ws_state(state: String) -> void:
 	_ws_state.text = state
 	_transport_status.text = "WebSocket: %s" % state
 	_append_ws_log("STATE: %s" % state)
+	_telemetry_event("network_ws_state", "WebSocket state → %s" % state, {"state": state})
 
 
 func _on_ws_message(text: String) -> void:
 	_append_ws_log("RX: %s" % text)
+	_telemetry_event("network_ws_rx", "WebSocket text received", {"bytes": text.to_utf8_buffer().size()})
 
 
 func _on_transport_error(message: String) -> void:
 	_transport_status.text = message
 	_append_ws_log("ERROR: %s" % message)
+	_telemetry_event("network_transport_error", message)
 
 
 func _on_udp_sent(bytes: int) -> void:
 	_transport_status.text = "UDP/OSC sent · %d bytes" % bytes
+	_telemetry_event("network_udp_sent", "UDP/OSC datagram sent", {"bytes": bytes})
 
 
 func _append_ws_log(line: String) -> void:
@@ -260,3 +291,9 @@ func _append_ws_log(line: String) -> void:
 	if next.length() > 9000:
 		next = next.right(9000)
 	_ws_log.text = next
+
+
+func _telemetry_event(kind: String, message: String, data: Dictionary = {}) -> void:
+	var telemetry := get_tree().get_first_node_in_group("ios_lab_telemetry")
+	if telemetry != null and telemetry.has_method("record_event"):
+		telemetry.call("record_event", kind, message, data)

@@ -22,7 +22,7 @@ var _system_refresh_accumulator := 0.0
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_constant_override("separation", 16)
+	add_theme_constant_override("separation", 12)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	if OS.get_name() == "iOS" and Engine.has_singleton("IOSLab"):
@@ -53,7 +53,7 @@ func _build_camera_card() -> void:
 	_camera_status = UI.value_row(card, "Status", "not started")
 
 	_camera_preview = TextureRect.new()
-	_camera_preview.custom_minimum_size.y = 280
+	_camera_preview.custom_minimum_size.y = 260
 	_camera_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_camera_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_camera_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -127,7 +127,7 @@ func _build_system_card() -> void:
 	actions.add_child(haptic)
 
 	var settings := UI.button("OPEN IOS SETTINGS")
-	settings.pressed.connect(func() -> void: OS.shell_open("app-settings:"))
+	settings.pressed.connect(_open_settings)
 	actions.add_child(settings)
 
 
@@ -157,16 +157,19 @@ func _process(delta: float) -> void:
 func _start_camera() -> void:
 	CameraServer.monitoring_feeds = true
 	_camera_status.text = "requesting camera / waiting for feeds…"
+	_telemetry_event("camera_start", "camera start requested")
 	await get_tree().create_timer(0.6).timeout
 
 	var feeds := CameraServer.feeds()
 	if feeds.is_empty():
 		_camera_status.text = "no feeds · permission/module may be unavailable"
+		_telemetry_event("camera_error", "no camera feeds available")
 		return
 
 	var feed := feeds[0] as CameraFeed
 	if feed == null:
 		_camera_status.text = "invalid camera feed"
+		_telemetry_event("camera_error", "invalid camera feed")
 		return
 
 	_camera_texture = CameraTexture.new()
@@ -174,6 +177,7 @@ func _start_camera() -> void:
 	_camera_texture.camera_is_active = true
 	_camera_preview.texture = _camera_texture
 	_camera_status.text = "%s · active" % feed.get_name()
+	_telemetry_event("camera_active", "camera feed active", {"feed": feed.get_name()})
 
 
 func _stop_camera() -> void:
@@ -183,11 +187,13 @@ func _stop_camera() -> void:
 	_camera_texture = null
 	CameraServer.monitoring_feeds = false
 	_camera_status.text = "stopped"
+	_telemetry_event("camera_stop", "camera stopped")
 
 
 func _start_microphone() -> void:
 	if _mic_player != null and _mic_player.playing:
 		_mic_status.text = "already running"
+		_telemetry_event("microphone_state", "microphone capture already running")
 		return
 
 	const BUS_NAME := "IOSLabMic"
@@ -210,6 +216,7 @@ func _start_microphone() -> void:
 	_mic_player.play()
 
 	_mic_status.text = "capture started · waiting for samples"
+	_telemetry_event("microphone_start", "muted microphone level capture started")
 
 
 func _stop_microphone() -> void:
@@ -225,6 +232,7 @@ func _stop_microphone() -> void:
 	_capture = null
 	_mic_level.text = "—"
 	_mic_status.text = "stopped"
+	_telemetry_event("microphone_stop", "microphone capture stopped")
 
 
 func _refresh_system_info() -> void:
@@ -260,13 +268,28 @@ func _battery_state_name(state: int) -> String:
 func _copy_test_text() -> void:
 	DisplayServer.clipboard_set("Hello from iOS Godot Lab")
 	_clipboard_status.text = "test text copied"
+	_telemetry_event("clipboard_write", "test text copied to clipboard")
 
 
 func _read_clipboard() -> void:
 	var value := DisplayServer.clipboard_get()
 	_clipboard_status.text = value.left(80) if not value.is_empty() else "clipboard empty"
+	# Do not transmit clipboard content. Only report whether the local read returned data.
+	_telemetry_event("clipboard_read", "clipboard read completed", {"empty": value.is_empty()})
 
 
 func _vibrate() -> void:
 	Input.vibrate_handheld(150)
 	_haptic_status.text = "request sent"
+	_telemetry_event("haptic", "150 ms vibration requested")
+
+
+func _open_settings() -> void:
+	_telemetry_event("open_settings", "open iOS app settings requested")
+	OS.shell_open("app-settings:")
+
+
+func _telemetry_event(kind: String, message: String, data: Dictionary = {}) -> void:
+	var telemetry := get_tree().get_first_node_in_group("ios_lab_telemetry")
+	if telemetry != null and telemetry.has_method("record_event"):
+		telemetry.call("record_event", kind, message, data)

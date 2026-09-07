@@ -2,7 +2,7 @@
 
 Date : **2026-09-07**.
 
-État : **première application Godot réelle implémentée ; chaîne Windows -> GitHub Actions macOS -> Godot iOS -> Xcode -> IPA unsigned VALIDÉE sur un SHA exact ; aucune installation sur iPhone encore validée.**
+État : **première application Godot réelle implémentée ; chaîne Windows -> GitHub Actions macOS -> Godot iOS -> Xcode -> IPA unsigned VALIDÉE sur un SHA exact ; bootstrap local Windows et SideStore en cours ; aucune installation sur iPhone encore validée.**
 
 > Porte d'entrée canonique : `/HANDOFF.md`.
 
@@ -40,7 +40,7 @@ Le `application/app_store_team_id="0000000000"` du preset est un **placeholder n
 ## Décisions retenues
 
 1. Windows = machine de développement principale.
-2. Godot 4.7.2 stable = moteur verrouillé au bootstrap.
+2. Godot 4.7.2 stable = moteur verrouillé au bootstrap CI ; Godot local Windows existant peut servir au développement/smoke tant que la compatibilité est vérifiée.
 3. GitHub public = source + CI.
 4. GitHub Actions standard macOS = Mac cloud gratuit pour export/compilation iOS.
 5. Pipeline validé = export Godot -> projet Xcode -> `xcodebuild` sans signature -> paquet `.ipa` -> artifact GitHub.
@@ -65,11 +65,65 @@ L'écran `iPhone Lab` contient déjà :
 
 La CI iOS remplace éphémèrement `config/build_info.json` avec le SHA exact avant export ; ce SHA est donc visible dans l'application construite.
 
+## Bootstrap local Windows — état réel
+
+Arborescence locale retenue :
+
+```text
+E:\_Project\IOS APP\
+├── _Tools\
+└── ios-godot-lab\
+    ├── main\
+    └── worktrees\
+        └── bootstrap-ios-foundation\
+```
+
+État observé le 2026-09-07 :
+
+- `main` local : `E:\_Project\IOS APP\ios-godot-lab\main` ;
+- worktree actif : `E:\_Project\IOS APP\ios-godot-lab\worktrees\bootstrap-ios-foundation` ;
+- branche du worktree : `bootstrap/ios-foundation-20260907` ;
+- worktree synchronisé et CLEAN au moment du test ;
+- Godot local réutilisé, **aucune réinstallation** : `C:\Godot\Godot_v4.7.1-stable_win64_console.exe` ;
+- version locale observée : `4.7.1.stable.official.a13da4feb` ;
+- import local : PASS ;
+- `tests/smoke_project.gd` : `SMOKE_PASS` / PASS.
+
+### Incident PowerShell interactif reproduit
+
+Un gros bloc collé directement dans PowerShell avec `if { ... }` puis `else { ... }` sur des unités interactives distinctes a conduit PowerShell à exécuter le `if` avant de recevoir le `else`, puis à interpréter `else` comme une commande : `else: The term 'else' is not recognized...`.
+
+Règle désormais permanente : tout gros bloc interactif avec `if / elseif / else`, `try / catch / finally`, fonctions ou boucles doit être enveloppé dans `& { ... }`. Voir `docs/POWERSHELL_WORKTREE_WORKFLOW.md`.
+
+Deux autres pièges observés pendant ce bootstrap :
+
+- Git peut renvoyer un chemin avec `/` alors que PowerShell utilise `\` : normaliser avant comparaison ;
+- sous `Set-StrictMode`, certaines entrées registre n'ont pas `DisplayName` : tester l'existence de la propriété avant accès.
+
+## Bootstrap SideStore — état réel
+
+Sur l'iPhone :
+
+- `LocalDevVPN` installé ;
+- tunnel LocalDevVPN connecté.
+
+Sur Windows :
+
+- iTunes `12.13.10.3` a été téléchargé depuis le package `Apple.iTunes` via winget, installer Apple officiel ;
+- hash de l'installer validé par winget ;
+- installation iTunes annoncée réussie ;
+- immédiatement après installation, `Apple Mobile Device Service` n'était pas encore visible avec `Get-Service` ;
+- le script s'est arrêté volontairement à ce point avant iLoader ;
+- **iloader n'est donc pas encore considéré installé/validé par cette session**.
+
+Prochaine reprise SideStore : diagnostiquer la présence réelle de `Apple Mobile Device Service`/Apple Mobile Device Support après l'installation iTunes. Apple recommande un redémarrage Windows dans le diagnostic AMDS ; ne pas réinstaller iTunes à l'aveugle avant vérification. Une fois le support USB Apple visible et l'iPhone reconnu, reprendre l'installation officielle d'iloader puis SideStore.
+
 ## VALIDÉ
 
 - **VALIDÉ DOC / ARCHITECTURE** : chaîne Windows/Godot/GitHub/SideStore documentée ; contraintes Apple gratuites documentées.
 - **BUILD CI VALIDÉ (DESKTOP/HEADLESS)** : Godot 4.7.2 import/parse + smoke PASS.
 - **BUILD IOS VALIDÉ** : `8899a4bb4ad8addecf20a36d91b8d2055346cef5`, run `34160430197`, export Godot PASS, Xcode Release iphoneos PASS, app confirmée unsigned, IPA créée et artifact uploadé.
+- **VALIDÉ LOCAL WINDOWS** : Godot local 4.7.1 importe le projet et exécute le smoke test avec succès dans le worktree actif.
 - **VALIDÉ SUR IPHONE** : rien pour l'instant.
 
 ## Incidents de bootstrap résolus
@@ -86,9 +140,10 @@ Le build Xcode réussi contient encore des warnings non bloquants : descriptions
 
 ## PROCHAIN TEST
 
-1. installer/configurer SideStore sur l'iPhone ;
-2. récupérer l'artifact exact du run `34160430197` ;
-3. signer/installer `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
-4. vérifier que l'app lance et affiche le SHA `8899a4bb4ad8` ;
-5. tester tactile, mouvement réel (accéléromètre/gravity/gyro/magnétomètre) et vibration ;
-6. seulement après, classer les capacités réellement observées en **VALIDÉ SUR IPHONE**.
+1. terminer le bootstrap SideStore Windows : vérifier AMDS/support USB Apple, puis installer iLoader officiel ;
+2. installer/configurer SideStore sur l'iPhone ;
+3. récupérer l'artifact exact du run `34160430197` ;
+4. signer/installer `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
+5. vérifier que l'app lance et affiche le SHA `8899a4bb4ad8` ;
+6. tester tactile, mouvement réel (accéléromètre/gravity/gyro/magnétomètre) et vibration ;
+7. seulement après, classer les capacités réellement observées en **VALIDÉ SUR IPHONE**.

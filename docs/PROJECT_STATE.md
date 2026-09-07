@@ -4,7 +4,7 @@
 
 Permettre de créer depuis Windows des applications iPhone Godot qui utilisent autant que possible les capacités publiques de l'iPhone, sans posséder de Mac et avec une chaîne de build/test personnel à coût nul.
 
-## Architecture retenue
+## Architecture retenue et désormais prouvée jusqu'à l'IPA
 
 ```text
 Windows
@@ -30,6 +30,22 @@ SideStore sur iPhone
 iPhone réel
 ```
 
+La partie **GitHub -> macOS -> Godot -> Xcode -> IPA unsigned** est validée exactement sur `8899a4bb4ad8addecf20a36d91b8d2055346cef5` (run `34160430197`). La partie **SideStore -> iPhone réel** reste à valider.
+
+## Première preuve iOS durable
+
+- SHA produit : `8899a4bb4ad8addecf20a36d91b8d2055346cef5` ;
+- Godot : `4.7.2.stable.official.ed1daf0bf` ;
+- Xcode : `26.6` ;
+- iPhoneOS SDK : `26.5` ;
+- cible : arm64 / iOS 16 minimum ;
+- bundle : `com.rzbck.iosgodotlab` ;
+- résultat : `BUILD SUCCEEDED` ;
+- IPA : `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
+- SHA-256 IPA : `40e8b799779de2a9cf6b8b0973e6308875d4006223cbceaa43b4f001c187e14d` ;
+- artifact GitHub ID : `10032441877` ;
+- signature : volontairement absente avant SideStore.
+
 ## Pourquoi cette architecture
 
 - pas d'achat/location de Mac ;
@@ -38,6 +54,13 @@ iPhone réel
 - Xcode n'existe que dans la CI ;
 - SideStore enlève la dépendance quotidienne au PC pour le renouvellement 7 jours ;
 - les APIs iOS manquantes côté Godot sont ajoutées par plugins natifs dédiés, sans réécrire toute l'app en Swift.
+
+## Politique CI
+
+- `verify-godot.yml` peut tourner automatiquement pour parse/smoke rapide ;
+- `build-ios-unsigned.yml` est manuel via `workflow_dispatch` après bootstrap, car un build iOS télécharge Godot + les templates d'export et n'a pas besoin de tourner sur chaque changement documentaire ;
+- chaque IPA doit contenir/annoncer le SHA exact de sa source ;
+- un PASS d'un SHA ne valide jamais un autre SHA.
 
 ## Limites permanentes
 
@@ -77,6 +100,26 @@ Une app n'a pas un accès arbitraire au matériel/système. Tout dépend :
 2. Si absent : écrire/ajouter un plugin iOS natif minimal.
 3. Exposer une API GDScript stable, par exemple `IOSBridge.bluetooth_scan()` plutôt que disperser du code Swift partout.
 4. Tester chaque capacité sur appareil réel et l'étiqueter séparément dans `docs/IOS_CAPABILITIES.md`.
+
+## État de l'application
+
+Le premier écran `iPhone Lab` est implémenté en portrait et expose déjà :
+
+- build/SHA/plateforme ;
+- tactile ;
+- accéléromètre ;
+- gravité ;
+- gyroscope ;
+- magnétomètre ;
+- adresses réseau locales ;
+- vibration handheld ;
+- roadmap `IOSBridge`.
+
+Le projet et le pipeline iOS sont buildables ; le comportement de ces fonctions sur matériel Apple reste à valider individuellement.
+
+## Warnings à traiter avant activation caméra/micro/photo
+
+Le premier Xcode build réussit avec des warnings indiquant des descriptions de permission Camera, Microphone et Photo Library vides. Ce n'est pas un blocker pour l'écran actuel, mais ces chaînes devront être renseignées avant de demander ces permissions sur iPhone.
 
 ## Réseau futur avec SIGNAL
 

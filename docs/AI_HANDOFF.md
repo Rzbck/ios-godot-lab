@@ -2,7 +2,7 @@
 
 Date : **2026-09-07**.
 
-État : **première application Godot réelle implémentée et validée mécaniquement par CI Godot 4.7.2 ; aucun build iOS/macOS ni test iPhone encore validé.**
+État : **première application Godot réelle implémentée ; chaîne Windows -> GitHub Actions macOS -> Godot iOS -> Xcode -> IPA unsigned VALIDÉE sur un SHA exact ; aucune installation sur iPhone encore validée.**
 
 > Porte d'entrée canonique : `/HANDOFF.md`.
 
@@ -12,20 +12,42 @@ Date : **2026-09-07**.
 - `main` publié : `1a7c6e7b947cf2177eb56cbb43e924e7c39fd83f` ;
 - branche de travail : `bootstrap/ios-foundation-20260907` ;
 - premier écran app : `b530c3b718b19b0bb4468519e6ccba0a75eb9f8e` ;
-- CI parse/smoke ajoutée : `bf7bfa29482704408fad7b994d4772b573480e49` ;
-- run GitHub Actions `34159830420` : `Parse and smoke` = PASS sur `bf7bfa29...` ;
-- le HEAD courant de branche doit toujours être re-fetché avant reprise.
+- premier parse/smoke desktop validé : `bf7bfa29482704408fad7b994d4772b573480e49` ;
+- **dernier produit BUILD IOS VALIDÉ : `8899a4bb4ad8addecf20a36d91b8d2055346cef5`** ;
+- run iOS exact : `34160430197` ;
+- artifact : `ios-unsigned-8899a4bb4ad8addecf20a36d91b8d2055346cef5` ;
+- artifact ID : `10032441877` ;
+- IPA : `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
+- SHA-256 IPA : `40e8b799779de2a9cf6b8b0973e6308875d4006223cbceaa43b4f001c187e14d` ;
+- toujours re-fetcher le HEAD courant de branche avant toute reprise : des commits de documentation/tooling peuvent être postérieurs au dernier produit iOS validé.
+
+## Toolchain iOS réellement validée
+
+- runner : `macos-26` / Apple Silicon ;
+- macOS runner observé : `26.6.2` ;
+- Godot : `4.7.2.stable.official.ed1daf0bf` ;
+- Xcode : `26.6` (`17F113`) ;
+- iPhoneOS SDK : `26.5` ;
+- cible Xcode : `arm64-apple-ios16.0` ;
+- bundle identifier : `com.rzbck.iosgodotlab` ;
+- signature Xcode : désactivée volontairement (`CODE_SIGNING_ALLOWED=NO`) ;
+- résultat Xcode : `BUILD SUCCEEDED` ;
+- assertion CI : le `.app` doit échouer à `codesign --verify`, sinon le job échoue ;
+- packaging : `Payload/IOSGodotLab.app` -> `.ipa` -> SHA-256 -> artifact GitHub.
+
+Le `application/app_store_team_id="0000000000"` du preset est un **placeholder non secret** utilisé uniquement pour satisfaire le validateur d'export Godot avant la compilation unsigned. Il n'est jamais présenté comme un vrai Team ID Apple.
 
 ## Décisions retenues
 
 1. Windows = machine de développement principale.
 2. Godot 4.7.2 stable = moteur verrouillé au bootstrap.
 3. GitHub public = source + CI.
-4. GitHub Actions standard macOS = Mac cloud gratuit visé pour export/compilation iOS.
-5. Pipeline visé = export Godot -> projet Xcode -> `xcodebuild` sans signature -> paquet `.ipa` -> artifact GitHub.
-6. SideStore = sideload principal gratuit, pour rafraîchissement périodique des profils 7 jours après installation initiale.
-7. TestFlight/App Store ne font pas partie de la chaîne 0 €.
-8. Accès iPhone = APIs Godot natives quand disponibles + un bridge iOS natif ciblé pour les frameworks Apple publics supplémentaires.
+4. GitHub Actions standard macOS = Mac cloud gratuit pour export/compilation iOS.
+5. Pipeline validé = export Godot -> projet Xcode -> `xcodebuild` sans signature -> paquet `.ipa` -> artifact GitHub.
+6. Le workflow iOS est **manuel (`workflow_dispatch`)** après validation du bootstrap, pour ne pas lancer un Mac sur chaque petit commit.
+7. SideStore = sideload principal gratuit, pour signature Personal Team et rafraîchissement périodique des profils 7 jours après installation initiale.
+8. TestFlight/App Store ne font pas partie de la chaîne 0 €.
+9. Accès iPhone = APIs Godot natives quand disponibles + un bridge iOS natif ciblé pour les frameworks Apple publics supplémentaires.
 
 ## Application actuelle
 
@@ -38,27 +60,35 @@ L'écran `iPhone Lab` contient déjà :
 - accélération, gravité, gyroscope et magnétomètre en live ;
 - adresses réseau locales exposées ;
 - test de vibration handheld ;
-- roadmap visible des capacités directes et futures via `IOSBridge`.
+- roadmap visible des capacités directes et futures via `IOSBridge` ;
+- icône d'application versionnée dans `assets/icon.svg`.
 
-Le build local lit `config/build_info.json`. La CI iOS devra remplacer ce manifeste de façon éphémère avec le SHA exact avant export.
+La CI iOS remplace éphémèrement `config/build_info.json` avec le SHA exact avant export ; ce SHA est donc visible dans l'application construite.
 
 ## VALIDÉ
 
 - **VALIDÉ DOC / ARCHITECTURE** : chaîne Windows/Godot/GitHub/SideStore documentée ; contraintes Apple gratuites documentées.
-- **BUILD CI VALIDÉ (DESKTOP/HEADLESS)** : Godot 4.7.2 téléchargé, version vérifiée, import/parse PASS, `tests/smoke_project.gd` PASS sur `bf7bfa29482704408fad7b994d4772b573480e49`.
+- **BUILD CI VALIDÉ (DESKTOP/HEADLESS)** : Godot 4.7.2 import/parse + smoke PASS.
+- **BUILD IOS VALIDÉ** : `8899a4bb4ad8addecf20a36d91b8d2055346cef5`, run `34160430197`, export Godot PASS, Xcode Release iphoneos PASS, app confirmée unsigned, IPA créée et artifact uploadé.
 - **VALIDÉ SUR IPHONE** : rien pour l'instant.
-- **BUILD IOS VALIDÉ** : rien pour l'instant.
 
-## BLOCKERS / données encore nécessaires
+## Incidents de bootstrap résolus
 
-- définir un bundle identifier durable ;
-- produire un preset iOS Godot 4.7.2 correct ;
-- résoudre proprement le Team ID exigé ou non par chaque étape de l'export unsigned ;
-- ajouter puis exécuter le workflow macOS/Xcode exact-SHA ;
-- produire la première IPA unsigned ;
-- installer/configurer SideStore sur l'iPhone ;
-- signer/installer la première IPA et valider lancement + tactile + capteurs réels.
+1. export Apple bloqué par la validation textures -> activation `textures/vram_compression/import_etc2_astc=true` ;
+2. export iOS sans icône -> ajout `assets/icon.svg` + `application/config/icon` ;
+3. Xcode 26.6 avec `-derivedDataPath` exige un scheme -> ajout `-scheme IOSGodotLab` + `generic/platform=iOS`.
+
+Ces incidents sont résolus dans le SHA iOS validé.
+
+## Limites / prochain nettoyage
+
+Le build Xcode réussi contient encore des warnings non bloquants : descriptions Camera/Microphone/Photo Library vides et warning de template Godot sur le splash. Avant d'activer réellement caméra/micro/photo, renseigner les textes de permission et valider les prompts sur iPhone.
 
 ## PROCHAIN TEST
 
-Sur Windows : créer/réutiliser le worktree dédié de `bootstrap/ios-foundation-20260907`, ouvrir le projet avec Godot 4.7.2 et vérifier visuellement l'UI. En parallèle repo : préparer le preset iOS minimal et le workflow macOS unsigned, sans promotion `main` avant preuve.
+1. installer/configurer SideStore sur l'iPhone ;
+2. récupérer l'artifact exact du run `34160430197` ;
+3. signer/installer `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
+4. vérifier que l'app lance et affiche le SHA `8899a4bb4ad8` ;
+5. tester tactile, mouvement réel (accéléromètre/gravity/gyro/magnétomètre) et vibration ;
+6. seulement après, classer les capacités réellement observées en **VALIDÉ SUR IPHONE**.

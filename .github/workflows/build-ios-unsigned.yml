@@ -2,9 +2,6 @@ name: Build unsigned iOS IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - bootstrap/ios-foundation-20260907
 
 permissions:
   contents: read

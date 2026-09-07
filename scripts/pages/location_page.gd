@@ -30,7 +30,7 @@ var _have_location := false
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_constant_override("separation", 16)
+	add_theme_constant_override("separation", 12)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	UI.section_title(
@@ -39,18 +39,19 @@ func _ready() -> void:
 		"CoreLocation, Bluetooth LE and Apple capability probes are exposed through the IOSLab native plugin built by GitHub Actions."
 	)
 
+	# Connect before adding the service to the tree, but only add it after the UI
+	# labels exist. LocationService emits availability_changed from its _ready().
 	_service = LocationService.new()
 	_service.availability_changed.connect(_on_availability_changed)
 	_service.authorization_changed.connect(_on_authorization_changed)
 	_service.location_updated.connect(_on_location_updated)
 	_service.ble_state_changed.connect(_on_ble_state_changed)
 	_service.ble_device_found.connect(_on_ble_device_found)
-	add_child(_service)
 
 	var location_card := UI.make_card(
 		self,
 		"GPS · CORELOCATION",
-		"Permission is requested only when you press the button. Location stays local to the app."
+		"Permission is requested only when you press the button. Location stays local unless you explicitly start Live Telemetry."
 	)
 	_bridge_status = UI.value_row(location_card, "Bridge", "detecting…")
 	_auth_status = UI.value_row(location_card, "Permission", "unknown")
@@ -117,6 +118,8 @@ func _ready() -> void:
 	_lidar = UI.value_row(apple, "LiDAR mesh", "checking…")
 	_nfc = UI.value_row(apple, "NFC reader", "checking…")
 
+	# Adding the service now makes its immediate availability signal safe.
+	add_child(_service)
 	call_deferred("_refresh_capability_probes")
 
 

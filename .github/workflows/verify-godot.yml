@@ -56,10 +56,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$GODOT_BIN" --headless --path . --editor --quit
+          LOG="$RUNNER_TEMP/godot-import.log"
+          "$GODOT_BIN" --headless --path . --editor --quit 2>&1 | tee "$LOG"
+          if grep -E 'SCRIPT ERROR:|^ERROR:' "$LOG"; then
+            echo "Godot reported an error during import/parse." >&2
+            exit 1
+          fi
 
       - name: Run mechanical smoke
         shell: bash
         run: |
           set -euo pipefail
-          "$GODOT_BIN" --headless --path . --script res://tests/smoke_project.gd
+          LOG="$RUNNER_TEMP/godot-smoke.log"
+          "$GODOT_BIN" --headless --path . --script res://tests/smoke_project.gd 2>&1 | tee "$LOG"
+          if grep -E 'SCRIPT ERROR:|^ERROR:' "$LOG"; then
+            echo "Godot reported an error during mechanical smoke." >&2
+            exit 1
+          fi
+          grep -F 'SMOKE_PASS: project parsed and main scene instantiated' "$LOG"
+
+      - name: Parse PowerShell telemetry receiver
+        shell: bash
+        run: |
+          set -euo pipefail
+          pwsh -NoProfile -Command '
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("./tools/Receive-IOSLabTelemetry.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+          }
+          Write-Host "POWERSHELL_PARSE_PASS"
+          '

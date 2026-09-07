@@ -13,11 +13,8 @@ $ErrorActionPreference = 'Stop'
 
 function Read-ExactBytes {
     param(
-        [Parameter(Mandatory)]
-        [System.IO.Stream]$Stream,
-
-        [Parameter(Mandatory)]
-        [int]$Count
+        [Parameter(Mandatory)][System.IO.Stream]$Stream,
+        [Parameter(Mandatory)][int]$Count
     )
 
     if ($Count -le 0) {
@@ -26,7 +23,6 @@ function Read-ExactBytes {
 
     $buffer = New-Object byte[] $Count
     $offset = 0
-
     while ($offset -lt $Count) {
         $read = $Stream.Read($buffer, $offset, $Count - $offset)
         if ($read -le 0) {
@@ -34,31 +30,27 @@ function Read-ExactBytes {
         }
         $offset += $read
     }
-
     return ,$buffer
 }
 
 function Read-HttpHeaderText {
-    param(
-        [Parameter(Mandatory)]
-        [System.IO.Stream]$Stream
-    )
+    param([Parameter(Mandatory)][System.IO.Stream]$Stream)
 
     $bytes = [System.Collections.Generic.List[byte]]::new()
-    $window = [System.Collections.Generic.Queue[byte]]::new()
+    $tail = [System.Collections.Generic.Queue[byte]]::new()
 
     while ($bytes.Count -lt 65536) {
         $one = Read-ExactBytes -Stream $Stream -Count 1
         $value = $one[0]
         $bytes.Add($value)
-        $window.Enqueue($value)
-        while ($window.Count -gt 4) {
-            [void]$window.Dequeue()
+        $tail.Enqueue($value)
+        while ($tail.Count -gt 4) {
+            [void]$tail.Dequeue()
         }
 
-        if ($window.Count -eq 4) {
-            $tail = $window.ToArray()
-            if ($tail[0] -eq 13 -and $tail[1] -eq 10 -and $tail[2] -eq 13 -and $tail[3] -eq 10) {
+        if ($tail.Count -eq 4) {
+            $last = $tail.ToArray()
+            if ($last[0] -eq 13 -and $last[1] -eq 10 -and $last[2] -eq 13 -and $last[3] -eq 10) {
                 return [System.Text.Encoding]::ASCII.GetString($bytes.ToArray())
             }
         }
@@ -68,10 +60,7 @@ function Read-HttpHeaderText {
 }
 
 function Parse-HttpHeader {
-    param(
-        [Parameter(Mandatory)]
-        [string]$HeaderText
-    )
+    param([Parameter(Mandatory)][string]$HeaderText)
 
     $lines = $HeaderText -split "`r`n"
     if ($lines.Count -lt 1) {
@@ -84,15 +73,11 @@ function Parse-HttpHeader {
         if ([string]::IsNullOrWhiteSpace($line)) {
             continue
         }
-
         $separator = $line.IndexOf(':')
         if ($separator -le 0) {
             continue
         }
-
-        $name = $line.Substring(0, $separator).Trim()
-        $value = $line.Substring($separator + 1).Trim()
-        $headers[$name] = $value
+        $headers[$line.Substring(0, $separator).Trim()] = $line.Substring($separator + 1).Trim()
     }
 
     return [pscustomobject]@{
@@ -103,21 +88,13 @@ function Parse-HttpHeader {
 
 function Convert-BytesToUInt16BE {
     param([byte[]]$Bytes)
-
-    if ($Bytes.Length -ne 2) {
-        throw 'Expected exactly 2 bytes.'
-    }
-
+    if ($Bytes.Length -ne 2) { throw 'Expected 2 bytes.' }
     return ([uint16]$Bytes[0] -shl 8) -bor [uint16]$Bytes[1]
 }
 
 function Convert-BytesToUInt64BE {
     param([byte[]]$Bytes)
-
-    if ($Bytes.Length -ne 8) {
-        throw 'Expected exactly 8 bytes.'
-    }
-
+    if ($Bytes.Length -ne 8) { throw 'Expected 8 bytes.' }
     [uint64]$value = 0
     foreach ($byte in $Bytes) {
         $value = ($value -shl 8) -bor [uint64]$byte
@@ -126,15 +103,11 @@ function Convert-BytesToUInt64BE {
 }
 
 function Read-WebSocketFrame {
-    param(
-        [Parameter(Mandatory)]
-        [System.IO.Stream]$Stream
-    )
+    param([Parameter(Mandatory)][System.IO.Stream]$Stream)
 
     $head = Read-ExactBytes -Stream $Stream -Count 2
     $first = [int]$head[0]
     $second = [int]$head[1]
-
     $fin = (($first -band 0x80) -ne 0)
     $opcode = $first -band 0x0F
     $masked = (($second -band 0x80) -ne 0)
@@ -172,15 +145,9 @@ function Read-WebSocketFrame {
 
 function Send-WebSocketFrame {
     param(
-        [Parameter(Mandatory)]
-        [System.IO.Stream]$Stream,
-
-        [Parameter(Mandatory)]
-        [ValidateRange(0, 15)]
-        [int]$Opcode,
-
-        [Parameter(Mandatory)]
-        [byte[]]$Payload
+        [Parameter(Mandatory)][System.IO.Stream]$Stream,
+        [Parameter(Mandatory)][ValidateRange(0, 15)][int]$Opcode,
+        [Parameter(Mandatory)][byte[]]$Payload
     )
 
     $header = [System.Collections.Generic.List[byte]]::new()
@@ -212,51 +179,35 @@ function Send-WebSocketFrame {
 
 function Send-WebSocketText {
     param(
-        [Parameter(Mandatory)]
-        [System.IO.Stream]$Stream,
-
-        [Parameter(Mandatory)]
-        [string]$Text
+        [Parameter(Mandatory)][System.IO.Stream]$Stream,
+        [Parameter(Mandatory)][string]$Text
     )
-
-    $payload = [System.Text.Encoding]::UTF8.GetBytes($Text)
-    Send-WebSocketFrame -Stream $Stream -Opcode 1 -Payload $payload
+    Send-WebSocketFrame -Stream $Stream -Opcode 1 -Payload ([System.Text.Encoding]::UTF8.GetBytes($Text))
 }
 
 function Get-MapValue {
-    param(
-        $Map,
-        [string]$Key,
-        $Default = $null
-    )
-
+    param($Map, [string]$Key, $Default = $null)
     if ($Map -is [System.Collections.IDictionary] -and $Map.Contains($Key)) {
         return $Map[$Key]
     }
-
     return $Default
 }
 
 function Format-Vector3 {
     param($Value)
-
     if ($null -eq $Value -or $Value.Count -lt 3) {
         return '(—)'
     }
-
     return '({0:N2},{1:N2},{2:N2})' -f [double]$Value[0], [double]$Value[1], [double]$Value[2]
 }
 
 function Write-TelemetryRecord {
     param(
-        [Parameter(Mandatory)]
-        [System.Collections.IDictionary]$Record,
-
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Record,
         [string]$RawText = ''
     )
 
     $stamp = Get-Date -Format 'HH:mm:ss.fff'
-
     if ($Raw) {
         Write-Host "[$stamp] $RawText"
         return
@@ -281,8 +232,7 @@ function Write-TelemetryRecord {
             $gyro = Format-Vector3 (Get-MapValue -Map $sensors -Key 'gyroscope')
 
             $gps = 'GPS=—'
-            $haveFix = [bool](Get-MapValue -Map $location -Key 'have_fix' -Default $false)
-            if ($haveFix) {
+            if ([bool](Get-MapValue -Map $location -Key 'have_fix' -Default $false)) {
                 $lat = [double](Get-MapValue -Map $location -Key 'latitude' -Default 0)
                 $lon = [double](Get-MapValue -Map $location -Key 'longitude' -Default 0)
                 $acc = [double](Get-MapValue -Map $location -Key 'accuracy_m' -Default 0)
@@ -307,26 +257,17 @@ function Write-TelemetryRecord {
 }
 
 function Convert-RecordToAckJson {
-    param(
-        [Parameter(Mandatory)]
-        [System.Collections.IDictionary]$Record
-    )
-
-    $seq = [int64](Get-MapValue -Map $Record -Key 'seq' -Default -1)
-    $unixMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Record)
 
     return (@{
         type           = 'ack'
-        seq            = $seq
-        server_unix_ms = $unixMs
+        seq            = [int64](Get-MapValue -Map $Record -Key 'seq' -Default -1)
+        server_unix_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     } | ConvertTo-Json -Compress)
 }
 
 function Process-TelemetryText {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Text
-    )
+    param([Parameter(Mandatory)][string]$Text)
 
     try {
         $record = $Text | ConvertFrom-Json -AsHashtable -Depth 32
@@ -346,20 +287,24 @@ function Process-TelemetryText {
 }
 
 function Get-TailscaleIPv4 {
+    $commandPath = $null
     $command = Get-Command tailscale.exe -ErrorAction SilentlyContinue
-    if ($null -eq $command) {
+    if ($command) {
+        $commandPath = $command.Source
+    }
+    elseif ($env:ProgramFiles) {
         $candidate = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
         if (Test-Path -LiteralPath $candidate) {
-            $command = Get-Item -LiteralPath $candidate
+            $commandPath = $candidate
         }
     }
 
-    if ($null -eq $command) {
+    if (-not $commandPath) {
         return $null
     }
 
     try {
-        $value = (& $command.Source ip -4 2>$null | Select-Object -First 1)
+        $value = (& $commandPath ip -4 2>$null | Select-Object -First 1)
         if (-not [string]::IsNullOrWhiteSpace($value)) {
             return $value.Trim()
         }
@@ -383,22 +328,24 @@ function Show-ListeningEndpoints {
         Write-Host "TAILSCALE HTTP = http://${tailscaleIp}:$ListenPort/telemetry"
     }
 
-    try {
-        $localIps = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
-            Where-Object {
-                $_.IPAddress -ne '127.0.0.1' -and
-                -not $_.IPAddress.StartsWith('169.254.')
-            } |
-            Select-Object -ExpandProperty IPAddress -Unique
+    if ($IsWindows) {
+        try {
+            $localIps = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+                Where-Object {
+                    $_.IPAddress -ne '127.0.0.1' -and
+                    -not $_.IPAddress.StartsWith('169.254.')
+                } |
+                Select-Object -ExpandProperty IPAddress -Unique
 
-        foreach ($ip in $localIps) {
-            if ($ip -eq $tailscaleIp) {
-                continue
+            foreach ($ip in $localIps) {
+                if ($ip -eq $tailscaleIp) {
+                    continue
+                }
+                Write-Host "LAN WS         = ws://${ip}:$ListenPort/telemetry"
             }
-            Write-Host "LAN WS         = ws://${ip}:$ListenPort/telemetry"
         }
-    }
-    catch {
+        catch {
+        }
     }
 
     Write-Host ''
@@ -428,14 +375,10 @@ try {
         try {
             $client.NoDelay = $true
             $stream = $client.GetStream()
-            $headerText = Read-HttpHeaderText -Stream $stream
-            $request = Parse-HttpHeader -HeaderText $headerText
+            $request = Parse-HttpHeader -HeaderText (Read-HttpHeaderText -Stream $stream)
             $headers = $request.Headers
 
-            $upgrade = ''
-            if ($headers.ContainsKey('Upgrade')) {
-                $upgrade = [string]$headers['Upgrade']
-            }
+            $upgrade = if ($headers.ContainsKey('Upgrade')) { [string]$headers['Upgrade'] } else { '' }
 
             if ($upgrade -ieq 'websocket') {
                 if (-not $headers.ContainsKey('Sec-WebSocket-Key')) {
@@ -456,14 +399,12 @@ try {
                 $responseBytes = [System.Text.Encoding]::ASCII.GetBytes($response)
                 $stream.Write($responseBytes, 0, $responseBytes.Length)
                 $stream.Flush()
-
                 Write-Host "[$(Get-Date -Format 'HH:mm:ss.fff')] WEBSOCKET OPEN $remote" -ForegroundColor Green
 
                 while ($client.Connected) {
                     $frame = Read-WebSocketFrame -Stream $stream
-
                     if (-not $frame.Fin) {
-                        Write-Host '[WARN] Fragmented WebSocket frames are not expected from IOSLab and are ignored.' -ForegroundColor Yellow
+                        Write-Host '[WARN] Fragmented WebSocket frame ignored.' -ForegroundColor Yellow
                         continue
                     }
 
@@ -475,12 +416,9 @@ try {
                                 Send-WebSocketText -Stream $stream -Text $ack
                             }
                         }
-
                         8 {
                             Send-WebSocketFrame -Stream $stream -Opcode 8 -Payload ([byte[]]@())
-                            break
                         }
-
                         9 {
                             Send-WebSocketFrame -Stream $stream -Opcode 10 -Payload $frame.Payload
                         }
@@ -492,11 +430,7 @@ try {
                 }
             }
             else {
-                $contentLength = 0
-                if ($headers.ContainsKey('Content-Length')) {
-                    $contentLength = [int]$headers['Content-Length']
-                }
-
+                $contentLength = if ($headers.ContainsKey('Content-Length')) { [int]$headers['Content-Length'] } else { 0 }
                 $bodyBytes = Read-ExactBytes -Stream $stream -Count $contentLength
                 $text = [System.Text.Encoding]::UTF8.GetString($bodyBytes)
                 $ack = Process-TelemetryText -Text $text

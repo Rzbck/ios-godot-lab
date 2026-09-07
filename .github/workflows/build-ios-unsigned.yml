@@ -114,6 +114,7 @@ jobs:
             -arch arm64 \
             -miphoneos-version-min=16.0 \
             -isysroot "$IOS_SDK_PATH" \
+            -I"$HEADER_ROOT/platform/ios" \
             -I"$HEADER_ROOT" \
             -DIOS_ENABLED \
             -DAPPLE_EMBEDDED_ENABLED \

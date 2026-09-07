@@ -10,13 +10,13 @@ var _build_value: Label
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_constant_override("separation", 16)
+	add_theme_constant_override("separation", 12)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	UI.section_title(
 		self,
 		"Overview",
-		"Real-device capability lab. Each page isolates one group of iPhone APIs and network tools."
+		"Real-device capability lab. Each page isolates one group of iPhone APIs, live telemetry and network tools."
 	)
 
 	var identity := UI.make_card(self, "BUILD & DEVICE", "The exact Git SHA is stamped by the iOS workflow before export.")
@@ -25,40 +25,41 @@ func _ready() -> void:
 	_viewport_value = UI.value_row(identity, "Viewport", "reading…")
 	_addresses_value = UI.value_row(identity, "Network", "reading…")
 
-	var validated := UI.make_card(
+	var available := UI.make_card(
 		self,
-		"AVAILABLE NOW",
-		"This V2 exposes direct Godot APIs plus an iOS native bridge compiled in CI."
+		"CAPABILITY MATRIX",
+		"V2 exposes direct Godot APIs, a native iOS bridge and an opt-in PowerShell telemetry path."
 	)
-	_add_status(validated, "Touch / drag / scroll", "DIRECT", UI.GOOD)
-	_add_status(validated, "Accelerometer / gravity / gyro / magnetometer", "DIRECT", UI.GOOD)
-	_add_status(validated, "Haptics", "DIRECT", UI.GOOD)
-	_add_status(validated, "GPS / CoreLocation", "IOSLAB BRIDGE", UI.GOOD)
-	_add_status(validated, "Bluetooth LE scan", "IOSLAB BRIDGE", UI.GOOD)
-	_add_status(validated, "ARKit / LiDAR availability probe", "IOSLAB BRIDGE", UI.GOOD)
-	_add_status(validated, "NFC availability probe", "IOSLAB BRIDGE", UI.WARN)
-	_add_status(validated, "Camera preview", "GODOT CAMERA", UI.GOOD)
-	_add_status(validated, "Microphone level capture", "GODOT AUDIO", UI.GOOD)
-	_add_status(validated, "HTTP / HTTPS", "DIRECT", UI.GOOD)
-	_add_status(validated, "WebSocket / WSS", "DIRECT", UI.GOOD)
-	_add_status(validated, "UDP raw packets", "DIRECT", UI.GOOD)
+	_add_status(available, "Live PowerShell telemetry + ACK / RTT", "WS / HTTP", UI.ACCENT)
+	_add_status(available, "Touch / drag / scroll", "DIRECT", UI.GOOD)
+	_add_status(available, "Accelerometer / gravity / gyro / magnetometer", "DIRECT", UI.GOOD)
+	_add_status(available, "Haptics", "DIRECT", UI.GOOD)
+	_add_status(available, "GPS / CoreLocation", "IOSLAB BRIDGE", UI.GOOD)
+	_add_status(available, "Bluetooth LE scan", "IOSLAB BRIDGE", UI.GOOD)
+	_add_status(available, "ARKit / LiDAR availability probe", "IOSLAB BRIDGE", UI.GOOD)
+	_add_status(available, "NFC availability probe", "IOSLAB BRIDGE", UI.WARN)
+	_add_status(available, "Camera preview", "GODOT CAMERA", UI.GOOD)
+	_add_status(available, "Microphone level capture", "GODOT AUDIO", UI.GOOD)
+	_add_status(available, "HTTP / HTTPS", "DIRECT", UI.GOOD)
+	_add_status(available, "WebSocket / WSS", "DIRECT", UI.GOOD)
+	_add_status(available, "UDP / OSC", "DIRECT", UI.GOOD)
 
 	var scroll_test := UI.make_card(
 		self,
 		"SCROLL SURFACE TEST",
-		"Drag vertically directly on this card. The card itself intentionally ignores pointer input so the parent ScrollContainer receives the gesture."
+		"Drag vertically directly on this card. Content surfaces intentionally ignore pointer input so the parent ScrollContainer receives the gesture."
 	)
-	for index in range(1, 9):
+	for index in range(1, 7):
 		UI.value_row(scroll_test, "Row %02d" % index, "drag over me")
 
 	var privacy := UI.make_card(
 		self,
-		"LOCAL LAB POLICY",
-		"Telemetry is not enabled in this build. GPS, BLE, camera and microphone data stay inside the app unless you explicitly send something from the Network page."
+		"TELEMETRY POLICY",
+		"Telemetry is explicit opt-in. Nothing is sent until you enter a receiver address and press START STREAM on the Telemetry page."
 	)
 	privacy.add_child(UI.label(
-		"No Apple ID, UDID, pairing file or device identifier is read by the app.",
-		14,
+		"The diagnostic payload excludes Apple ID, UDID/private identifiers, signing/pairing material, clipboard contents, camera frames and microphone audio.",
+		13,
 		UI.MUTED
 	))
 
@@ -96,11 +97,11 @@ func _add_status(parent: Container, name: String, state: String, color: Color) -
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(row)
 
-	var left := UI.label(name, 14, UI.TEXT)
+	var left := UI.label(name, 12, UI.TEXT)
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(left)
 
-	var right := UI.label(state, 12, color)
+	var right := UI.label(state, 10, color)
 	right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(right)
 

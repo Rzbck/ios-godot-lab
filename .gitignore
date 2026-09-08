@@ -5,6 +5,7 @@
 # Builds / exports
 build/
 dist/
+artifacts/
 *.ipa
 *.xcarchive
 

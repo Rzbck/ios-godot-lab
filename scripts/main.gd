@@ -8,17 +8,28 @@ const SensorsPage = preload("res://scripts/pages/sensors_page.gd")
 const LocationPage = preload("res://scripts/pages/location_page.gd")
 const NetworkPage = preload("res://scripts/pages/network_page.gd")
 const DevicePage = preload("res://scripts/pages/device_page.gd")
+const MorePage = preload("res://scripts/pages/more_page.gd")
 
-const PAGE_ORDER := ["Overview", "Telemetry", "Sensors", "GPS", "Network", "Device"]
+const PHONE_TABS := ["Overview", "Telemetry", "Sensors", "GPS", "More"]
+const TABLET_NAV := ["Overview", "Telemetry", "Sensors", "GPS", "Network", "Device"]
+const ALL_PAGES := ["Overview", "Telemetry", "Sensors", "GPS", "More", "Network", "Device"]
+const PHONE_TAB_LABELS := {
+	"Overview": "Home",
+	"Telemetry": "Telemetry",
+	"Sensors": "Sensors",
+	"GPS": "GPS",
+	"More": "More",
+}
 
 var _telemetry: Node
 var _telemetry_badge: PanelContainer
+var _page_title: Label
 var _page_scroll: ScrollContainer
 var _page_host: VBoxContainer
 var _nav_buttons: Dictionary = {}
 var _pages: Dictionary = {}
 var _layout_mode := "phone"
-var _safe_margins := {"left": 16, "right": 16, "top": 16, "bottom": 16}
+var _safe_margins := {"left": 12, "right": 12, "top": 8, "bottom": 8}
 
 
 func _ready() -> void:
@@ -45,130 +56,160 @@ func _build_shell() -> void:
 
 	var safe := MarginContainer.new()
 	safe.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	safe.add_theme_constant_override("margin_left", int(_safe_margins.left))
-	safe.add_theme_constant_override("margin_right", int(_safe_margins.right))
-	safe.add_theme_constant_override("margin_top", int(_safe_margins.top))
-	safe.add_theme_constant_override("margin_bottom", int(_safe_margins.bottom))
+	safe.add_theme_constant_override("margin_left", int(_safe_margins.get("left", 12)))
+	safe.add_theme_constant_override("margin_right", int(_safe_margins.get("right", 12)))
+	safe.add_theme_constant_override("margin_top", int(_safe_margins.get("top", 8)))
+	safe.add_theme_constant_override("margin_bottom", int(_safe_margins.get("bottom", 8)))
 	safe.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(safe)
 
+	if _layout_mode == "tablet":
+		_build_tablet_shell(safe)
+	else:
+		_build_phone_shell(safe)
+
+
+func _build_phone_shell(parent: Container) -> void:
 	var shell := VBoxContainer.new()
 	shell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	shell.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	shell.add_theme_constant_override("separation", 10)
+	shell.add_theme_constant_override("separation", 8)
 	shell.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	safe.add_child(shell)
+	parent.add_child(shell)
 
-	_build_header(shell)
-
-	if _layout_mode == "tablet":
-		var body := HBoxContainer.new()
-		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		body.add_theme_constant_override("separation", 12)
-		body.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		shell.add_child(body)
-		_build_navigation(body, true)
-		_build_page_scroll(body)
-	else:
-		_build_navigation(shell, false)
-		_build_page_scroll(shell)
+	_build_top_bar(shell)
+	_build_page_scroll(shell)
+	_build_phone_tab_bar(shell)
 
 
-func _build_header(parent: Container) -> void:
-	var header_glass := UI.glass_panel()
-	parent.add_child(header_glass)
+func _build_tablet_shell(parent: Container) -> void:
+	var body := HBoxContainer.new()
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 12)
+	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(body)
 
-	var header_margin := MarginContainer.new()
-	header_margin.add_theme_constant_override("margin_left", 16)
-	header_margin.add_theme_constant_override("margin_right", 14)
-	header_margin.add_theme_constant_override("margin_top", 13)
-	header_margin.add_theme_constant_override("margin_bottom", 13)
-	header_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	header_glass.add_child(header_margin)
+	_build_tablet_sidebar(body)
 
-	var header := HBoxContainer.new()
-	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_theme_constant_override("separation", 10)
-	header.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	header_margin.add_child(header)
+	var detail := VBoxContainer.new()
+	detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail.add_theme_constant_override("separation", 8)
+	detail.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	body.add_child(detail)
 
-	var title_stack := VBoxContainer.new()
-	title_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title_stack.add_theme_constant_override("separation", 1)
-	title_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	header.add_child(title_stack)
+	_build_top_bar(detail)
+	_build_page_scroll(detail)
 
-	title_stack.add_child(UI.label("IOSLAB // DEVICE CONSOLE", 12, UI.ACCENT))
-	title_stack.add_child(UI.label("iPhone Lab", 28, UI.TEXT))
 
-	var right_stack := VBoxContainer.new()
-	right_stack.add_theme_constant_override("separation", 6)
-	right_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	header.add_child(right_stack)
+func _build_top_bar(parent: Container) -> void:
+	var panel := UI.glass_panel(17)
+	panel.custom_minimum_size.y = 58
+	parent.add_child(panel)
 
-	_telemetry_badge = UI.badge("TEL · OFF", UI.MUTED)
-	right_stack.add_child(_telemetry_badge)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 15)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_top", 8)
+	margin.add_theme_constant_override("margin_bottom", 8)
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_theme_constant_override("separation", 10)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.add_child(row)
+
+	var titles := VBoxContainer.new()
+	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	titles.add_theme_constant_override("separation", 0)
+	titles.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(titles)
+
+	var app_name := UI.single_line_label("iOS Lab", 19, UI.TEXT)
+	titles.add_child(app_name)
+
+	_page_title = UI.single_line_label("Overview", 11, UI.MUTED)
+	titles.add_child(_page_title)
+
+	_telemetry_badge = UI.badge("TEL OFF", UI.MUTED)
+	_telemetry_badge.custom_minimum_size.x = 62
+	row.add_child(_telemetry_badge)
+
+
+func _build_phone_tab_bar(parent: Container) -> void:
+	var bar := UI.glass_panel(22)
+	bar.custom_minimum_size.y = 68
+	parent.add_child(bar)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 5)
+	margin.add_theme_constant_override("margin_right", 5)
+	margin.add_theme_constant_override("margin_top", 5)
+	margin.add_theme_constant_override("margin_bottom", 5)
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar.add_child(margin)
+
+	var tabs := HBoxContainer.new()
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.add_theme_constant_override("separation", 2)
+	tabs.mouse_filter = Control.MOUSE_FILTER_PASS
+	margin.add_child(tabs)
+
+	for page_name in PHONE_TABS:
+		var button := UI.tab_button(str(PHONE_TAB_LABELS.get(page_name, page_name)))
+		button.pressed.connect(_show_page.bind(page_name))
+		_nav_buttons[page_name] = button
+		tabs.add_child(button)
+
+
+func _build_tablet_sidebar(parent: Container) -> void:
+	var sidebar := UI.glass_panel(22)
+	sidebar.custom_minimum_size.x = 208
+	sidebar.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	parent.add_child(sidebar)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_bottom", 16)
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sidebar.add_child(margin)
+
+	var stack := VBoxContainer.new()
+	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	stack.add_theme_constant_override("separation", 6)
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.add_child(stack)
+
+	stack.add_child(UI.single_line_label("iOS Lab", 23, UI.TEXT))
+	stack.add_child(UI.single_line_label("DEVICE CONSOLE", 11, UI.ACCENT))
+
+	var spacer := Control.new()
+	spacer.custom_minimum_size.y = 12
+	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_child(spacer)
+
+	for page_name in TABLET_NAV:
+		var button := UI.side_nav_button(page_name)
+		button.pressed.connect(_show_page.bind(page_name))
+		_nav_buttons[page_name] = button
+		stack.add_child(button)
+
+	var flex := Control.new()
+	flex.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	flex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_child(flex)
 
 	var build := _read_build_info()
 	var sha := str(build.get("git_sha", "LOCAL"))
-	if sha.length() > 12:
-		sha = sha.left(12)
-	var build_badge := UI.badge("%s · %s" % [
-		str(build.get("version", "0.3.0-dev")),
-		sha
-	], UI.MUTED)
-	right_stack.add_child(build_badge)
-
-
-func _build_navigation(parent: Container, vertical: bool) -> void:
-	var nav_glass := UI.glass_panel()
-	if vertical:
-		nav_glass.custom_minimum_size.x = 164
-		nav_glass.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	else:
-		nav_glass.custom_minimum_size.y = 58
-	parent.add_child(nav_glass)
-
-	var nav_margin := MarginContainer.new()
-	nav_margin.add_theme_constant_override("margin_left", 4)
-	nav_margin.add_theme_constant_override("margin_right", 4)
-	nav_margin.add_theme_constant_override("margin_top", 4)
-	nav_margin.add_theme_constant_override("margin_bottom", 4)
-	nav_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	nav_glass.add_child(nav_margin)
-
-	if vertical:
-		var nav := VBoxContainer.new()
-		nav.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		nav.add_theme_constant_override("separation", 6)
-		nav.mouse_filter = Control.MOUSE_FILTER_PASS
-		nav_margin.add_child(nav)
-		for page_name in PAGE_ORDER:
-			var button := UI.nav_button(page_name)
-			button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			button.pressed.connect(_show_page.bind(page_name))
-			_nav_buttons[page_name] = button
-			nav.add_child(button)
-	else:
-		var nav_scroll := ScrollContainer.new()
-		nav_scroll.custom_minimum_size.y = 50
-		nav_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		nav_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
-		nav_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		nav_scroll.scroll_deadzone = 5
-		nav_margin.add_child(nav_scroll)
-
-		var nav := HBoxContainer.new()
-		nav.add_theme_constant_override("separation", 5)
-		nav.mouse_filter = Control.MOUSE_FILTER_PASS
-		nav_scroll.add_child(nav)
-
-		for page_name in PAGE_ORDER:
-			var button := UI.nav_button(page_name)
-			button.pressed.connect(_show_page.bind(page_name))
-			_nav_buttons[page_name] = button
-			nav.add_child(button)
+	if sha.length() > 8:
+		sha = sha.left(8)
+	stack.add_child(UI.single_line_label("build %s" % sha, 11, UI.MUTED))
 
 
 func _build_page_scroll(parent: Container) -> void:
@@ -184,10 +225,10 @@ func _build_page_scroll(parent: Container) -> void:
 
 	var page_margin := MarginContainer.new()
 	page_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	page_margin.add_theme_constant_override("margin_left", 1)
-	page_margin.add_theme_constant_override("margin_right", 1)
+	page_margin.add_theme_constant_override("margin_left", 2)
+	page_margin.add_theme_constant_override("margin_right", 2)
 	page_margin.add_theme_constant_override("margin_top", 8)
-	page_margin.add_theme_constant_override("margin_bottom", 28)
+	page_margin.add_theme_constant_override("margin_bottom", 18)
 	page_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_page_scroll.add_child(page_margin)
 
@@ -199,16 +240,20 @@ func _build_page_scroll(parent: Container) -> void:
 
 
 func _register_pages() -> void:
+	var more := MorePage.new()
+	more.navigate_requested.connect(_show_page)
+
 	_pages = {
 		"Overview": OverviewPage.new(),
 		"Telemetry": TelemetryPage.new(),
 		"Sensors": SensorsPage.new(),
 		"GPS": LocationPage.new(),
+		"More": more,
 		"Network": NetworkPage.new(),
 		"Device": DevicePage.new(),
 	}
 
-	for page_name in PAGE_ORDER:
+	for page_name in ALL_PAGES:
 		var page := _pages[page_name] as Control
 		page.visible = false
 		page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -219,12 +264,19 @@ func _show_page(page_name: String) -> void:
 	if not _pages.has(page_name):
 		return
 
-	for name in PAGE_ORDER:
+	for name in ALL_PAGES:
 		var page := _pages[name] as Control
 		page.visible = name == page_name
 
-		var button := _nav_buttons[name] as Button
-		UI.set_nav_active(button, name == page_name)
+	var active_nav := page_name
+	if _layout_mode == "phone" and not PHONE_TABS.has(page_name):
+		active_nav = "More"
+
+	for nav_name in _nav_buttons.keys():
+		UI.set_nav_active(_nav_buttons[nav_name] as Button, str(nav_name) == active_nav)
+
+	if _page_title != null:
+		_page_title.text = page_name
 
 	if _telemetry != null:
 		_telemetry.set_current_page(page_name)
@@ -239,20 +291,20 @@ func _on_telemetry_status_changed(state: String, _detail: String) -> void:
 
 	match state:
 		"streaming":
-			UI.set_badge(_telemetry_badge, "TEL · LIVE", UI.GOOD)
+			UI.set_badge(_telemetry_badge, "TEL LIVE", UI.GOOD)
 		"connecting", "closing":
-			UI.set_badge(_telemetry_badge, "TEL · LINK", UI.WARN)
+			UI.set_badge(_telemetry_badge, "TEL LINK", UI.WARN)
 		"error":
-			UI.set_badge(_telemetry_badge, "TEL · ERR", UI.BAD)
+			UI.set_badge(_telemetry_badge, "TEL ERR", UI.BAD)
 		_:
-			UI.set_badge(_telemetry_badge, "TEL · OFF", UI.MUTED)
+			UI.set_badge(_telemetry_badge, "TEL OFF", UI.MUTED)
 
 
 func _compute_safe_margins() -> Dictionary:
-	var result := {"left": 16, "right": 16, "top": 16, "bottom": 16}
+	var result := {"left": 12, "right": 12, "top": 8, "bottom": 8}
 	if OS.get_name() != "iOS":
 		if _layout_mode == "tablet":
-			return {"left": 24, "right": 24, "top": 20, "bottom": 20}
+			return {"left": 20, "right": 20, "top": 16, "bottom": 16}
 		return result
 
 	var screen_px := DisplayServer.screen_get_size()
@@ -263,10 +315,10 @@ func _compute_safe_margins() -> Dictionary:
 
 	var sx := viewport.x / float(screen_px.x)
 	var sy := viewport.y / float(screen_px.y)
-	result.left = maxi(16, int(round(safe_px.position.x * sx)))
-	result.top = maxi(14, int(round(safe_px.position.y * sy)))
-	result.right = maxi(16, int(round((screen_px.x - safe_px.end.x) * sx)))
-	result.bottom = maxi(14, int(round((screen_px.y - safe_px.end.y) * sy)))
+	result.left = maxi(10, int(round(safe_px.position.x * sx)))
+	result.top = maxi(6, int(round(safe_px.position.y * sy)))
+	result.right = maxi(10, int(round((screen_px.x - safe_px.end.x) * sx)))
+	result.bottom = maxi(6, int(round((screen_px.y - safe_px.end.y) * sy)))
 	return result
 
 
@@ -276,7 +328,7 @@ func _record_layout_probe() -> void:
 	var viewport := get_viewport_rect().size
 	var screen_px := DisplayServer.screen_get_size()
 	var safe_px := DisplayServer.get_display_safe_area()
-	_telemetry.call("record_event", "ui_layout", "responsive shell initialized", {
+	_telemetry.call("record_event", "ui_layout", "native-style responsive shell initialized", {
 		"layout": _layout_mode,
 		"viewport_logical": [viewport.x, viewport.y],
 		"screen_px": [screen_px.x, screen_px.y],
@@ -284,6 +336,7 @@ func _record_layout_probe() -> void:
 		"screen_dpi": DisplayServer.screen_get_dpi(),
 		"safe_area_px": [safe_px.position.x, safe_px.position.y, safe_px.size.x, safe_px.size.y],
 		"safe_margins_logical": _safe_margins.duplicate(true),
+		"phone_tabs": PHONE_TABS.duplicate(),
 	})
 
 

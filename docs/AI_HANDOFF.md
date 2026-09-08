@@ -10,14 +10,14 @@ Le bootstrap Windows -> GitHub Actions macOS -> Godot iOS -> Xcode -> IPA unsign
 
 Une première IPA Godot a été installée et lancée sur l'iPhone. Le retour utilisateur sur cette première version : l'app est bien présente et utilisable, les probes principaux « ont l'air de fonctionner », mais le scroll vertical est mauvais car il ne démarre correctement que dans certaines zones hors cartes. Cette observation a déclenché la V2.
 
-La V2 est maintenant un capability lab beaucoup plus complet : navigation, GPS/carte, réseau générique, bridge iOS natif, télémétrie live vers PowerShell, design dark terminal et correction de la propagation du scroll. Ces capacités restent **IMPLÉMENTÉES / BUILD CI VALIDÉES**, pas encore **VALIDÉES SUR IPHONE** tant que l'IPA V2 exacte n'a pas été installée et observée physiquement.
+La V2 est maintenant un capability lab beaucoup plus complet : navigation, GPS/carte, réseau générique, bridge iOS natif, télémétrie live vers PowerShell, design dark terminal et correction de la propagation du scroll. Ces capacités restent **IMPLÉMENTÉES / BUILD CI VALIDÉES** sur un SHA V2 antérieur, pas encore **VALIDÉES SUR IPHONE** tant que l'IPA V2 exacte du HEAD courant n'a pas été installée et observée physiquement.
 
 ## Git / branches
 
 - repo : `Rzbck/ios-godot-lab` ;
 - `main` reste non promu pendant la validation ;
 - branche produit V2 : `feat/iphone-lab-v2-20260908` ;
-- branche tooling transitoire créée pour le workflow artifact local : `feat/iphone-lab-v2-artifact-sync-20260908` ;
+- une branche tooling transitoire `feat/iphone-lab-v2-artifact-sync-20260908` a servi à préparer le workflow local avant fast-forward sur la branche produit ;
 - ne jamais supposer que le SHA écrit ici est le HEAD courant : toujours re-fetcher.
 
 ## Premier build réellement installé sur iPhone
@@ -110,13 +110,14 @@ Workflow canonique :
 4. `git fetch origin --prune` ;
 5. fast-forward strict de la branche courante seulement ;
 6. recherche d'un workflow iOS `success` pour **le HEAD exact** ;
-7. téléchargement GitHub CLI de `ios-unsigned-<SHA exact>` ;
-8. vérification `BUILD-METADATA.json.sha == HEAD` ;
-9. vérification SHA-256 de l'IPA ;
-10. rangement local dans `E:\_Project\IOS APP\ios-godot-lab\artifacts\<sha-court>\` ;
-11. `LATEST.json` et `LATEST_IPA.txt` donnent le dernier artifact exact vérifié.
+7. si aucun build exact n'existe encore, déclenche automatiquement `build-ios-unsigned.yml` sur cette branche et attend son résultat ;
+8. si le build exact réussit, téléchargement GitHub CLI de `ios-unsigned-<SHA exact>` ;
+9. vérification `BUILD-METADATA.json.sha == HEAD` ;
+10. vérification SHA-256 de l'IPA ;
+11. rangement local dans `E:\_Project\IOS APP\ios-godot-lab\artifacts\<sha-court>\` ;
+12. `LATEST.json` et `LATEST_IPA.txt` donnent le dernier artifact exact vérifié.
 
-Si aucun build iOS réussi n'existe pour le HEAD exact : **STOP**, ne jamais récupérer silencieusement un autre SHA.
+Si le build exact échoue, est annulé ou dépasse le timeout : **STOP**, ne jamais récupérer silencieusement un autre SHA.
 
 ## Windows / arborescence canonique
 
@@ -152,17 +153,15 @@ Pour un gros bloc collé directement dans une console PowerShell interactive et 
 
 **BUILD IOS VALIDÉ — V2 c3c85** : parse/smoke, plugin `IOSLab`, export Godot, Xcode iphoneos, paquet IPA unsigned.
 
-**IMPLÉMENTÉ MAIS NON VALIDÉ SUR IPHONE — V2** : nouveau scroll, GPS/carte, BLE, caméra, micro, ARKit/LiDAR/NFC availability, HTTP/WS/UDP/OSC, télémétrie live et nouveau design.
+**IMPLÉMENTÉ MAIS NON VALIDÉ SUR IPHONE — V2 HEAD courant** : nouveau scroll, GPS/carte, BLE, caméra, micro, ARKit/LiDAR/NFC availability, HTTP/WS/UDP/OSC, télémétrie live, nouveau design et workflow local exact-IPA.
 
 ## PROCHAIN TEST
 
-1. intégrer/synchroniser le workflow `UPDATE_IOS_LAB.ps1` sur la branche V2 produit ;
-2. attendre un build iOS `success` du HEAD exact qui contient ce workflow ;
-3. sur Windows, créer/réutiliser le worktree V2 CLEAN ;
-4. lancer `.\UPDATE_IOS_LAB.ps1 -OpenFolder` ;
-5. installer l'IPA exacte affichée avec iLoader ;
-6. vérifier le SHA visible dans l'app ;
-7. tester d'abord le scroll sur les cartes ;
-8. tester GPS + carte, BLE, caméra, micro et réseau ;
-9. lancer `tools/Receive-IOSLabTelemetry.ps1 -Port 8787`, puis `Telemetry -> WebSocket -> <IP PC/Tailscale>:8787 -> START STREAM` ;
-10. copier le log PowerShell dans ChatGPT et continuer les corrections à partir de télémétrie réelle.
+1. sur Windows, créer/réutiliser un worktree CLEAN pour `feat/iphone-lab-v2-20260908` ;
+2. lancer `.\UPDATE_IOS_LAB.ps1 -OpenFolder` ; le script déclenchera le build exact si nécessaire, attendra et téléchargera l'IPA vérifiée ;
+3. installer l'IPA exacte affichée avec iLoader ;
+4. vérifier le SHA visible dans l'app ;
+5. tester d'abord le scroll sur les cartes ;
+6. tester GPS + carte, BLE, caméra, micro et réseau ;
+7. lancer `tools/Receive-IOSLabTelemetry.ps1 -Port 8787`, puis `Telemetry -> WebSocket -> <IP PC/Tailscale>:8787 -> START STREAM` ;
+8. copier le log PowerShell dans ChatGPT et continuer les corrections à partir de télémétrie réelle.

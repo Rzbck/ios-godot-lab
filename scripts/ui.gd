@@ -1,9 +1,9 @@
 extends RefCounted
 
 # iOS Lab visual system. The app uses a 390x844 logical iPhone canvas.
-# Live values must never change the vertical geometry of a page: dynamic labels
-# are single-line, clipped and ellipsized so sensor/network updates cannot make
-# cards jump between one and two lines.
+# Dynamic values must never change page geometry. Controls are deliberately
+# allowed to shrink inside the phone width: long labels are clipped/ellipsized
+# instead of forcing the entire app wider than the viewport.
 const BG := Color("000202")
 const SURFACE := Color("080c0f")
 const SURFACE_ALT := Color("05080a")
@@ -31,6 +31,8 @@ static func label(text_value: String, size: int = BODY_SIZE, color: Color = TEXT
 	node.add_theme_font_size_override("font_size", size)
 	node.add_theme_color_override("font_color", color)
 	node.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	node.custom_minimum_size.x = 0
 	node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return node
 
@@ -104,6 +106,7 @@ static func _set_badge_style(panel: PanelContainer, color: Color) -> void:
 static func glass_panel(radius: int = 20) -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.custom_minimum_size.x = 0
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var style := StyleBoxFlat.new()
 	style.bg_color = GLASS
@@ -120,6 +123,7 @@ static func tab_button(text_value: String) -> Button:
 	var node := Button.new()
 	node.text = text_value
 	node.toggle_mode = true
+	node.clip_text = true
 	node.custom_minimum_size = Vector2(0, 56)
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.add_theme_font_size_override("font_size", 11)
@@ -149,6 +153,7 @@ static func side_nav_button(text_value: String) -> Button:
 	var node := Button.new()
 	node.text = text_value
 	node.toggle_mode = true
+	node.clip_text = true
 	node.custom_minimum_size = Vector2(0, 48)
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.add_theme_font_size_override("font_size", 15)
@@ -188,6 +193,7 @@ static func set_nav_active(node: Button, active: bool) -> void:
 static func make_card(parent: Container, title_text: String, description: String = "") -> VBoxContainer:
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.custom_minimum_size.x = 0
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var style := StyleBoxFlat.new()
@@ -204,6 +210,7 @@ static func make_card(parent: Container, title_text: String, description: String
 
 	var content := VBoxContainer.new()
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.custom_minimum_size.x = 0
 	content.add_theme_constant_override("separation", 10)
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(content)
@@ -220,18 +227,20 @@ static func make_card(parent: Container, title_text: String, description: String
 static func value_row(parent: Container, key: String, value: String = "—") -> Label:
 	var row := HBoxContainer.new()
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.custom_minimum_size.y = 30
+	row.custom_minimum_size = Vector2(0, 30)
 	row.add_theme_constant_override("separation", 10)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(row)
 
 	var key_label := single_line_label(key.to_upper(), CAPTION_SIZE, MUTED)
-	key_label.custom_minimum_size.x = 96
+	key_label.custom_minimum_size.x = 88
+	key_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	key_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(key_label)
 
 	var value_label := single_line_label(value, 14, TEXT)
 	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	value_label.custom_minimum_size.x = 0
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(value_label)
@@ -241,7 +250,9 @@ static func value_row(parent: Container, key: String, value: String = "—") -> 
 static func button(text_value: String, accent: bool = false) -> Button:
 	var node := Button.new()
 	node.text = text_value
-	node.custom_minimum_size.y = CONTROL_HEIGHT
+	node.clip_text = true
+	node.custom_minimum_size = Vector2(0, CONTROL_HEIGHT)
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.add_theme_font_size_override("font_size", CONTROL_SIZE)
 	node.add_theme_color_override("font_color", TEXT)
 	node.focus_mode = Control.FOCUS_ALL
@@ -271,7 +282,9 @@ static func button(text_value: String, accent: bool = false) -> Button:
 static func line_edit(placeholder: String = "") -> LineEdit:
 	var node := LineEdit.new()
 	node.placeholder_text = placeholder
-	node.custom_minimum_size.y = CONTROL_HEIGHT
+	node.expand_to_text_length = false
+	node.custom_minimum_size = Vector2(0, CONTROL_HEIGHT)
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.add_theme_font_size_override("font_size", 16)
 	node.add_theme_color_override("font_color", TEXT)
 	node.add_theme_color_override("font_placeholder_color", Color(MUTED, 0.72))
@@ -285,7 +298,8 @@ static func line_edit(placeholder: String = "") -> LineEdit:
 static func text_edit(placeholder: String = "", min_height: float = 132.0) -> TextEdit:
 	var node := TextEdit.new()
 	node.placeholder_text = placeholder
-	node.custom_minimum_size.y = min_height
+	node.custom_minimum_size = Vector2(0, min_height)
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.add_theme_font_size_override("font_size", 15)
 	node.add_theme_color_override("font_color", TEXT)
 	node.add_theme_color_override("font_placeholder_color", Color(MUTED, 0.72))
@@ -298,9 +312,12 @@ static func text_edit(placeholder: String = "", min_height: float = 132.0) -> Te
 
 static func option_button(items: Array) -> OptionButton:
 	var node := OptionButton.new()
+	node.fit_to_longest_item = false
+	node.clip_text = true
 	for item in items:
 		node.add_item(str(item))
-	node.custom_minimum_size.y = CONTROL_HEIGHT
+	node.custom_minimum_size = Vector2(0, CONTROL_HEIGHT)
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.add_theme_font_size_override("font_size", CONTROL_SIZE)
 	node.add_theme_color_override("font_color", TEXT)
 	node.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -315,7 +332,7 @@ static func option_button(items: Array) -> OptionButton:
 
 static func terminal_log(min_height: float = 190.0) -> RichTextLabel:
 	var node := RichTextLabel.new()
-	node.custom_minimum_size.y = min_height
+	node.custom_minimum_size = Vector2(0, min_height)
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.fit_content = false
 	node.scroll_active = true

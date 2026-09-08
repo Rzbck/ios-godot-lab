@@ -201,10 +201,11 @@ func _profile_packet(source: Dictionary) -> Dictionary:
 			packet["touch"] = source.get("touch", {})
 		"device":
 			packet["device"] = source.get("device", {})
+			packet["camera"] = source.get("camera", {})
 			packet["capabilities"] = source.get("capabilities", {})
 			packet["bluetooth"] = source.get("bluetooth", {})
 		_:
-			for key in ["device", "sensors", "touch", "location", "track", "bluetooth", "capabilities"]:
+			for key in ["device", "sensors", "touch", "location", "track", "bluetooth", "camera", "capabilities"]:
 				packet[key] = source.get(key, {})
 	return packet
 

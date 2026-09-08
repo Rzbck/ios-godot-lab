@@ -13,6 +13,7 @@ var _running := false
 var _profile := "all"
 var _rate_hz := 10.0
 var _send_accumulator := 0.0
+var _sequence := 0
 
 var _ws_enabled := false
 var _ws_url := ""
@@ -81,6 +82,7 @@ func start() -> bool:
 
 	_running = true
 	_send_accumulator = 0.0
+	_sequence = 0
 	_sent_packets = 0
 	_transport_errors = 0
 	_last_send_unix_ms = 0
@@ -115,6 +117,7 @@ func get_status() -> Dictionary:
 		"detail": _detail,
 		"profile": _profile,
 		"rate_hz": _rate_hz,
+		"sequence": _sequence,
 		"sent_packets": _sent_packets,
 		"transport_errors": _transport_errors,
 		"last_send_unix_ms": _last_send_unix_ms,
@@ -146,6 +149,7 @@ func _send_once() -> void:
 		_emit_status("error", "live state source unavailable")
 		return
 
+	_sequence += 1
 	var source := _telemetry.call("get_live_state") as Dictionary
 	var packet := _profile_packet(source)
 	var text := JSON.stringify(packet)
@@ -185,7 +189,10 @@ func _profile_packet(source: Dictionary) -> Dictionary:
 	var packet := {
 		"schema": SCHEMA,
 		"type": "live",
+		"seq": _sequence,
+		"rate_hz": _rate_hz,
 		"sent_unix_ms": int(Time.get_unix_time_from_system() * 1000.0),
+		"monotonic_ms": Time.get_ticks_msec(),
 		"profile": _profile,
 		"build": source.get("build", {}),
 		"app": source.get("app", {}),

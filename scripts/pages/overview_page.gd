@@ -1,77 +1,95 @@
 extends VBoxContainer
 
+signal navigate_requested(page_name: String)
+
 const UI = preload("res://scripts/ui.gd")
 
 var _platform_value: Label
 var _viewport_value: Label
-var _addresses_value: Label
 var _build_value: Label
 
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_constant_override("separation", 12)
+	add_theme_constant_override("separation", 14)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	UI.section_title(
 		self,
-		"Overview",
-		"Real-device capability lab. Each page isolates one group of iPhone APIs, live telemetry and network tools."
+		"Home",
+		"Real-device iPhone lab for motion, location, camera, networking and live diagnostics."
 	)
 
-	var identity := UI.make_card(self, "BUILD & DEVICE", "The exact Git SHA is stamped by the iOS workflow before export.")
-	_build_value = UI.value_row(identity, "Build", "reading…")
-	_platform_value = UI.value_row(identity, "Platform", "reading…")
-	_viewport_value = UI.value_row(identity, "Viewport", "reading…")
-	_addresses_value = UI.value_row(identity, "Network", "reading…")
-
-	var available := UI.make_card(
-		self,
-		"CAPABILITY MATRIX",
-		"V2 exposes direct Godot APIs, a native iOS bridge and an opt-in PowerShell telemetry path."
-	)
-	_add_status(available, "Live PowerShell telemetry + ACK / RTT", "WS / HTTP", UI.ACCENT)
-	_add_status(available, "Touch / drag / scroll", "DIRECT", UI.GOOD)
-	_add_status(available, "Accelerometer / gravity / gyro / magnetometer", "DIRECT", UI.GOOD)
-	_add_status(available, "Haptics", "DIRECT", UI.GOOD)
-	_add_status(available, "GPS / CoreLocation", "IOSLAB BRIDGE", UI.GOOD)
-	_add_status(available, "Bluetooth LE scan", "IOSLAB BRIDGE", UI.GOOD)
-	_add_status(available, "ARKit / LiDAR availability probe", "IOSLAB BRIDGE", UI.GOOD)
-	_add_status(available, "NFC availability probe", "IOSLAB BRIDGE", UI.WARN)
-	_add_status(available, "Camera preview", "GODOT CAMERA", UI.GOOD)
-	_add_status(available, "Microphone level capture", "GODOT AUDIO", UI.GOOD)
-	_add_status(available, "HTTP / HTTPS", "DIRECT", UI.GOOD)
-	_add_status(available, "WebSocket / WSS", "DIRECT", UI.GOOD)
-	_add_status(available, "UDP / OSC", "DIRECT", UI.GOOD)
-
-	var scroll_test := UI.make_card(
-		self,
-		"SCROLL SURFACE TEST",
-		"Drag vertically directly on this card. Content surfaces intentionally ignore pointer input so the parent ScrollContainer receives the gesture."
-	)
-	for index in range(1, 7):
-		UI.value_row(scroll_test, "Row %02d" % index, "drag over me")
-
-	var privacy := UI.make_card(
-		self,
-		"TELEMETRY POLICY",
-		"Telemetry is explicit opt-in. Nothing is sent until you enter a receiver address and press START STREAM on the Telemetry page."
-	)
-	privacy.add_child(UI.label(
-		"The diagnostic payload excludes Apple ID, UDID/private identifiers, signing/pairing material, clipboard contents, camera frames and microphone audio.",
-		13,
-		UI.MUTED
-	))
+	_build_device_card()
+	_build_quick_actions()
+	_build_feature_summary()
 
 	_refresh()
 
 
+func _build_device_card() -> void:
+	var card := UI.make_card(self, "THIS DEVICE")
+	_build_value = UI.value_row(card, "Build", "reading…")
+	_platform_value = UI.value_row(card, "Device", "reading…")
+	_viewport_value = UI.value_row(card, "Canvas", "reading…")
+
+
+func _build_quick_actions() -> void:
+	var card := UI.make_card(
+		self,
+		"QUICK START",
+		"Open the tool you want instead of scanning a diagnostic matrix."
+	)
+
+	var telemetry := UI.button("Live Telemetry", true)
+	telemetry.pressed.connect(func() -> void: navigate_requested.emit("Telemetry"))
+	card.add_child(telemetry)
+
+	var location := UI.button("Location & Map")
+	location.pressed.connect(func() -> void: navigate_requested.emit("GPS"))
+	card.add_child(location)
+
+	var device := UI.button("Camera & Device Tools")
+	device.pressed.connect(func() -> void: navigate_requested.emit("Device"))
+	card.add_child(device)
+
+
+func _build_feature_summary() -> void:
+	var card := UI.make_card(
+		self,
+		"AVAILABLE TOOLS",
+		"Capabilities are grouped by task. Status and detailed diagnostics live inside each tool page."
+	)
+
+	var flow := HFlowContainer.new()
+	flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 8)
+	flow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(flow)
+
+	for item in [
+		["Motion", UI.GOOD],
+		["Touch", UI.GOOD],
+		["Location", UI.GOOD],
+		["Camera", UI.GOOD],
+		["Microphone", UI.GOOD],
+		["BLE", UI.GOOD],
+		["HTTP / WS", UI.GOOD],
+		["UDP / OSC", UI.GOOD],
+		["AR / NFC probes", UI.WARN],
+	]:
+		flow.add_child(UI.status_pill(str(item[0]), item[1]))
+
+
 func _refresh() -> void:
 	var build := _read_build_info()
-	_build_value.text = "%s · %s · %s" % [
-		str(build.get("version", "0.2.0-dev")),
-		str(build.get("git_sha", "LOCAL")),
-		str(build.get("channel", "local"))
+	var sha := str(build.get("git_sha", "LOCAL"))
+	if sha.length() > 8:
+		sha = sha.left(8)
+	_build_value.text = "%s · %s" % [
+		str(build.get("version", "0.4.0-dev")),
+		sha,
 	]
 
 	var platform := OS.get_name()
@@ -79,31 +97,7 @@ func _refresh() -> void:
 	_platform_value.text = platform if model.is_empty() else "%s · %s" % [platform, model]
 
 	var viewport := get_viewport().get_visible_rect().size
-	_viewport_value.text = "%d × %d" % [int(viewport.x), int(viewport.y)]
-
-	var addresses := IP.get_local_addresses()
-	var useful: Array[String] = []
-	for address in addresses:
-		var value := str(address)
-		if value == "127.0.0.1" or value == "::1":
-			continue
-		useful.append(value)
-	_addresses_value.text = "none" if useful.is_empty() else ", ".join(useful.slice(0, 4))
-
-
-func _add_status(parent: Container, name: String, state: String, color: Color) -> void:
-	var row := HBoxContainer.new()
-	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	parent.add_child(row)
-
-	var left := UI.label(name, 12, UI.TEXT)
-	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(left)
-
-	var right := UI.label(state, 11, color)
-	right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	row.add_child(right)
+	_viewport_value.text = "%d × %d pt-like" % [int(viewport.x), int(viewport.y)]
 
 
 func _read_build_info() -> Dictionary:

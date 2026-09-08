@@ -2,9 +2,57 @@ extends VBoxContainer
 
 const UI = preload("res://scripts/ui.gd")
 
+const CAMERA_SHADER := """
+shader_type canvas_item;
+
+uniform sampler2D cbcr_tex;
+uniform int color_mode = 0;
+uniform int rotation_quarters = 0;
+uniform bool mirror_x = false;
+uniform bool flip_y = false;
+
+vec2 camera_uv(vec2 uv) {
+	if (rotation_quarters == 1) {
+		uv = vec2(uv.y, 1.0 - uv.x);
+	} else if (rotation_quarters == 2) {
+		uv = vec2(1.0 - uv.x, 1.0 - uv.y);
+	} else if (rotation_quarters == 3) {
+		uv = vec2(1.0 - uv.y, uv.x);
+	}
+	if (mirror_x) {
+		uv.x = 1.0 - uv.x;
+	}
+	if (flip_y) {
+		uv.y = 1.0 - uv.y;
+	}
+	return uv;
+}
+
+void fragment() {
+	vec2 uv = camera_uv(UV);
+	if (color_mode == 1) {
+		float y = texture(TEXTURE, uv).r;
+		vec2 cbcr = texture(cbcr_tex, uv).rg - vec2(0.5, 0.5);
+		float r = y + 1.402 * cbcr.y;
+		float g = y - 0.344136 * cbcr.x - 0.714136 * cbcr.y;
+		float b = y + 1.772 * cbcr.x;
+		COLOR = vec4(clamp(vec3(r, g, b), vec3(0.0), vec3(1.0)), 1.0);
+	} else {
+		COLOR = texture(TEXTURE, uv);
+	}
+}
+"""
+
 var _camera_status: Label
 var _camera_preview: TextureRect
+var _camera_selector: OptionButton
+var _camera_rotation: OptionButton
+var _camera_mirror: OptionButton
 var _camera_texture: CameraTexture
+var _camera_cbcr_texture: CameraTexture
+var _camera_material: ShaderMaterial
+var _camera_feeds: Array[CameraFeed] = []
+var _active_feed: CameraFeed
 
 var _mic_status: Label
 var _mic_level: Label
@@ -22,7 +70,7 @@ var _system_refresh_accumulator := 0.0
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_constant_override("separation", 12)
+	add_theme_constant_override("separation", 14)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	if OS.get_name() == "iOS" and Engine.has_singleton("IOSLab"):
@@ -33,7 +81,7 @@ func _ready() -> void:
 	UI.section_title(
 		self,
 		"Device",
-		"Camera, microphone, battery, clipboard and system-level probes exposed by Godot and the IOSLab bridge on iOS."
+		"Camera, microphone, battery, clipboard and system probes. Camera controls expose front/back selection, orientation and the feed color path for iPhone debugging."
 	)
 
 	_build_camera_card()
@@ -48,23 +96,51 @@ func _build_camera_card() -> void:
 	var card := UI.make_card(
 		self,
 		"CAMERA",
-		"Starts the first camera feed exposed by Godot's iOS camera module. iOS may ask for camera permission."
+		"Choose the physical camera instead of silently taking the first feed. Auto color handles separated iOS Y/CbCr feeds with a conversion shader; rotation and mirror can be corrected live."
 	)
 	_camera_status = UI.value_row(card, "Status", "not started")
 
+	_camera_selector = UI.option_button(["Detect cameras…"])
+	_camera_selector.item_selected.connect(_on_camera_selector_changed)
+	card.add_child(_camera_selector)
+
+	_camera_rotation = UI.option_button([
+		"Orientation · Auto",
+		"Rotation · 0°",
+		"Rotation · 90°",
+		"Rotation · 180°",
+		"Rotation · 270°",
+	])
+	_camera_rotation.item_selected.connect(_on_camera_view_changed)
+	card.add_child(_camera_rotation)
+
+	_camera_mirror = UI.option_button([
+		"Mirror · Auto (front only)",
+		"Mirror · Off",
+		"Mirror · On",
+	])
+	_camera_mirror.item_selected.connect(_on_camera_view_changed)
+	card.add_child(_camera_mirror)
+
 	_camera_preview = TextureRect.new()
-	_camera_preview.custom_minimum_size.y = 260
+	_camera_preview.custom_minimum_size.y = 320
 	_camera_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_camera_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_camera_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_camera_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	_camera_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(_camera_preview)
+
+	var shader := Shader.new()
+	shader.code = CAMERA_SHADER
+	_camera_material = ShaderMaterial.new()
+	_camera_material.shader = shader
+	_camera_preview.material = _camera_material
 
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
 	card.add_child(buttons)
 
-	var refresh := UI.button("START / REFRESH", true)
+	var refresh := UI.button("START / APPLY", true)
 	refresh.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	refresh.pressed.connect(_start_camera)
 	buttons.add_child(refresh)
@@ -155,39 +231,212 @@ func _process(delta: float) -> void:
 
 
 func _start_camera() -> void:
+	_stop_camera(false)
 	CameraServer.monitoring_feeds = true
 	_camera_status.text = "requesting camera / waiting for feeds…"
 	_telemetry_event("camera_start", "camera start requested")
-	await get_tree().create_timer(0.6).timeout
+	await get_tree().create_timer(0.7).timeout
 
-	var feeds := CameraServer.feeds()
-	if feeds.is_empty():
+	_refresh_camera_feeds()
+	if _camera_feeds.is_empty():
 		_camera_status.text = "no feeds · permission/module may be unavailable"
 		_telemetry_event("camera_error", "no camera feeds available")
 		return
 
-	var feed := feeds[0] as CameraFeed
+	var selected := clampi(_camera_selector.selected, 0, _camera_feeds.size() - 1)
+	var feed := _camera_feeds[selected]
 	if feed == null:
 		_camera_status.text = "invalid camera feed"
 		_telemetry_event("camera_error", "invalid camera feed")
 		return
 
+	_active_feed = feed
+	var datatype := int(feed.get_datatype())
+	var formats := feed.get_formats()
+	var format_probe := false
+
+	# If iOS exposes a packed YCbCr feed and a selectable format, request the
+	# format with default output parameters first. Godot documents the default
+	# path as RGB conversion for compatible YUYV formats.
+	if datatype == 2 and not formats.is_empty():
+		format_probe = feed.set_format(0, {})
+		datatype = int(feed.get_datatype())
+
 	_camera_texture = CameraTexture.new()
 	_camera_texture.camera_feed_id = feed.get_id()
+
+	var color_mode := "rgba"
+	if datatype == 3:
+		_camera_texture.which_feed = CameraServer.FEED_Y_IMAGE
+		_camera_cbcr_texture = CameraTexture.new()
+		_camera_cbcr_texture.camera_feed_id = feed.get_id()
+		_camera_cbcr_texture.which_feed = CameraServer.FEED_CBCR_IMAGE
+		_camera_cbcr_texture.camera_is_active = true
+		_camera_material.set_shader_parameter("cbcr_tex", _camera_cbcr_texture)
+		_camera_material.set_shader_parameter("color_mode", 1)
+		color_mode = "ycbcr-separate→rgb"
+	else:
+		_camera_texture.which_feed = CameraServer.FEED_RGBA_IMAGE
+		_camera_material.set_shader_parameter("color_mode", 0)
+		color_mode = "rgba/direct"
+
 	_camera_texture.camera_is_active = true
 	_camera_preview.texture = _camera_texture
-	_camera_status.text = "%s · active" % feed.get_name()
-	_telemetry_event("camera_active", "camera feed active", {"feed": feed.get_name()})
+	_apply_camera_preview_transform()
+
+	var position_name := _feed_position_name(feed.get_position())
+	_camera_status.text = "%s · %s · %s" % [position_name, feed.get_name(), color_mode]
+	_telemetry_event("camera_active", "camera feed active", {
+		"feed_id": feed.get_id(),
+		"feed": feed.get_name(),
+		"position": position_name,
+		"datatype": datatype,
+		"datatype_name": _datatype_name(datatype),
+		"format_count": formats.size(),
+		"format_probe_ok": format_probe,
+		"color_mode": color_mode,
+		"rotation": _rotation_degrees(),
+		"mirror": _mirror_enabled(),
+		"feed_transform": str(feed.get_transform()),
+		"viewport_logical": [get_viewport_rect().size.x, get_viewport_rect().size.y],
+		"preview_size": [_camera_preview.size.x, _camera_preview.size.y],
+	})
 
 
-func _stop_camera() -> void:
+func _refresh_camera_feeds() -> void:
+	var feeds := CameraServer.feeds()
+	_camera_feeds.clear()
+	_camera_selector.clear()
+	var preferred := -1
+	var metadata: Array = []
+
+	for raw_feed in feeds:
+		var feed := raw_feed as CameraFeed
+		if feed == null:
+			continue
+		_camera_feeds.append(feed)
+		var position := _feed_position_name(feed.get_position())
+		var datatype := int(feed.get_datatype())
+		_camera_selector.add_item("%s · %s" % [position, feed.get_name()])
+		metadata.append({
+			"id": feed.get_id(),
+			"name": feed.get_name(),
+			"position": position,
+			"datatype": datatype,
+			"datatype_name": _datatype_name(datatype),
+			"format_count": feed.get_formats().size(),
+		})
+		if preferred < 0 and int(feed.get_position()) == 2:
+			preferred = _camera_feeds.size() - 1
+
+	if _camera_feeds.is_empty():
+		_camera_selector.add_item("No camera feeds")
+		_camera_selector.disabled = true
+	else:
+		_camera_selector.disabled = false
+		if preferred < 0:
+			preferred = 0
+		_camera_selector.select(preferred)
+
+	_telemetry_event("camera_feeds", "camera feed inventory refreshed", {
+		"count": _camera_feeds.size(),
+		"feeds": metadata,
+	})
+
+
+func _stop_camera(emit_event: bool = true) -> void:
 	if _camera_texture != null:
 		_camera_texture.camera_is_active = false
-	_camera_preview.texture = null
+	if _camera_cbcr_texture != null:
+		_camera_cbcr_texture.camera_is_active = false
+	if _camera_preview != null:
+		_camera_preview.texture = null
 	_camera_texture = null
+	_camera_cbcr_texture = null
+	_active_feed = null
+	if _camera_material != null:
+		_camera_material.set_shader_parameter("color_mode", 0)
 	CameraServer.monitoring_feeds = false
-	_camera_status.text = "stopped"
-	_telemetry_event("camera_stop", "camera stopped")
+	if _camera_status != null:
+		_camera_status.text = "stopped"
+	if emit_event:
+		_telemetry_event("camera_stop", "camera stopped")
+
+
+func _on_camera_selector_changed(_index: int) -> void:
+	if _camera_texture != null:
+		call_deferred("_start_camera")
+
+
+func _on_camera_view_changed(_index: int) -> void:
+	_apply_camera_preview_transform()
+	if _active_feed != null:
+		_telemetry_event("camera_preview_config", "camera preview transform changed", {
+			"feed": _active_feed.get_name(),
+			"position": _feed_position_name(_active_feed.get_position()),
+			"rotation": _rotation_degrees(),
+			"mirror": _mirror_enabled(),
+			"flip_y": _feed_flip_y(),
+		})
+
+
+func _apply_camera_preview_transform() -> void:
+	if _camera_material == null:
+		return
+	_camera_material.set_shader_parameter("rotation_quarters", _rotation_quarters())
+	_camera_material.set_shader_parameter("mirror_x", _mirror_enabled())
+	_camera_material.set_shader_parameter("flip_y", _feed_flip_y())
+
+
+func _rotation_quarters() -> int:
+	if _camera_rotation == null or _camera_rotation.selected <= 1:
+		return 0
+	return clampi(_camera_rotation.selected - 1, 0, 3)
+
+
+func _rotation_degrees() -> int:
+	return _rotation_quarters() * 90
+
+
+func _mirror_enabled() -> bool:
+	if _camera_mirror == null:
+		return false
+	if _camera_mirror.selected == 1:
+		return false
+	if _camera_mirror.selected == 2:
+		return true
+	return _active_feed != null and int(_active_feed.get_position()) == 1
+
+
+func _feed_flip_y() -> bool:
+	if _active_feed == null:
+		return false
+	var transform := _active_feed.get_transform()
+	return transform.y.y < 0.0
+
+
+func _feed_position_name(position: int) -> String:
+	match int(position):
+		1:
+			return "Front"
+		2:
+			return "Rear"
+		_:
+			return "Unspecified"
+
+
+func _datatype_name(datatype: int) -> String:
+	match datatype:
+		1:
+			return "RGB"
+		2:
+			return "YCbCr"
+		3:
+			return "Y+CbCr"
+		4:
+			return "External"
+		_:
+			return "No image"
 
 
 func _start_microphone() -> void:

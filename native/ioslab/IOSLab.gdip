@@ -13,6 +13,7 @@ files=[]
 linker_flags=["-ObjC"]
 
 [plist]
-NSLocationWhenInUseUsageDescription="Location is used only when you start the GPS test in iOS Godot Lab."
+NSLocationWhenInUseUsageDescription="Location is used when you start GPS or Track Recorder in iOS Godot Lab. Background Track Recorder can continue after you leave the app and shows the iOS location indicator."
+NSLocationAlwaysAndWhenInUseUsageDescription="Background Track Recorder uses location only while you explicitly record a route."
 NSBluetoothAlwaysUsageDescription="Bluetooth is used only when you start the BLE scanner in iOS Godot Lab."
 NSBluetoothPeripheralUsageDescription="Bluetooth is used only when you start the BLE scanner in iOS Godot Lab."

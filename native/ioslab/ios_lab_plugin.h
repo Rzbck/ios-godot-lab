@@ -20,6 +20,8 @@ public:
 	void request_location();
 	void start_location();
 	void stop_location();
+	void set_background_location_enabled(bool enabled);
+	bool is_background_location_enabled() const;
 
 	void start_ble_scan();
 	void stop_ble_scan();

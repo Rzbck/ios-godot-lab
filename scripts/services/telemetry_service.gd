@@ -7,14 +7,18 @@ signal receiver_message(message: String)
 
 const NetworkClient = preload("res://scripts/services/network_client.gd")
 const SCHEMA := "ioslab.telemetry.v1"
-const MAX_EVENT_QUEUE := 32
+const LIVE_SCHEMA := "ioslab.live.v1"
+const MAX_EVENT_QUEUE := 64
 const MAX_PENDING_ACKS := 64
+const OFFLINE_DIAG_PATH := "user://telemetry-offline.jsonl"
+const AUTO_HTTP_AFTER_WS_FAILURES := 3
 
 var _client: Node
 var _native: Object
 var _build_info: Dictionary = {}
 
-var _mode := "websocket"
+var _requested_mode := "auto"
+var _active_mode := "websocket"
 var _address := ""
 var _endpoint := ""
 var _rate_hz := 5.0
@@ -22,6 +26,8 @@ var _streaming := false
 var _ws_open := false
 var _http_in_flight := false
 var _send_accumulator := 0.0
+var _reconnect_timer := 0.0
+var _reconnect_attempt := 0
 
 var _status := "offline"
 var _status_detail := "telemetry disabled"
@@ -74,14 +80,16 @@ func _ready() -> void:
 
 
 func configure(mode: String, address: String, rate_hz: float) -> void:
-	_mode = "http" if mode.to_lower() == "http" else "websocket"
+	var clean_mode := mode.to_lower()
+	_requested_mode = "http" if clean_mode == "http" else "auto"
 	_address = address.strip_edges()
 	_rate_hz = clampf(rate_hz, 1.0, 10.0)
-	_endpoint = _normalize_endpoint(_address, _mode)
+	_active_mode = "http" if _requested_mode == "http" else "websocket"
+	_endpoint = _normalize_endpoint(_address, _active_mode)
 
 
 func start_stream() -> bool:
-	if _endpoint.is_empty():
+	if _address.is_empty():
 		_emit_status("error", "receiver address is empty")
 		return false
 
@@ -91,14 +99,16 @@ func start_stream() -> bool:
 	_pending_sent_ms.clear()
 	_event_queue.clear()
 	_send_accumulator = 0.0
+	_reconnect_timer = 0.0
+	_reconnect_attempt = 0
 	_streaming = true
+	_active_mode = "http" if _requested_mode == "http" else "websocket"
+	_endpoint = _normalize_endpoint(_address, _active_mode)
 
-	if _mode == "websocket":
-		_ws_open = false
-		_emit_status("connecting", _endpoint)
-		_client.websocket_connect(_endpoint)
+	if _active_mode == "websocket":
+		_connect_websocket()
 	else:
-		_emit_status("streaming", "HTTP POST → %s" % _endpoint)
+		_emit_status("streaming", "HTTP fallback active")
 		_queue_event("stream_started", "HTTP telemetry stream started", {"endpoint": _endpoint})
 		_send_next_payload()
 
@@ -106,11 +116,13 @@ func start_stream() -> bool:
 
 
 func stop_stream() -> void:
-	if _mode == "websocket":
+	if _active_mode == "websocket":
 		_client.websocket_disconnect()
 	_streaming = false
 	_ws_open = false
 	_http_in_flight = false
+	_reconnect_timer = 0.0
+	_reconnect_attempt = 0
 	_event_queue.clear()
 	_pending_sent_ms.clear()
 	_emit_status("offline", "telemetry stopped")
@@ -121,7 +133,11 @@ func is_streaming() -> bool:
 
 
 func get_mode() -> String:
-	return _mode
+	return _requested_mode
+
+
+func get_active_mode() -> String:
+	return _active_mode
 
 
 func get_endpoint() -> String:
@@ -130,6 +146,48 @@ func get_endpoint() -> String:
 
 func get_rate_hz() -> float:
 	return _rate_hz
+
+
+func get_live_state() -> Dictionary:
+	var track_state: Dictionary = {}
+	var track := get_tree().get_first_node_in_group("ios_lab_track")
+	if track != null and track.has_method("get_state"):
+		track_state = track.call("get_state") as Dictionary
+
+	return {
+		"schema": LIVE_SCHEMA,
+		"sent_unix_ms": int(Time.get_unix_time_from_system() * 1000.0),
+		"build": _build_info.duplicate(true),
+		"app": {
+			"page": _current_page,
+			"fps": Engine.get_frames_per_second(),
+			"uptime_ms": Time.get_ticks_msec(),
+		},
+		"device": _device_snapshot(),
+		"sensors": {
+			"accelerometer": _vector3_array(Input.get_accelerometer()),
+			"gravity": _vector3_array(Input.get_gravity()),
+			"gyroscope": _vector3_array(Input.get_gyroscope()),
+			"magnetometer": _vector3_array(Input.get_magnetometer()),
+		},
+		"touch": _last_touch.duplicate(true),
+		"location": _location_snapshot(),
+		"track": track_state,
+		"bluetooth": {
+			"state": _ble_state,
+			"last_device": _last_ble_device.duplicate(true),
+		},
+		"capabilities": _capability_snapshot(),
+		"telemetry": {
+			"requested_mode": _requested_mode,
+			"active_mode": _active_mode,
+			"state": _status,
+			"endpoint": _endpoint,
+			"sent": _sent,
+			"acked": _acknowledged,
+			"last_rtt_ms": _last_rtt_ms,
+		},
+	}
 
 
 func set_current_page(page_name: String) -> void:
@@ -145,7 +203,7 @@ func send_probe() -> void:
 		"manual telemetry probe requested on iPhone",
 		{
 			"endpoint": _endpoint,
-			"mode": _mode,
+			"mode": _active_mode,
 			"page": _current_page,
 		}
 	)
@@ -168,6 +226,12 @@ func _process(delta: float) -> void:
 		return
 
 	_cleanup_pending_acks()
+
+	if _active_mode == "websocket" and not _ws_open and _reconnect_timer > 0.0:
+		_reconnect_timer -= delta
+		if _reconnect_timer <= 0.0:
+			_connect_websocket()
+
 	_send_accumulator += delta
 	var interval := 1.0 / maxf(_rate_hz, 1.0)
 	if _send_accumulator < interval:
@@ -208,9 +272,9 @@ func _send_next_payload() -> void:
 	if not _streaming:
 		return
 
-	if _mode == "websocket" and not _ws_open:
+	if _active_mode == "websocket" and not _ws_open:
 		return
-	if _mode == "http" and _http_in_flight:
+	if _active_mode == "http" and _http_in_flight:
 		return
 
 	var payload: Dictionary
@@ -228,7 +292,7 @@ func _send_payload(payload: Dictionary) -> void:
 	_pending_sent_ms[seq] = Time.get_ticks_msec()
 	_trim_pending_acks()
 
-	if _mode == "websocket":
+	if _active_mode == "websocket":
 		_client.websocket_send_text(text)
 		_sent += 1
 	else:
@@ -246,26 +310,9 @@ func _send_payload(payload: Dictionary) -> void:
 
 func _snapshot_payload() -> Dictionary:
 	var payload := _base_payload("snapshot")
-	payload["app"] = {
-		"page": _current_page,
-		"fps": Engine.get_frames_per_second(),
-		"uptime_ms": Time.get_ticks_msec(),
-	}
-	payload["device"] = _device_snapshot()
-	payload["sensors"] = {
-		"accelerometer": _vector3_array(Input.get_accelerometer()),
-		"gravity": _vector3_array(Input.get_gravity()),
-		"gyroscope": _vector3_array(Input.get_gyroscope()),
-		"magnetometer": _vector3_array(Input.get_magnetometer()),
-	}
-	payload["touch"] = _last_touch.duplicate(true)
-	payload["location"] = _last_location.duplicate(true)
-	payload["location"]["authorization"] = _location_authorization
-	payload["bluetooth"] = {
-		"state": _ble_state,
-		"last_device": _last_ble_device.duplicate(true),
-	}
-	payload["capabilities"] = _capability_snapshot()
+	var live := get_live_state()
+	for key in ["app", "device", "sensors", "touch", "location", "track", "bluetooth", "capabilities", "telemetry"]:
+		payload[key] = live.get(key, {})
 	return payload
 
 
@@ -278,6 +325,12 @@ func _base_payload(packet_type: String) -> Dictionary:
 		"sent_unix_ms": int(Time.get_unix_time_from_system() * 1000.0),
 		"build": _build_info.duplicate(true),
 	}
+
+
+func _location_snapshot() -> Dictionary:
+	var result := _last_location.duplicate(true)
+	result["authorization"] = _location_authorization
+	return result
 
 
 func _device_snapshot() -> Dictionary:
@@ -316,6 +369,8 @@ func _capability_snapshot() -> Dictionary:
 		result["lidar"] = bool(_native.call("is_lidar_supported"))
 	if _native.has_method("is_nfc_available"):
 		result["nfc"] = bool(_native.call("is_nfc_available"))
+	if _native.has_method("is_background_location_enabled"):
+		result["background_location"] = bool(_native.call("is_background_location_enabled"))
 	return result
 
 
@@ -359,6 +414,7 @@ func _on_native_location(latitude: float, longitude: float, accuracy: float, alt
 		"accuracy_m": accuracy,
 		"altitude_m": altitude,
 		"speed_mps": maxf(speed, 0.0),
+		"unix_ms": int(Time.get_unix_time_from_system() * 1000.0),
 	}
 
 
@@ -375,22 +431,65 @@ func _on_native_ble_device(name: String, uuid: String, rssi: int) -> void:
 	}
 
 
+func _connect_websocket() -> void:
+	if not _streaming:
+		return
+	_active_mode = "websocket"
+	_endpoint = _normalize_endpoint(_address, "websocket")
+	_ws_open = false
+	_emit_status("connecting", "WebSocket connecting")
+	_client.websocket_connect(_endpoint)
+
+
+func _schedule_ws_reconnect(reason: String) -> void:
+	if not _streaming or _active_mode != "websocket":
+		return
+
+	_reconnect_attempt += 1
+	if _requested_mode == "auto" and _reconnect_attempt >= AUTO_HTTP_AFTER_WS_FAILURES:
+		_activate_http_fallback(reason)
+		return
+
+	var delay := minf(pow(2.0, minf(float(_reconnect_attempt - 1), 4.0)), 15.0)
+	_reconnect_timer = delay
+	_emit_status("reconnecting", "WS retry in %.0f s" % delay)
+	_persist_offline_diag("ws_reconnect", "%s · retry %.0f s" % [reason, delay])
+
+
+func _activate_http_fallback(reason: String) -> void:
+	_active_mode = "http"
+	_endpoint = _normalize_endpoint(_address, "http")
+	_ws_open = false
+	_reconnect_timer = 0.0
+	_http_in_flight = false
+	_emit_status("fallback", "HTTP fallback")
+	_queue_event("transport_fallback", "WebSocket unavailable; switched to HTTP", {
+		"reason": reason,
+		"endpoint": _endpoint,
+	})
+	_persist_offline_diag("http_fallback", reason)
+	_send_next_payload()
+
+
 func _on_ws_state(state: String) -> void:
 	_ws_open = state == "open"
-	if not _streaming:
+	if not _streaming or _active_mode != "websocket":
 		return
 
 	match state:
 		"open":
-			_emit_status("streaming", "WebSocket open → %s" % _endpoint)
+			_reconnect_attempt = 0
+			_reconnect_timer = 0.0
+			_emit_status("streaming", "WebSocket connected")
 			_queue_event("stream_started", "WebSocket telemetry stream opened", {"endpoint": _endpoint})
+			_queue_offline_diagnostics()
 			_send_next_payload()
 		"connecting":
-			_emit_status("connecting", _endpoint)
+			_emit_status("connecting", "WebSocket connecting")
 		"closing":
-			_emit_status("closing", _endpoint)
+			_emit_status("reconnecting", "WebSocket closing")
 		"closed":
-			_emit_status("error", "WebSocket closed")
+			_schedule_ws_reconnect("WebSocket closed")
 
 
 func _on_ws_message(text: String) -> void:
@@ -399,20 +498,27 @@ func _on_ws_message(text: String) -> void:
 
 func _on_http_finished(ok: bool, status_code: int, _headers: PackedStringArray, body: String) -> void:
 	_http_in_flight = false
-	if not _streaming:
+	if not _streaming or _active_mode != "http":
 		return
 
 	if ok and status_code >= 200 and status_code < 300:
-		_emit_status("streaming", "HTTP %d → %s" % [status_code, _endpoint])
+		_emit_status("streaming", "HTTP connected")
 		_handle_receiver_payload(body)
+		_queue_offline_diagnostics()
 	else:
-		_emit_status("error", "HTTP failed · status %d" % status_code)
+		_emit_status("error", "HTTP %d" % status_code)
+		_persist_offline_diag("http_error", "status %d" % status_code)
 
 
 func _on_transport_error(message: String) -> void:
-	if _mode == "http":
+	if _active_mode == "http":
 		_http_in_flight = false
-	_emit_status("error", message)
+		_emit_status("error", message.left(90))
+		_persist_offline_diag("http_transport", message)
+	else:
+		_persist_offline_diag("ws_transport", message)
+		if _streaming:
+			_schedule_ws_reconnect(message)
 	_emit_log("ERROR · %s" % message)
 
 
@@ -484,10 +590,18 @@ func _normalize_endpoint(address: String, mode: String) -> String:
 		return ""
 
 	if mode == "http":
-		if not value.begins_with("http://") and not value.begins_with("https://"):
+		if value.begins_with("ws://"):
+			value = "http://" + value.trim_prefix("ws://")
+		elif value.begins_with("wss://"):
+			value = "https://" + value.trim_prefix("wss://")
+		elif not value.begins_with("http://") and not value.begins_with("https://"):
 			value = "http://" + value
 	else:
-		if not value.begins_with("ws://") and not value.begins_with("wss://"):
+		if value.begins_with("http://"):
+			value = "ws://" + value.trim_prefix("http://")
+		elif value.begins_with("https://"):
+			value = "wss://" + value.trim_prefix("https://")
+		elif not value.begins_with("ws://") and not value.begins_with("wss://"):
 			value = "ws://" + value
 
 	var scheme := value.find("://")
@@ -501,6 +615,53 @@ func _normalize_endpoint(address: String, mode: String) -> String:
 
 func _vector3_array(value: Vector3) -> Array:
 	return [value.x, value.y, value.z]
+
+
+func _persist_offline_diag(kind: String, message: String) -> void:
+	var file: FileAccess
+	if FileAccess.file_exists(OFFLINE_DIAG_PATH):
+		file = FileAccess.open(OFFLINE_DIAG_PATH, FileAccess.READ_WRITE)
+		if file != null:
+			file.seek_end()
+	else:
+		file = FileAccess.open(OFFLINE_DIAG_PATH, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_line(JSON.stringify({
+		"unix_ms": int(Time.get_unix_time_from_system() * 1000.0),
+		"kind": kind,
+		"message": message.left(300),
+		"requested_mode": _requested_mode,
+		"active_mode": _active_mode,
+		"endpoint": _endpoint,
+	}))
+	file.close()
+
+
+func _queue_offline_diagnostics() -> void:
+	if not FileAccess.file_exists(OFFLINE_DIAG_PATH):
+		return
+	var file := FileAccess.open(OFFLINE_DIAG_PATH, FileAccess.READ)
+	if file == null:
+		return
+	var lines := file.get_as_text().split("\n", false)
+	file.close()
+	if lines.is_empty():
+		return
+
+	var recent: Array[String] = []
+	var start := maxi(lines.size() - 20, 0)
+	for index in range(start, lines.size()):
+		recent.append(lines[index])
+
+	_queue_event("offline_diagnostics", "recovered connection diagnostics", {
+		"count": recent.size(),
+		"records": recent,
+	})
+	var clear := FileAccess.open(OFFLINE_DIAG_PATH, FileAccess.WRITE)
+	if clear != null:
+		clear.store_string("")
+		clear.close()
 
 
 func _read_build_info() -> Dictionary:

@@ -2,6 +2,8 @@ extends Control
 
 const UI = preload("res://scripts/ui.gd")
 const TelemetryService = preload("res://scripts/services/telemetry_service.gd")
+const TrackService = preload("res://scripts/services/track_service.gd")
+const StreamRouter = preload("res://scripts/services/stream_router.gd")
 const OverviewPage = preload("res://scripts/pages/overview_page.gd")
 const TelemetryPage = preload("res://scripts/pages/telemetry_page.gd")
 const SensorsPage = preload("res://scripts/pages/sensors_page.gd")
@@ -19,11 +21,13 @@ const DISPLAY_NAMES := {
 	"Sensors": "Motion",
 	"GPS": "Location",
 	"More": "More",
-	"Network": "Network",
+	"Network": "Live Output",
 	"Device": "Device",
 }
 
 var _telemetry: Node
+var _track: Node
+var _router: Node
 var _telemetry_badge: PanelContainer
 var _page_title: Label
 var _page_scroll: ScrollContainer
@@ -39,6 +43,14 @@ func _ready() -> void:
 	_telemetry.name = "TelemetryService"
 	add_child(_telemetry)
 	_telemetry.status_changed.connect(_on_telemetry_status_changed)
+
+	_track = TrackService.new()
+	_track.name = "TrackService"
+	add_child(_track)
+
+	_router = StreamRouter.new()
+	_router.name = "StreamRouter"
+	add_child(_router)
 
 	_layout_mode = "tablet" if get_viewport_rect().size.x >= 600.0 else "phone"
 	_safe_margins = _compute_safe_margins()
@@ -290,7 +302,7 @@ func _on_telemetry_status_changed(state: String, _detail: String) -> void:
 	match state:
 		"streaming":
 			UI.set_badge(_telemetry_badge, "TEL LIVE", UI.GOOD)
-		"connecting", "closing":
+		"connecting", "reconnecting", "fallback":
 			UI.set_badge(_telemetry_badge, "TEL LINK", UI.WARN)
 		"error":
 			UI.set_badge(_telemetry_badge, "TEL ERR", UI.BAD)

@@ -1,299 +1,300 @@
 extends VBoxContainer
 
 const UI = preload("res://scripts/ui.gd")
-const NetworkClient = preload("res://scripts/services/network_client.gd")
 
-var _client: Node
+var _router: Node
 
-var _http_url: LineEdit
-var _http_method: OptionButton
-var _http_headers: TextEdit
-var _http_body: TextEdit
-var _http_response: TextEdit
+var _profile: OptionButton
+var _rate: OptionButton
+var _status: Label
+var _sent: Label
+var _errors: Label
+var _start_button: Button
 
+var _ws_enabled: CheckButton
 var _ws_url: LineEdit
-var _ws_state: Label
-var _ws_message: TextEdit
-var _ws_log: TextEdit
 
+var _udp_enabled: CheckButton
 var _udp_host: LineEdit
 var _udp_port: LineEdit
-var _udp_payload: TextEdit
 
-var _osc_address: LineEdit
-var _osc_value: LineEdit
-var _transport_status: Label
+var _osc_enabled: CheckButton
+var _osc_host: LineEdit
+var _osc_port: LineEdit
+var _osc_prefix: LineEdit
+
+var _http_enabled: CheckButton
+var _http_url: LineEdit
 
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_constant_override("separation", 12)
+	add_theme_constant_override("separation", 14)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	UI.section_title(
 		self,
-		"Network I/O",
-		"Generic HTTP(S), WebSocket/WSS, UDP and OSC string output. Use a LAN address, Tailscale address or public endpoint that your iPhone can reach."
+		"Live Output",
+		"Route real iPhone data continuously to creative tools, servers or recorders. No manual message typing is required."
 	)
 
-	_client = NetworkClient.new()
-	add_child(_client)
-	_client.http_finished.connect(_on_http_finished)
-	_client.websocket_state_changed.connect(_on_ws_state)
-	_client.websocket_message.connect(_on_ws_message)
-	_client.transport_error.connect(_on_transport_error)
-	_client.udp_sent.connect(_on_udp_sent)
-
-	var status := UI.make_card(
-		self,
-		"TRANSPORT STATUS",
-		"Local-network access may trigger an iOS permission prompt. This personal LAB build also allows plain HTTP/WS so you can reach arbitrary test endpoints; prefer HTTPS/WSS outside a trusted network."
-	)
-	_transport_status = UI.value_row(status, "Last event", "idle")
-
-	_build_http_card()
-	_build_websocket_card()
+	_router = get_tree().get_first_node_in_group("ios_lab_router")
+	_build_stream_card()
+	_build_ws_card()
 	_build_udp_card()
+	_build_osc_card()
+	_build_http_card()
+	_build_format_card()
 
-	var td := UI.make_card(
+	if _router == null:
+		_status.text = "router unavailable"
+		_start_button.disabled = true
+		return
+
+	_router.status_changed.connect(_on_router_status)
+	_router.stats_changed.connect(_on_router_stats)
+	_restore_config()
+
+
+func _build_stream_card() -> void:
+	var card := UI.make_card(
 		self,
-		"TOUCHDESIGNER",
-		"Point these tools at your computer's reachable IP. WebSocket/HTTP work with matching TouchDesigner server components; UDP/OSC are useful for DAT/CHOP workflows and simple control messages."
+		"LIVE DATA ROUTER",
+		"Choose a data profile and sample rate. Enabled outputs run at the same time, so one iPhone can feed TouchDesigner, OSC and a recorder simultaneously."
 	)
-	td.add_child(UI.label(
-		"Nothing is hard-coded: host, port, path, headers and payload stay editable so the same app can connect to SIGNAL, TouchDesigner, a local Python service, Tailscale peers or web APIs.",
-		13,
-		UI.MUTED
-	))
+
+	_profile = UI.option_button([
+		"All · full device snapshot",
+		"Motion · accelerometer / gravity / gyro / magnetometer",
+		"Location · GPS + track metrics",
+		"Touch · touch / drag",
+		"Device · battery / BLE / capabilities",
+	])
+	card.add_child(_profile)
+
+	_rate = UI.option_button([
+		"1 Hz",
+		"5 Hz",
+		"10 Hz",
+		"30 Hz · motion / realtime",
+	])
+	_rate.select(2)
+	card.add_child(_rate)
+
+	_status = UI.value_row(card, "State", "offline")
+	_sent = UI.value_row(card, "Packets", "0")
+	_errors = UI.value_row(card, "Errors", "0")
+
+	_start_button = UI.button("START LIVE OUTPUT", true)
+	_start_button.pressed.connect(_toggle_router)
+	card.add_child(_start_button)
+
+
+func _build_ws_card() -> void:
+	var card := UI.make_card(
+		self,
+		"WEBSOCKET / WSS",
+		"Continuous JSON stream. Ideal for a custom server, TouchDesigner WebSocket DAT or a Tailscale peer."
+	)
+	_ws_enabled = _switch("Enable WebSocket")
+	card.add_child(_ws_enabled)
+	_ws_url = UI.line_edit("100.x.x.x:9001 or wss://host/path")
+	card.add_child(_ws_url)
+
+
+func _build_udp_card() -> void:
+	var card := UI.make_card(
+		self,
+		"UDP · JSON",
+		"One UTF-8 JSON datagram per sample. Low overhead and simple to receive in TouchDesigner, Python or another realtime process."
+	)
+	_udp_enabled = _switch("Enable UDP JSON")
+	card.add_child(_udp_enabled)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	card.add_child(row)
+	_udp_host = UI.line_edit("100.x.x.x")
+	_udp_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(_udp_host)
+	_udp_port = UI.line_edit("7000")
+	_udp_port.custom_minimum_size.x = 90
+	row.add_child(_udp_port)
+
+
+func _build_osc_card() -> void:
+	var card := UI.make_card(
+		self,
+		"OSC",
+		"Sends the selected live JSON snapshot as one OSC string at <prefix>/json. This is easy to parse in TouchDesigner or another OSC receiver."
+	)
+	_osc_enabled = _switch("Enable OSC")
+	card.add_child(_osc_enabled)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	card.add_child(row)
+	_osc_host = UI.line_edit("100.x.x.x")
+	_osc_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(_osc_host)
+	_osc_port = UI.line_edit("7001")
+	_osc_port.custom_minimum_size.x = 90
+	row.add_child(_osc_port)
+
+	_osc_prefix = UI.line_edit("/ioslab")
+	card.add_child(_osc_prefix)
 
 
 func _build_http_card() -> void:
 	var card := UI.make_card(
 		self,
 		"HTTP / HTTPS",
-		"Send arbitrary requests. Use JSON, text or any body accepted by the target server."
+		"POST the selected live snapshot as JSON. Best for APIs and recorders that do not expose WebSocket or UDP."
 	)
-
-	_http_url = UI.line_edit("https://example.net/api or http://192.168.x.x:port/path")
+	_http_enabled = _switch("Enable HTTP POST")
+	card.add_child(_http_enabled)
+	_http_url = UI.line_edit("https://host/api/iphone or http://100.x.x.x:9002/data")
 	card.add_child(_http_url)
 
-	_http_method = UI.option_button(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
-	card.add_child(_http_method)
 
-	_http_headers = UI.text_edit("One header per line\nContent-Type: application/json", 90)
-	card.add_child(_http_headers)
-
-	_http_body = UI.text_edit('{"hello":"iphone"}', 110)
-	card.add_child(_http_body)
-
-	var send := UI.button("SEND HTTP REQUEST", true)
-	send.pressed.connect(_send_http)
-	card.add_child(send)
-
-	_http_response = UI.text_edit("", 180)
-	_http_response.editable = false
-	_http_response.placeholder_text = "Response will appear here."
-	card.add_child(_http_response)
-
-
-func _build_websocket_card() -> void:
+func _build_format_card() -> void:
 	var card := UI.make_card(
 		self,
-		"WEBSOCKET / WSS",
-		"Connect once, then send and receive UTF-8 text messages."
+		"DATA FORMAT",
+		"WebSocket, UDP and HTTP send ioslab.live.v1 JSON. OSC sends the same JSON as one string message at <prefix>/json."
 	)
-
-	_ws_url = UI.line_edit("ws://192.168.x.x:port or wss://example.net/socket")
-	card.add_child(_ws_url)
-
-	_ws_state = UI.value_row(card, "State", "closed")
-
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 8)
-	card.add_child(buttons)
-
-	var connect_button := UI.button("CONNECT", true)
-	connect_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	connect_button.pressed.connect(_connect_ws)
-	buttons.add_child(connect_button)
-
-	var disconnect_button := UI.button("DISCONNECT")
-	disconnect_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	disconnect_button.pressed.connect(_disconnect_ws)
-	buttons.add_child(disconnect_button)
-
-	_ws_message = UI.text_edit('{"type":"ping"}', 90)
-	card.add_child(_ws_message)
-
-	var send := UI.button("SEND WS TEXT")
-	send.pressed.connect(_send_ws)
-	card.add_child(send)
-
-	_ws_log = UI.text_edit("", 170)
-	_ws_log.editable = false
-	_ws_log.placeholder_text = "WebSocket events and incoming messages."
-	card.add_child(_ws_log)
+	card.add_child(UI.label(
+		"Profiles are only filters; the source is the same canonical live state used by telemetry. GPS track metrics include distance, elevation gain/loss, duration, moving time, average speed and max speed.",
+		13,
+		UI.MUTED
+	))
 
 
-func _build_udp_card() -> void:
-	var card := UI.make_card(
-		self,
-		"UDP / OSC",
-		"Raw UDP is useful for minimal low-latency messages. OSC sends one standard string argument to an OSC address."
-	)
-
-	var host_row := HBoxContainer.new()
-	host_row.add_theme_constant_override("separation", 8)
-	card.add_child(host_row)
-
-	_udp_host = UI.line_edit("192.168.x.x")
-	_udp_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	host_row.add_child(_udp_host)
-
-	_udp_port = UI.line_edit("7000")
-	_udp_port.custom_minimum_size.x = 95
-	host_row.add_child(_udp_port)
-
-	_udp_payload = UI.text_edit('{"value":1}', 90)
-	card.add_child(_udp_payload)
-
-	var raw := UI.button("SEND RAW UDP", true)
-	raw.pressed.connect(_send_udp)
-	card.add_child(raw)
-
-	card.add_child(UI.label("OSC string message", 13, UI.MUTED))
-
-	_osc_address = UI.line_edit("/iphone/value")
-	card.add_child(_osc_address)
-	_osc_value = UI.line_edit("hello")
-	card.add_child(_osc_value)
-
-	var osc := UI.button("SEND OSC STRING")
-	osc.pressed.connect(_send_osc)
-	card.add_child(osc)
+func _switch(text_value: String) -> CheckButton:
+	var node := CheckButton.new()
+	node.text = text_value
+	node.custom_minimum_size.y = 44
+	node.add_theme_font_size_override("font_size", 15)
+	node.add_theme_color_override("font_color", UI.TEXT)
+	node.add_theme_color_override("font_pressed_color", UI.ACCENT)
+	node.mouse_filter = Control.MOUSE_FILTER_PASS
+	return node
 
 
-func _send_http() -> void:
-	var url := _http_url.text.strip_edges()
-	if url.is_empty():
-		_transport_status.text = "HTTP URL is empty"
-		_telemetry_event("network_http_error", "HTTP URL is empty")
+func _toggle_router() -> void:
+	if _router == null:
 		return
 
-	var headers := PackedStringArray()
-	for line in _http_headers.text.split("\n"):
-		var value := line.strip_edges()
-		if not value.is_empty():
-			headers.append(value)
-
-	var method := _http_method.get_item_text(_http_method.selected)
-	_transport_status.text = "HTTP %s → %s" % [method, url]
-	_telemetry_event(
-		"network_http_request",
-		"HTTP %s request started" % method,
-		{"method": method, "url": url, "body_bytes": _http_body.text.to_utf8_buffer().size()}
-	)
-	_client.http_request(url, method, headers, _http_body.text)
-
-
-func _connect_ws() -> void:
-	var url := _ws_url.text.strip_edges()
-	if url.is_empty():
-		_transport_status.text = "WebSocket URL is empty"
-		_telemetry_event("network_ws_error", "WebSocket URL is empty")
+	if _router.is_running():
+		_router.stop()
+		_start_button.text = "START LIVE OUTPUT"
 		return
-	_append_ws_log("CONNECT → %s" % url)
-	_telemetry_event("network_ws_connect", "WebSocket connect requested", {"url": url})
-	_client.websocket_connect(url)
+
+	var config := _collect_config()
+	_router.configure(config)
+	_save_config(config)
+	if _router.start():
+		_start_button.text = "STOP LIVE OUTPUT"
 
 
-func _disconnect_ws() -> void:
-	_telemetry_event("network_ws_disconnect", "WebSocket disconnect requested")
-	_client.websocket_disconnect()
+func _collect_config() -> Dictionary:
+	return {
+		"profile": _selected_profile(),
+		"rate_hz": _selected_rate(),
+		"ws_enabled": _ws_enabled.button_pressed,
+		"ws_url": _ws_url.text.strip_edges(),
+		"udp_enabled": _udp_enabled.button_pressed,
+		"udp_host": _udp_host.text.strip_edges(),
+		"udp_port": _udp_port.text.to_int(),
+		"osc_enabled": _osc_enabled.button_pressed,
+		"osc_host": _osc_host.text.strip_edges(),
+		"osc_port": _osc_port.text.to_int(),
+		"osc_prefix": _osc_prefix.text.strip_edges(),
+		"http_enabled": _http_enabled.button_pressed,
+		"http_url": _http_url.text.strip_edges(),
+	}
 
 
-func _send_ws() -> void:
-	var bytes := _ws_message.text.to_utf8_buffer().size()
-	_telemetry_event("network_ws_tx", "WebSocket text send requested", {"bytes": bytes})
-	_client.websocket_send_text(_ws_message.text)
-	_append_ws_log("TX: %s" % _ws_message.text)
+func _selected_profile() -> String:
+	match _profile.selected:
+		1:
+			return "motion"
+		2:
+			return "location"
+		3:
+			return "touch"
+		4:
+			return "device"
+		_:
+			return "all"
 
 
-func _send_udp() -> void:
-	var port := _udp_port.text.to_int()
-	if port <= 0 or port > 65535:
-		_transport_status.text = "invalid UDP port"
-		_telemetry_event("network_udp_error", "invalid UDP port", {"port": port})
+func _selected_rate() -> float:
+	match _rate.selected:
+		0:
+			return 1.0
+		1:
+			return 5.0
+		3:
+			return 30.0
+		_:
+			return 10.0
+
+
+func _on_router_status(state: String, _detail: String) -> void:
+	match state:
+		"live":
+			_status.text = "LIVE"
+		"connecting":
+			_status.text = "CONNECTING"
+		"reconnecting":
+			_status.text = "RETRYING"
+		"degraded":
+			_status.text = "DEGRADED"
+		"error":
+			_status.text = "ERROR"
+		_:
+			_status.text = state.to_upper()
+	_start_button.text = "STOP LIVE OUTPUT" if _router != null and _router.is_running() else "START LIVE OUTPUT"
+
+
+func _on_router_stats(sent_packets: int, transport_errors: int, _last_send_unix_ms: int) -> void:
+	_sent.text = str(sent_packets)
+	_errors.text = str(transport_errors)
+
+
+func _save_config(config: Dictionary) -> void:
+	var file := FileAccess.open("user://live_router.json", FileAccess.WRITE)
+	if file != null:
+		file.store_string(JSON.stringify(config))
+
+
+func _restore_config() -> void:
+	const PATH := "user://live_router.json"
+	if not FileAccess.file_exists(PATH):
 		return
-	var host := _udp_host.text.strip_edges()
-	_telemetry_event(
-		"network_udp_tx",
-		"UDP send requested",
-		{"host": host, "port": port, "bytes": _udp_payload.text.to_utf8_buffer().size()}
-	)
-	_client.udp_send(host, port, _udp_payload.text)
-
-
-func _send_osc() -> void:
-	var port := _udp_port.text.to_int()
-	if port <= 0 or port > 65535:
-		_transport_status.text = "invalid OSC/UDP port"
-		_telemetry_event("network_osc_error", "invalid OSC/UDP port", {"port": port})
+	var file := FileAccess.open(PATH, FileAccess.READ)
+	if file == null:
 		return
-	var host := _udp_host.text.strip_edges()
-	var address := _osc_address.text.strip_edges()
-	_telemetry_event(
-		"network_osc_tx",
-		"OSC string send requested",
-		{"host": host, "port": port, "address": address}
-	)
-	_client.osc_send_string(host, port, address, _osc_value.text)
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if not parsed is Dictionary:
+		return
+	var config := parsed as Dictionary
 
+	var profiles := ["all", "motion", "location", "touch", "device"]
+	var profile := str(config.get("profile", "all"))
+	_profile.select(profiles.find(profile) if profiles.has(profile) else 0)
 
-func _on_http_finished(ok: bool, status_code: int, headers: PackedStringArray, body: String) -> void:
-	_transport_status.text = "HTTP %d · %s" % [status_code, "transport OK" if ok else "transport failed"]
-	var header_text := "\n".join(headers)
-	_http_response.text = "STATUS: %d\n\n%s\n\n%s" % [status_code, header_text, body]
-	if _http_response.text.length() > 12000:
-		_http_response.text = _http_response.text.left(12000) + "\n… truncated …"
-	_telemetry_event(
-		"network_http_result",
-		"HTTP request completed",
-		{"ok": ok, "status": status_code, "response_bytes": body.to_utf8_buffer().size()}
-	)
+	var rate := float(config.get("rate_hz", 10.0))
+	_rate.select(0 if rate <= 1.0 else 1 if rate <= 5.0 else 2 if rate <= 10.0 else 3)
 
-
-func _on_ws_state(state: String) -> void:
-	_ws_state.text = state
-	_transport_status.text = "WebSocket: %s" % state
-	_append_ws_log("STATE: %s" % state)
-	_telemetry_event("network_ws_state", "WebSocket state → %s" % state, {"state": state})
-
-
-func _on_ws_message(text: String) -> void:
-	_append_ws_log("RX: %s" % text)
-	_telemetry_event("network_ws_rx", "WebSocket text received", {"bytes": text.to_utf8_buffer().size()})
-
-
-func _on_transport_error(message: String) -> void:
-	_transport_status.text = message
-	_append_ws_log("ERROR: %s" % message)
-	_telemetry_event("network_transport_error", message)
-
-
-func _on_udp_sent(bytes: int) -> void:
-	_transport_status.text = "UDP/OSC sent · %d bytes" % bytes
-	_telemetry_event("network_udp_sent", "UDP/OSC datagram sent", {"bytes": bytes})
-
-
-func _append_ws_log(line: String) -> void:
-	var next := _ws_log.text + ("" if _ws_log.text.is_empty() else "\n") + line
-	if next.length() > 9000:
-		next = next.right(9000)
-	_ws_log.text = next
-
-
-func _telemetry_event(kind: String, message: String, data: Dictionary = {}) -> void:
-	var telemetry := get_tree().get_first_node_in_group("ios_lab_telemetry")
-	if telemetry != null and telemetry.has_method("record_event"):
-		telemetry.call("record_event", kind, message, data)
+	_ws_enabled.button_pressed = bool(config.get("ws_enabled", false))
+	_ws_url.text = str(config.get("ws_url", ""))
+	_udp_enabled.button_pressed = bool(config.get("udp_enabled", false))
+	_udp_host.text = str(config.get("udp_host", ""))
+	_udp_port.text = str(config.get("udp_port", 7000))
+	_osc_enabled.button_pressed = bool(config.get("osc_enabled", false))
+	_osc_host.text = str(config.get("osc_host", ""))
+	_osc_port.text = str(config.get("osc_port", 7001))
+	_osc_prefix.text = str(config.get("osc_prefix", "/ioslab"))
+	_http_enabled.button_pressed = bool(config.get("http_enabled", false))
+	_http_url.text = str(config.get("http_url", ""))

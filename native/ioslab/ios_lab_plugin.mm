@@ -18,6 +18,7 @@ static IOSLabPlugin *ios_lab_plugin_instance = nullptr;
 @property(nonatomic, strong) CLLocationManager *locationManager;
 @property(nonatomic, strong) CBCentralManager *centralManager;
 @property(nonatomic, assign) IOSLabPlugin *owner;
+@property(nonatomic, assign) BOOL backgroundLocationEnabled;
 - (instancetype)initWithOwner:(IOSLabPlugin *)owner;
 - (void)ensureCentralManager;
 @end
@@ -29,10 +30,13 @@ static IOSLabPlugin *ios_lab_plugin_instance = nullptr;
 	self = [super init];
 	if (self) {
 		_owner = owner;
+		_backgroundLocationEnabled = NO;
 		_locationManager = [[CLLocationManager alloc] init];
 		_locationManager.delegate = self;
 		_locationManager.desiredAccuracy = kCLLocationAccuracyBest;
 		_locationManager.distanceFilter = kCLDistanceFilterNone;
+		_locationManager.activityType = CLActivityTypeOther;
+		_locationManager.pausesLocationUpdatesAutomatically = YES;
 	}
 	return self;
 }
@@ -114,6 +118,8 @@ void IOSLabPlugin::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("request_location"), &IOSLabPlugin::request_location);
 	ClassDB::bind_method(D_METHOD("start_location"), &IOSLabPlugin::start_location);
 	ClassDB::bind_method(D_METHOD("stop_location"), &IOSLabPlugin::stop_location);
+	ClassDB::bind_method(D_METHOD("set_background_location_enabled", "enabled"), &IOSLabPlugin::set_background_location_enabled);
+	ClassDB::bind_method(D_METHOD("is_background_location_enabled"), &IOSLabPlugin::is_background_location_enabled);
 	ClassDB::bind_method(D_METHOD("start_ble_scan"), &IOSLabPlugin::start_ble_scan);
 	ClassDB::bind_method(D_METHOD("stop_ble_scan"), &IOSLabPlugin::stop_ble_scan);
 	ClassDB::bind_method(D_METHOD("get_ble_state"), &IOSLabPlugin::get_ble_state);
@@ -163,6 +169,8 @@ IOSLabPlugin::IOSLabPlugin() {
 IOSLabPlugin::~IOSLabPlugin() {
 	if (ios_lab_delegate != nil) {
 		[ios_lab_delegate.locationManager stopUpdatingLocation];
+		ios_lab_delegate.locationManager.allowsBackgroundLocationUpdates = NO;
+		ios_lab_delegate.locationManager.showsBackgroundLocationIndicator = NO;
 		[ios_lab_delegate.centralManager stopScan];
 		ios_lab_delegate.locationManager.delegate = nil;
 		ios_lab_delegate.centralManager.delegate = nil;
@@ -194,6 +202,26 @@ void IOSLabPlugin::stop_location() {
 	if (ios_lab_delegate != nil) {
 		[ios_lab_delegate.locationManager stopUpdatingLocation];
 	}
+}
+
+
+void IOSLabPlugin::set_background_location_enabled(bool enabled) {
+	if (ios_lab_delegate == nil) {
+		return;
+	}
+
+	CLLocationManager *manager = ios_lab_delegate.locationManager;
+	ios_lab_delegate.backgroundLocationEnabled = enabled ? YES : NO;
+	manager.activityType = enabled ? CLActivityTypeFitness : CLActivityTypeOther;
+	manager.pausesLocationUpdatesAutomatically = enabled ? NO : YES;
+	manager.distanceFilter = enabled ? 2.0 : kCLDistanceFilterNone;
+	manager.allowsBackgroundLocationUpdates = enabled ? YES : NO;
+	manager.showsBackgroundLocationIndicator = enabled ? YES : NO;
+}
+
+
+bool IOSLabPlugin::is_background_location_enabled() const {
+	return ios_lab_delegate != nil && ios_lab_delegate.backgroundLocationEnabled == YES;
 }
 
 

@@ -3,6 +3,8 @@ param(
     [string]$Repository = 'Rzbck/ios-godot-lab',
     [string]$Workflow = 'build-ios-unsigned.yml',
     [switch]$SkipGitUpdate,
+    [switch]$NoAutoBuild,
+    [int]$BuildTimeoutMinutes = 30,
     [switch]$OpenFolder
 )
 
@@ -34,7 +36,110 @@ function Get-RepoContainer {
     return $RepoTop
 }
 
+function Get-ExactIosRuns {
+    param(
+        [string]$RepositoryName,
+        [string]$WorkflowName,
+        [string]$BranchName,
+        [string]$CommitSha
+    )
+
+    $json = & gh run list `
+        --repo $RepositoryName `
+        --workflow $WorkflowName `
+        --branch $BranchName `
+        --commit $CommitSha `
+        --limit 20 `
+        --json databaseId,headSha,conclusion,status,createdAt,event,displayTitle
+    Assert-NativeSuccess 'gh run list'
+
+    if ([string]::IsNullOrWhiteSpace(($json -join ''))) {
+        return @()
+    }
+
+    return @($json | ConvertFrom-Json)
+}
+
+function Wait-ForExactIosBuild {
+    param(
+        [string]$RepositoryName,
+        [string]$WorkflowName,
+        [string]$BranchName,
+        [string]$CommitSha,
+        [int]$TimeoutMinutes,
+        [switch]$MayTrigger
+    )
+
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $triggeredHere = $false
+
+    while ((Get-Date) -lt $deadline) {
+        $runs = @(Get-ExactIosRuns `
+            -RepositoryName $RepositoryName `
+            -WorkflowName $WorkflowName `
+            -BranchName $BranchName `
+            -CommitSha $CommitSha)
+
+        $exactRuns = @($runs |
+            Where-Object { $_.headSha -eq $CommitSha } |
+            Sort-Object createdAt -Descending)
+
+        $success = $exactRuns |
+            Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' } |
+            Select-Object -First 1
+
+        if ($null -ne $success) {
+            return $success
+        }
+
+        $failed = $exactRuns |
+            Where-Object {
+                $_.status -eq 'completed' -and
+                $_.conclusion -in @('failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure')
+            } |
+            Select-Object -First 1
+
+        if ($null -ne $failed) {
+            throw "Exact iOS build $($failed.databaseId) finished with conclusion '$($failed.conclusion)' for SHA $CommitSha."
+        }
+
+        $active = $exactRuns |
+            Where-Object { $_.status -in @('queued', 'in_progress', 'pending', 'requested', 'waiting') } |
+            Select-Object -First 1
+
+        if ($null -ne $active) {
+            Write-Host ("BUILD       = {0} · {1}" -f $active.databaseId, $active.status) -ForegroundColor DarkCyan
+            Start-Sleep -Seconds 5
+            continue
+        }
+
+        if (-not $MayTrigger) {
+            throw "No successful iOS build exists for exact SHA $CommitSha. Re-run without -NoAutoBuild to trigger it automatically."
+        }
+
+        if (-not $triggeredHere) {
+            Write-Host "No exact-SHA build exists yet. Triggering GitHub Actions..." -ForegroundColor Yellow
+            & gh workflow run $WorkflowName `
+                --repo $RepositoryName `
+                --ref $BranchName
+            Assert-NativeSuccess 'gh workflow run'
+            $triggeredHere = $true
+            Start-Sleep -Seconds 3
+            continue
+        }
+
+        Write-Host 'Waiting for GitHub Actions to register the dispatched run...' -ForegroundColor DarkCyan
+        Start-Sleep -Seconds 5
+    }
+
+    throw "Timed out after $TimeoutMinutes minute(s) waiting for an iOS build for exact SHA $CommitSha."
+}
+
 Write-Host "`n=== IOS LAB UPDATE + EXACT IPA SYNC ===" -ForegroundColor Cyan
+
+if ($BuildTimeoutMinutes -lt 1 -or $BuildTimeoutMinutes -gt 120) {
+    throw 'BuildTimeoutMinutes must be between 1 and 120.'
+}
 
 $git = Get-Command git -ErrorAction SilentlyContinue
 if ($null -eq $git) {
@@ -101,26 +206,14 @@ Assert-NativeSuccess 'git rev-parse HEAD'
 
 Write-Host "HEAD AFTER  = $head" -ForegroundColor Green
 
-Write-Host "`nLocating a successful iOS workflow for this exact SHA..." -ForegroundColor DarkCyan
-$runJson = & gh run list `
-    --repo $Repository `
-    --workflow $Workflow `
-    --branch $branch `
-    --commit $head `
-    --status success `
-    --limit 20 `
-    --json databaseId,headSha,conclusion,status,createdAt
-Assert-NativeSuccess 'gh run list'
-
-$runs = @($runJson | ConvertFrom-Json)
-$run = $runs |
-    Where-Object { $_.headSha -eq $head -and $_.conclusion -eq 'success' } |
-    Sort-Object createdAt -Descending |
-    Select-Object -First 1
-
-if ($null -eq $run) {
-    throw "No successful iOS build exists for exact SHA $head on branch $branch."
-}
+Write-Host "`nResolving iOS build for this exact SHA..." -ForegroundColor DarkCyan
+$run = Wait-ForExactIosBuild `
+    -RepositoryName $Repository `
+    -WorkflowName $Workflow `
+    -BranchName $branch `
+    -CommitSha $head `
+    -TimeoutMinutes $BuildTimeoutMinutes `
+    -MayTrigger:(-not $NoAutoBuild)
 
 $runId = [int64]$run.databaseId
 $artifactName = "ios-unsigned-$head"

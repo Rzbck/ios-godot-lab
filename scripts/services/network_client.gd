@@ -10,6 +10,14 @@ var _http: HTTPRequest
 var _ws := WebSocketPeer.new()
 var _last_ws_state := WebSocketPeer.STATE_CLOSED
 
+var _udp := PacketPeerUDP.new()
+var _udp_host := ""
+var _udp_port := 0
+
+var _osc_udp := PacketPeerUDP.new()
+var _osc_host := ""
+var _osc_port := 0
+
 
 func _ready() -> void:
 	_http = HTTPRequest.new()
@@ -17,6 +25,11 @@ func _ready() -> void:
 	add_child(_http)
 	_http.request_completed.connect(_on_http_completed)
 	set_process(true)
+
+
+func _exit_tree() -> void:
+	_reset_udp_peer()
+	_reset_osc_peer()
 
 
 func http_request(url: String, method_name: String, headers: PackedStringArray, body: String) -> void:
@@ -59,27 +72,20 @@ func websocket_send_text(text: String) -> void:
 
 
 func udp_send(host: String, port: int, text: String) -> void:
-	var udp := PacketPeerUDP.new()
-	var error := udp.connect_to_host(host, port)
-	if error != OK:
-		transport_error.emit("UDP connect error: %s" % error_string(error))
+	if not _ensure_udp_peer(host, port):
 		return
 
 	var payload := text.to_utf8_buffer()
-	error = udp.put_packet(payload)
-	udp.close()
-
+	var error := _udp.put_packet(payload)
 	if error != OK:
+		_reset_udp_peer()
 		transport_error.emit("UDP send error: %s" % error_string(error))
 	else:
 		udp_sent.emit(payload.size())
 
 
 func osc_send_string(host: String, port: int, address: String, value: String) -> void:
-	var udp := PacketPeerUDP.new()
-	var error := udp.connect_to_host(host, port)
-	if error != OK:
-		transport_error.emit("OSC/UDP connect error: %s" % error_string(error))
+	if not _ensure_osc_peer(host, port):
 		return
 
 	var packet := PackedByteArray()
@@ -87,13 +93,64 @@ func osc_send_string(host: String, port: int, address: String, value: String) ->
 	packet.append_array(_osc_string(",s"))
 	packet.append_array(_osc_string(value))
 
-	error = udp.put_packet(packet)
-	udp.close()
-
+	var error := _osc_udp.put_packet(packet)
 	if error != OK:
+		_reset_osc_peer()
 		transport_error.emit("OSC send error: %s" % error_string(error))
 	else:
 		udp_sent.emit(packet.size())
+
+
+func _ensure_udp_peer(host: String, port: int) -> bool:
+	var clean_host := host.strip_edges()
+	if clean_host.is_empty():
+		return false
+	if _udp_host == clean_host and _udp_port == port:
+		return true
+
+	_reset_udp_peer()
+	_udp = PacketPeerUDP.new()
+	var error := _udp.connect_to_host(clean_host, port)
+	if error != OK:
+		transport_error.emit("UDP connect error: %s" % error_string(error))
+		return false
+
+	_udp_host = clean_host
+	_udp_port = port
+	return true
+
+
+func _ensure_osc_peer(host: String, port: int) -> bool:
+	var clean_host := host.strip_edges()
+	if clean_host.is_empty():
+		return false
+	if _osc_host == clean_host and _osc_port == port:
+		return true
+
+	_reset_osc_peer()
+	_osc_udp = PacketPeerUDP.new()
+	var error := _osc_udp.connect_to_host(clean_host, port)
+	if error != OK:
+		transport_error.emit("OSC/UDP connect error: %s" % error_string(error))
+		return false
+
+	_osc_host = clean_host
+	_osc_port = port
+	return true
+
+
+func _reset_udp_peer() -> void:
+	_udp.close()
+	_udp = PacketPeerUDP.new()
+	_udp_host = ""
+	_udp_port = 0
+
+
+func _reset_osc_peer() -> void:
+	_osc_udp.close()
+	_osc_udp = PacketPeerUDP.new()
+	_osc_host = ""
+	_osc_port = 0
 
 
 func _process(_delta: float) -> void:

@@ -66,7 +66,18 @@ Les commandes/scripts fournis à l'utilisateur doivent :
 - tout IPA doit être associé au SHA exact qui l'a produit ;
 - les artifacts doivent inclure le SHA court dans leur nom ou un manifeste embarqué.
 
-## 7. Apple / secrets
+## 7. Distribution locale des IPA
+
+Règle permanente : **ne plus donner à l'utilisateur des liens GitHub Actions à cliquer pour récupérer les IPA**.
+
+- Les IPA restent des artifacts GitHub Actions, pas des binaires commités dans Git.
+- Le poste Windows récupère les artifacts avec `UPDATE_IOS_LAB.ps1` via GitHub CLI (`gh`).
+- Le script met à jour la branche courante uniquement par fast-forward strict, exige un worktree CLEAN, trouve un build iOS `success` pour le SHA exact, télécharge l'artifact correspondant, vérifie `BUILD-METADATA.json` et le SHA-256 de l'IPA, puis le range dans un dossier local `artifacts/<sha-court>/`.
+- Le dossier `artifacts/` est local et ignoré par Git.
+- Ne jamais substituer « dernier artifact disponible » à « artifact du SHA exact » sans le dire explicitement.
+- Si aucun build iOS réussi n'existe pour le HEAD exact, STOP : ne pas installer silencieusement un build d'un autre SHA.
+
+## 8. Apple / secrets
 
 Ne jamais committer :
 
@@ -79,7 +90,7 @@ Ne jamais committer :
 
 Le Team ID et le bundle identifier ne sont pas traités comme mots de passe, mais leur valeur doit être intentionnelle et documentée.
 
-## 8. Sideload gratuit retenu
+## 9. Sideload gratuit retenu
 
 **SideStore** est la solution par défaut parce qu'après l'installation initiale elle peut rafraîchir périodiquement les apps en arrière-plan sans PC.
 
@@ -92,7 +103,7 @@ Contraintes à conserver dans toute UX/documentation :
 - le rafraîchissement de fond dépend de la planification iOS : il faut prévoir un indicateur/contrôle et ne jamais promettre une garantie absolue à la seconde près ;
 - préférer les serveurs anisette v3 officiels ou un v3 auto-hébergé ; éviter les anciens serveurs partagés signalés comme risqués par la documentation SideStore.
 
-## 9. APIs iPhone
+## 10. APIs iPhone
 
 Principe : **Godot d'abord, plugin iOS natif seulement quand nécessaire**.
 
@@ -102,7 +113,7 @@ Principe : **Godot d'abord, plugin iOS natif seulement quand nécessaire**.
 - respecter permissions, entitlements, sandbox et limitations de fond Apple ;
 - ne jamais dire « accès total au téléphone » : seules les APIs publiques et capacités autorisées par iOS sont utilisables.
 
-## 10. Fin de session
+## 11. Fin de session
 
 Mettre à jour si l'état change :
 

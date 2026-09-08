@@ -9,6 +9,9 @@ artifacts/
 *.ipa
 *.xcarchive
 
+# Local live telemetry sessions
+telemetry-sessions/
+
 # Godot confidential export credentials
 .godot/export_credentials.cfg
 

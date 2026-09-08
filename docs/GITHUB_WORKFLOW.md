@@ -109,13 +109,15 @@ Le script :
 3. refuse un detached HEAD et refuse tout worktree DIRTY ;
 4. fait `git fetch origin --prune` ;
 5. met uniquement la branche courante à jour via `git merge --ff-only origin/<branche>` ;
-6. demande à GitHub Actions un run iOS `success` pour **ce HEAD exact** ;
-7. télécharge uniquement l'artifact `ios-unsigned-<SHA exact>` ;
-8. vérifie que `BUILD-METADATA.json.sha == HEAD` ;
-9. recalcule le SHA-256 de l'IPA et le compare au fichier `.ipa.sha256` ;
-10. range l'artifact dans le dossier local central `artifacts/<sha-court>/` ;
-11. écrit `artifacts/LATEST.json` et `artifacts/LATEST_IPA.txt` ;
-12. n'écrase jamais silencieusement un dossier artifact existant invalide.
+6. cherche un run iOS `success` pour **ce HEAD exact** ;
+7. si aucun run exact n'existe encore, déclenche lui-même `build-ios-unsigned.yml` avec `gh workflow run --ref <branche>` et attend le run exact ;
+8. si le run exact échoue/est annulé/time out, STOP ;
+9. télécharge uniquement l'artifact `ios-unsigned-<SHA exact>` ;
+10. vérifie que `BUILD-METADATA.json.sha == HEAD` ;
+11. recalcule le SHA-256 de l'IPA et le compare au fichier `.ipa.sha256` ;
+12. range l'artifact dans le dossier local central `artifacts/<sha-court>/` ;
+13. écrit `artifacts/LATEST.json` et `artifacts/LATEST_IPA.txt` ;
+14. n'écrase jamais silencieusement un dossier artifact existant invalide.
 
 Avec l'arborescence Windows canonique du projet, le dossier central est :
 

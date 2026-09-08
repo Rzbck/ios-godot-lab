@@ -11,6 +11,8 @@ var _sent: Label
 var _errors: Label
 var _start_button: Button
 
+var _shared_host: LineEdit
+
 var _ws_enabled: CheckButton
 var _ws_url: LineEdit
 
@@ -41,6 +43,7 @@ func _ready() -> void:
 
 	_router = get_tree().get_first_node_in_group("ios_lab_router")
 	_build_stream_card()
+	_build_destination_card()
 	_build_ws_card()
 	_build_udp_card()
 	_build_osc_card()
@@ -55,6 +58,7 @@ func _ready() -> void:
 	_router.status_changed.connect(_on_router_status)
 	_router.stats_changed.connect(_on_router_stats)
 	_restore_config()
+	_bind_persistence()
 
 
 func _build_stream_card() -> void:
@@ -82,16 +86,32 @@ func _build_stream_card() -> void:
 	card.add_child(_start_button)
 
 
+func _build_destination_card() -> void:
+	var card := UI.make_card(
+		self,
+		"DESTINATION",
+		"Enter the Tailscale or LAN host once, then fill the normal TouchDesigner routes automatically."
+	)
+
+	card.add_child(_field_label("HOST"))
+	_shared_host = UI.line_edit("100.x.x.x")
+	card.add_child(_shared_host)
+
+	var preset := UI.button("FILL TOUCHDESIGNER ROUTES", false)
+	preset.pressed.connect(_apply_touchdesigner_preset)
+	card.add_child(preset)
+
+
 func _build_ws_card() -> void:
 	var card := UI.make_card(
 		self,
 		"WEBSOCKET",
-		"Continuous JSON stream. Use a WebSocket server, not the PowerShell telemetry receiver unless that is the destination you want."
+		"Continuous reliable JSON stream."
 	)
 	_ws_enabled = _switch("WebSocket / WSS")
 	card.add_child(_ws_enabled)
 	card.add_child(_field_label("SERVER URL"))
-	_ws_url = UI.line_edit("100.x.x.x:9001")
+	_ws_url = UI.line_edit("ws://100.x.x.x:9001/ioslab")
 	_ws_url.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_URL
 	card.add_child(_ws_url)
 
@@ -100,7 +120,7 @@ func _build_udp_card() -> void:
 	var card := UI.make_card(
 		self,
 		"UDP JSON",
-		"One UTF-8 JSON datagram per sample. This is the simplest TouchDesigner test."
+		"One UTF-8 JSON datagram per sample. Use Motion for the smallest high-rate packets."
 	)
 	_udp_enabled = _switch("UDP JSON")
 	card.add_child(_udp_enabled)
@@ -142,12 +162,12 @@ func _build_http_card() -> void:
 	var card := UI.make_card(
 		self,
 		"HTTP POST",
-		"POST the selected live snapshot as JSON to an API or recorder."
+		"POST snapshots as JSON. Better for diagnostics/recording than high-rate motion."
 	)
 	_http_enabled = _switch("HTTP / HTTPS")
 	card.add_child(_http_enabled)
 	card.add_child(_field_label("ENDPOINT"))
-	_http_url = UI.line_edit("http://100.x.x.x:9002/data")
+	_http_url = UI.line_edit("http://100.x.x.x:9001/data")
 	_http_url.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_URL
 	card.add_child(_http_url)
 
@@ -198,8 +218,28 @@ func _toggle_router() -> void:
 		_start_button.text = "STOP LIVE OUTPUT"
 
 
+func _apply_touchdesigner_preset() -> void:
+	var host := _shared_host.text.strip_edges()
+	if host.is_empty():
+		host = _infer_shared_host(_collect_config())
+	if host.is_empty():
+		_status.text = "ENTER HOST"
+		return
+
+	_shared_host.text = host
+	_ws_url.text = "ws://%s:9001/ioslab" % host
+	_udp_host.text = host
+	_udp_port.text = "7000"
+	_osc_host.text = host
+	_osc_port.text = "7001"
+	_osc_prefix.text = "/ioslab"
+	_http_url.text = "http://%s:9001/data" % host
+	_save_current_config()
+
+
 func _collect_config() -> Dictionary:
 	return {
+		"shared_host": _shared_host.text.strip_edges(),
 		"profile": _selected_profile(),
 		"rate_hz": _selected_rate(),
 		"ws_enabled": _ws_enabled.button_pressed,
@@ -264,6 +304,12 @@ func _on_router_stats(sent_packets: int, transport_errors: int, _last_send_unix_
 	_errors.text = str(transport_errors)
 
 
+func _save_current_config() -> void:
+	if _shared_host == null:
+		return
+	_save_config(_collect_config())
+
+
 func _save_config(config: Dictionary) -> void:
 	var file := FileAccess.open("user://live_router.json", FileAccess.WRITE)
 	if file != null:
@@ -300,3 +346,66 @@ func _restore_config() -> void:
 	_osc_prefix.text = str(config.get("osc_prefix", "/ioslab"))
 	_http_enabled.button_pressed = bool(config.get("http_enabled", false))
 	_http_url.text = str(config.get("http_url", ""))
+
+	var shared := str(config.get("shared_host", "")).strip_edges()
+	if shared.is_empty():
+		shared = _infer_shared_host(config)
+	_shared_host.text = shared
+
+
+func _bind_persistence() -> void:
+	_profile.item_selected.connect(_on_config_index_changed)
+	_rate.item_selected.connect(_on_config_index_changed)
+
+	for toggle in [_ws_enabled, _udp_enabled, _osc_enabled, _http_enabled]:
+		toggle.toggled.connect(_on_config_toggle_changed)
+
+	for field in [_shared_host, _ws_url, _udp_host, _udp_port, _osc_host, _osc_port, _osc_prefix, _http_url]:
+		field.focus_exited.connect(_on_config_focus_exited)
+		field.text_submitted.connect(_on_config_text_submitted)
+
+
+func _on_config_index_changed(_index: int) -> void:
+	_save_current_config()
+
+
+func _on_config_toggle_changed(_pressed: bool) -> void:
+	_save_current_config()
+
+
+func _on_config_focus_exited() -> void:
+	_save_current_config()
+
+
+func _on_config_text_submitted(_text: String) -> void:
+	_save_current_config()
+
+
+func _infer_shared_host(config: Dictionary) -> String:
+	for key in ["shared_host", "udp_host", "osc_host"]:
+		var value := str(config.get(key, "")).strip_edges()
+		if not value.is_empty():
+			return value
+
+	for key in ["ws_url", "http_url"]:
+		var host := _host_from_url(str(config.get(key, "")))
+		if not host.is_empty():
+			return host
+	return ""
+
+
+func _host_from_url(value: String) -> String:
+	var result := value.strip_edges()
+	for prefix in ["ws://", "wss://", "http://", "https://"]:
+		if result.begins_with(prefix):
+			result = result.substr(prefix.length())
+			break
+
+	var slash := result.find("/")
+	if slash >= 0:
+		result = result.left(slash)
+	if result.count(":") == 1:
+		var colon := result.rfind(":")
+		if colon > 0:
+			result = result.left(colon)
+	return result

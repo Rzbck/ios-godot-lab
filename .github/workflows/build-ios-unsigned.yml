@@ -155,7 +155,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:12}"
           cat > config/build_info.json <<EOF
           {
-            "version": "0.4.0-dev",
+            "version": "0.5.0-dev",
             "git_sha": "$SHORT_SHA",
             "channel": "github-actions-ios",
             "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

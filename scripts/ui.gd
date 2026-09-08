@@ -1,7 +1,8 @@
 extends RefCounted
 
 # iOS Lab visual system: near-black content surfaces + restrained glass only for
-# navigation/controls. Sizes keep interactive controls at the iOS 44 pt target.
+# navigation/controls. Typography is intentionally sized in logical-point-like
+# units because project.godot now uses a 390x844 iPhone design viewport.
 const BG := Color("020405")
 const SURFACE := Color("090d10")
 const SURFACE_ALT := Color("06090c")
@@ -9,15 +10,21 @@ const GLASS := Color(0.045, 0.060, 0.070, 0.82)
 const BORDER := Color("1b2a31")
 const BORDER_SOFT := Color("111b20")
 const TEXT := Color("eef3f5")
-const MUTED := Color("81919a")
+const MUTED := Color("8c9ca5")
 const ACCENT := Color("72f0c4")
 const ACCENT_DIM := Color("183b33")
 const GOOD := Color("78e0a6")
 const WARN := Color("f0c96e")
 const BAD := Color("ff7e86")
 
+const BODY_SIZE := 17
+const SECONDARY_SIZE := 14
+const CAPTION_SIZE := 12
+const CONTROL_SIZE := 15
+const CONTROL_HEIGHT := 50.0
 
-static func label(text_value: String, size: int = 14, color: Color = TEXT) -> Label:
+
+static func label(text_value: String, size: int = BODY_SIZE, color: Color = TEXT) -> Label:
 	var node := Label.new()
 	node.text = text_value
 	node.add_theme_font_size_override("font_size", size)
@@ -28,18 +35,18 @@ static func label(text_value: String, size: int = 14, color: Color = TEXT) -> La
 
 
 static func code_label(text_value: String) -> Label:
-	var node := label(text_value, 12, ACCENT)
+	var node := label(text_value, 13, ACCENT)
 	node.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	node.add_theme_constant_override("outline_size", 0)
 	var panel := StyleBoxFlat.new()
 	panel.bg_color = Color("030607")
 	panel.border_color = BORDER_SOFT
 	panel.set_border_width_all(1)
-	panel.set_corner_radius_all(10)
-	panel.content_margin_left = 12
-	panel.content_margin_right = 12
-	panel.content_margin_top = 10
-	panel.content_margin_bottom = 10
+	panel.set_corner_radius_all(12)
+	panel.content_margin_left = 14
+	panel.content_margin_right = 14
+	panel.content_margin_top = 12
+	panel.content_margin_bottom = 12
 	node.add_theme_stylebox_override("normal", panel)
 	return node
 
@@ -49,7 +56,7 @@ static func badge(text_value: String, color: Color = ACCENT) -> PanelContainer:
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.name = "Badge"
 	_set_badge_style(panel, color)
-	var text := label(text_value, 11, color)
+	var text := label(text_value, 12, color)
 	text.name = "Text"
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	panel.add_child(text)
@@ -71,11 +78,11 @@ static func _set_badge_style(panel: PanelContainer, color: Color) -> void:
 	style.bg_color = Color(color, 0.075)
 	style.border_color = Color(color, 0.34)
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(11)
+	style.set_corner_radius_all(12)
 	style.content_margin_left = 10
 	style.content_margin_right = 10
-	style.content_margin_top = 5
-	style.content_margin_bottom = 5
+	style.content_margin_top = 6
+	style.content_margin_bottom = 6
 	panel.add_theme_stylebox_override("panel", style)
 
 
@@ -87,7 +94,7 @@ static func glass_panel() -> PanelContainer:
 	style.bg_color = GLASS
 	style.border_color = Color("203139")
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(18)
+	style.set_corner_radius_all(20)
 	style.shadow_color = Color(0, 0, 0, 0.28)
 	style.shadow_size = 6
 	panel.add_theme_stylebox_override("panel", style)
@@ -98,8 +105,8 @@ static func nav_button(text_value: String) -> Button:
 	var node := Button.new()
 	node.text = text_value
 	node.toggle_mode = true
-	node.custom_minimum_size = Vector2(92, 44)
-	node.add_theme_font_size_override("font_size", 12)
+	node.custom_minimum_size = Vector2(92, CONTROL_HEIGHT)
+	node.add_theme_font_size_override("font_size", 14)
 	node.add_theme_color_override("font_color", MUTED)
 	node.add_theme_color_override("font_pressed_color", TEXT)
 	node.focus_mode = Control.FOCUS_NONE
@@ -109,7 +116,7 @@ static func nav_button(text_value: String) -> Button:
 	normal.bg_color = Color(0.02, 0.03, 0.035, 0.32)
 	normal.border_color = Color(0, 0, 0, 0)
 	normal.set_border_width_all(1)
-	normal.set_corner_radius_all(13)
+	normal.set_corner_radius_all(14)
 	node.add_theme_stylebox_override("normal", normal)
 	node.add_theme_stylebox_override("hover", normal)
 
@@ -135,26 +142,26 @@ static func make_card(parent: Container, title_text: String, description: String
 	style.bg_color = SURFACE
 	style.border_color = BORDER_SOFT
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(14)
-	style.content_margin_left = 14
-	style.content_margin_right = 14
-	style.content_margin_top = 13
-	style.content_margin_bottom = 14
+	style.set_corner_radius_all(18)
+	style.content_margin_left = 16
+	style.content_margin_right = 16
+	style.content_margin_top = 16
+	style.content_margin_bottom = 17
 	panel.add_theme_stylebox_override("panel", style)
 	parent.add_child(panel)
 
 	var content := VBoxContainer.new()
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	content.add_theme_constant_override("separation", 9)
+	content.add_theme_constant_override("separation", 11)
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(content)
 
-	var title := label(title_text, 14, TEXT)
+	var title := label(title_text, 17, TEXT)
 	title.add_theme_color_override("font_color", TEXT)
 	content.add_child(title)
 
 	if not description.is_empty():
-		var help := label(description, 12, MUTED)
+		var help := label(description, SECONDARY_SIZE, MUTED)
 		content.add_child(help)
 
 	return content
@@ -167,13 +174,16 @@ static func value_row(parent: Container, key: String, value: String = "—") -> 
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(row)
 
-	var key_label := label(key.to_upper(), 11, MUTED)
-	key_label.custom_minimum_size.x = 116
+	var key_label := label(key.to_upper(), CAPTION_SIZE, MUTED)
+	key_label.custom_minimum_size.x = 104
+	key_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(key_label)
 
-	var value_label := label(value, 12, TEXT)
+	var value_label := label(value, 15, TEXT)
 	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	value_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	row.add_child(value_label)
 	return value_label
 
@@ -181,8 +191,8 @@ static func value_row(parent: Container, key: String, value: String = "—") -> 
 static func button(text_value: String, accent: bool = false) -> Button:
 	var node := Button.new()
 	node.text = text_value
-	node.custom_minimum_size.y = 44
-	node.add_theme_font_size_override("font_size", 12)
+	node.custom_minimum_size.y = CONTROL_HEIGHT
+	node.add_theme_font_size_override("font_size", CONTROL_SIZE)
 	node.add_theme_color_override("font_color", TEXT)
 	node.focus_mode = Control.FOCUS_ALL
 	# PASS lets ScrollContainer keep receiving a drag that begins on a control.
@@ -192,7 +202,7 @@ static func button(text_value: String, accent: bool = false) -> Button:
 	normal.bg_color = Color("0c1317") if not accent else Color(ACCENT, 0.11)
 	normal.border_color = BORDER if not accent else Color(ACCENT, 0.55)
 	normal.set_border_width_all(1)
-	normal.set_corner_radius_all(12)
+	normal.set_corner_radius_all(14)
 	node.add_theme_stylebox_override("normal", normal)
 
 	var hover := normal.duplicate() as StyleBoxFlat
@@ -212,8 +222,8 @@ static func button(text_value: String, accent: bool = false) -> Button:
 static func line_edit(placeholder: String = "") -> LineEdit:
 	var node := LineEdit.new()
 	node.placeholder_text = placeholder
-	node.custom_minimum_size.y = 44
-	node.add_theme_font_size_override("font_size", 12)
+	node.custom_minimum_size.y = CONTROL_HEIGHT
+	node.add_theme_font_size_override("font_size", 16)
 	node.add_theme_color_override("font_color", TEXT)
 	node.add_theme_color_override("font_placeholder_color", Color(MUTED, 0.72))
 	node.add_theme_color_override("caret_color", ACCENT)
@@ -226,11 +236,11 @@ static func line_edit(placeholder: String = "") -> LineEdit:
 	return node
 
 
-static func text_edit(placeholder: String = "", min_height: float = 120.0) -> TextEdit:
+static func text_edit(placeholder: String = "", min_height: float = 132.0) -> TextEdit:
 	var node := TextEdit.new()
 	node.placeholder_text = placeholder
 	node.custom_minimum_size.y = min_height
-	node.add_theme_font_size_override("font_size", 12)
+	node.add_theme_font_size_override("font_size", 15)
 	node.add_theme_color_override("font_color", TEXT)
 	node.add_theme_color_override("font_placeholder_color", Color(MUTED, 0.72))
 	node.add_theme_color_override("caret_color", ACCENT)
@@ -244,8 +254,8 @@ static func option_button(items: Array) -> OptionButton:
 	var node := OptionButton.new()
 	for item in items:
 		node.add_item(str(item))
-	node.custom_minimum_size.y = 44
-	node.add_theme_font_size_override("font_size", 12)
+	node.custom_minimum_size.y = CONTROL_HEIGHT
+	node.add_theme_font_size_override("font_size", CONTROL_SIZE)
 	node.add_theme_color_override("font_color", TEXT)
 	node.mouse_filter = Control.MOUSE_FILTER_PASS
 	var normal := _input_style(false)
@@ -257,26 +267,26 @@ static func option_button(items: Array) -> OptionButton:
 	return node
 
 
-static func terminal_log(min_height: float = 160.0) -> RichTextLabel:
+static func terminal_log(min_height: float = 190.0) -> RichTextLabel:
 	var node := RichTextLabel.new()
 	node.custom_minimum_size.y = min_height
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.fit_content = false
 	node.scroll_active = true
 	node.scroll_following = true
-	node.add_theme_font_size_override("normal_font_size", 11)
-	node.add_theme_color_override("default_color", Color("b8c7cb"))
+	node.add_theme_font_size_override("normal_font_size", 13)
+	node.add_theme_color_override("default_color", Color("c1ced2"))
 	node.add_theme_stylebox_override("normal", _input_style(false))
 	return node
 
 
 static func section_title(parent: Container, title_text: String, subtitle: String = "") -> void:
-	var eyebrow := label("IOSLAB // RUNTIME", 11, ACCENT)
+	var eyebrow := label("IOSLAB // RUNTIME", 12, ACCENT)
 	parent.add_child(eyebrow)
-	var title := label(title_text, 22, TEXT)
+	var title := label(title_text, 29, TEXT)
 	parent.add_child(title)
 	if not subtitle.is_empty():
-		parent.add_child(label(subtitle, 13, MUTED))
+		parent.add_child(label(subtitle, 15, MUTED))
 
 
 static func _input_style(focused: bool) -> StyleBoxFlat:
@@ -284,9 +294,9 @@ static func _input_style(focused: bool) -> StyleBoxFlat:
 	style.bg_color = Color("030708")
 	style.border_color = Color(ACCENT, 0.56) if focused else BORDER
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(11)
-	style.content_margin_left = 11
-	style.content_margin_right = 11
-	style.content_margin_top = 9
-	style.content_margin_bottom = 9
+	style.set_corner_radius_all(13)
+	style.content_margin_left = 13
+	style.content_margin_right = 13
+	style.content_margin_top = 11
+	style.content_margin_bottom = 11
 	return style

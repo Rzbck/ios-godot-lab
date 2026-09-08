@@ -65,7 +65,7 @@ func _ready() -> void:
 	if _track != null:
 		_track.recording_changed.connect(_on_track_recording_changed)
 		_track.stats_changed.connect(_on_track_stats_changed)
-		_refresh_track_state(_track.get_state())
+		_refresh_track_state(_track.call("get_state") as Dictionary)
 	call_deferred("_refresh_capability_probes")
 
 
@@ -187,7 +187,7 @@ func _start_track() -> void:
 	if _track == null:
 		_track_state.text = "track service unavailable"
 		return
-	if _track.start_track(true):
+	if bool(_track.call("start_track", true)):
 		_track_state.text = "RECORDING · BACKGROUND"
 	else:
 		_track_state.text = "could not start"
@@ -196,7 +196,7 @@ func _start_track() -> void:
 func _stop_track() -> void:
 	if _track == null:
 		return
-	var state := _track.stop_track()
+	var state: Dictionary = _track.call("stop_track") as Dictionary
 	_refresh_track_state(state)
 
 

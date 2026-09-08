@@ -72,10 +72,12 @@ Règle permanente : **ne plus donner à l'utilisateur des liens GitHub Actions �
 
 - Les IPA restent des artifacts GitHub Actions, pas des binaires commités dans Git.
 - Le poste Windows récupère les artifacts avec `UPDATE_IOS_LAB.ps1` via GitHub CLI (`gh`).
-- Le script met à jour la branche courante uniquement par fast-forward strict, exige un worktree CLEAN, trouve un build iOS `success` pour le SHA exact, télécharge l'artifact correspondant, vérifie `BUILD-METADATA.json` et le SHA-256 de l'IPA, puis le range dans un dossier local `artifacts/<sha-court>/`.
+- Le script met à jour la branche courante uniquement par fast-forward strict, exige un worktree CLEAN, puis cherche un build iOS `success` pour le HEAD exact.
+- Si aucun build exact n'existe encore, le script déclenche lui-même `build-ios-unsigned.yml` sur la branche courante, attend le résultat, puis continue uniquement si ce build exact termine en `success`.
+- Il télécharge ensuite uniquement l'artifact `ios-unsigned-<SHA exact>`, vérifie `BUILD-METADATA.json` et le SHA-256 de l'IPA, puis range le résultat dans `artifacts/<sha-court>/`.
 - Le dossier `artifacts/` est local et ignoré par Git.
 - Ne jamais substituer « dernier artifact disponible » à « artifact du SHA exact » sans le dire explicitement.
-- Si aucun build iOS réussi n'existe pour le HEAD exact, STOP : ne pas installer silencieusement un build d'un autre SHA.
+- Si le build exact échoue, est annulé ou time out, STOP : ne pas installer silencieusement un build d'un autre SHA.
 
 ## 8. Apple / secrets
 

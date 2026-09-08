@@ -66,7 +66,7 @@ Interprétation obligatoire :
 
 ## 6. CI iOS
 
-`build-ios-unsigned.yml` est **manuel (`workflow_dispatch`)** après le bootstrap.
+Le workflow `build-ios-unsigned.yml` doit toujours produire un artifact exact-SHA et ne jamais mélanger les sorties de deux commits.
 
 Le workflow :
 
@@ -92,7 +92,40 @@ Premier BUILD IOS VALIDÉ :
 - IPA `IOSGodotLab-unsigned-8899a4bb4ad8.ipa` ;
 - SHA-256 `40e8b799779de2a9cf6b8b0973e6308875d4006223cbceaa43b4f001c187e14d`.
 
-## 7. Publication `main`
+## 7. Synchronisation locale des artifacts
+
+Les liens de téléchargement GitHub Actions ne font **pas** partie du workflow utilisateur normal.
+
+Commande canonique depuis le worktree de la branche à tester :
+
+```powershell
+.\UPDATE_IOS_LAB.ps1 -OpenFolder
+```
+
+Le script :
+
+1. exige `git` et GitHub CLI `gh` ;
+2. vérifie repository, origin, branche, HEAD et CLEAN/DIRTY ;
+3. refuse un detached HEAD et refuse tout worktree DIRTY ;
+4. fait `git fetch origin --prune` ;
+5. met uniquement la branche courante à jour via `git merge --ff-only origin/<branche>` ;
+6. demande à GitHub Actions un run iOS `success` pour **ce HEAD exact** ;
+7. télécharge uniquement l'artifact `ios-unsigned-<SHA exact>` ;
+8. vérifie que `BUILD-METADATA.json.sha == HEAD` ;
+9. recalcule le SHA-256 de l'IPA et le compare au fichier `.ipa.sha256` ;
+10. range l'artifact dans le dossier local central `artifacts/<sha-court>/` ;
+11. écrit `artifacts/LATEST.json` et `artifacts/LATEST_IPA.txt` ;
+12. n'écrase jamais silencieusement un dossier artifact existant invalide.
+
+Avec l'arborescence Windows canonique du projet, le dossier central est :
+
+```text
+E:\_Project\IOS APP\ios-godot-lab\artifacts\
+```
+
+Les `.ipa` ne doivent pas être commités dans Git. `artifacts/` et `*.ipa` sont ignorés.
+
+## 8. Publication `main`
 
 Avant merge/promotion :
 
@@ -104,9 +137,9 @@ Avant merge/promotion :
 - handoff/state/log réconciliés ;
 - accord humain.
 
-Aucun merge automatique de la branche bootstrap n'est autorisé simplement parce que le build iOS passe.
+Aucun merge automatique d'une branche de travail n'est autorisé simplement parce que le build iOS passe.
 
-## 8. Test iPhone exact-SHA
+## 9. Test iPhone exact-SHA
 
 Lorsqu'une IPA est installée : consigner au minimum :
 
@@ -120,11 +153,11 @@ Lorsqu'une IPA est installée : consigner au minimum :
 
 Ne jamais reporter une validation d'une IPA vers un autre SHA.
 
-## 9. SideStore
+## 10. SideStore / iLoader
 
-SideStore signe/installera l'IPA unsigned avec le compte Apple gratuit de l'utilisateur. Le refresh 7 jours est un mécanisme de distribution/test, pas une preuve que les fonctions iPhone marchent.
+SideStore ou iLoader signent/installent l'IPA unsigned avec le compte Apple de l'utilisateur. Le mécanisme de sideload n'est pas une preuve que les fonctions iPhone marchent.
 
-## 10. Nettoyage / rollback
+## 11. Nettoyage / rollback
 
 - jamais `reset --hard`, `clean -fd[x]`, force-push ou rebase destructif automatique ;
 - worktree DIRTY = HOLD jusqu'à inventaire ;

@@ -5,11 +5,94 @@ param(
 
     [string]$BindAddress = '0.0.0.0',
 
+    [string]$OutputRoot = '',
+
+    [ValidateRange(2, 300)]
+    [int]$ConsoleHeartbeatSeconds = 10,
+
     [switch]$Raw
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:Invariant = [System.Globalization.CultureInfo]::InvariantCulture
+
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $OutputRoot = Join-Path $repoRoot 'telemetry-sessions'
+}
+
+New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+$sessionStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$sessionDirectory = Join-Path $OutputRoot $sessionStamp
+if (Test-Path -LiteralPath $sessionDirectory) {
+    $sessionDirectory = Join-Path $OutputRoot ($sessionStamp + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+}
+New-Item -ItemType Directory -Path $sessionDirectory | Out-Null
+
+$rawFile = Join-Path $sessionDirectory 'session.raw.jsonl'
+$changesFile = Join-Path $sessionDirectory 'session.changes.log'
+$summaryJsonFile = Join-Path $sessionDirectory 'session.summary.json'
+$summaryTextFile = Join-Path $sessionDirectory 'session-summary.txt'
+$latestSessionFile = Join-Path $OutputRoot 'LATEST_SESSION.txt'
+$sessionDirectory | Set-Content -LiteralPath $latestSessionFile -Encoding utf8
+
+$script:Stats = [ordered]@{
+    StartedAt              = Get-Date
+    EndedAt                = $null
+    Packets                = 0
+    Snapshots              = 0
+    Events                 = 0
+    InvalidPayloads        = 0
+    Connections            = 0
+    Disconnects            = 0
+    ReceiverErrors         = 0
+    MinFps                 = $null
+    MaxFps                 = $null
+    LowFpsSamples          = 0
+    CriticalFpsSamples     = 0
+    FirstGpsFix            = $null
+    BestGpsAccuracyM       = $null
+    WorstGpsAccuracyM      = $null
+    LastGps                = $null
+    TouchStart             = $null
+    TouchEnd               = $null
+    MaxAccelDeviation      = 0.0
+    MaxGyroMagnitude       = 0.0
+    LastBatteryPercent     = $null
+    Build                  = $null
+    Device                 = $null
+    EventCounts            = @{}
+    CameraEvents           = @()
+    LastPage               = $null
+    LastFps                = $null
+}
+
+$script:ConsoleState = [ordered]@{
+    FirstSnapshot          = $true
+    Page                   = ''
+    FpsBand                = ''
+    Battery                = $null
+    GpsSeen                = $false
+    GpsAccuracy            = $null
+    LastHeartbeat          = Get-Date
+    LastMotionNotice       = [DateTime]::MinValue
+}
+
+function Write-ChangeLine {
+    param(
+        [Parameter(Mandatory)][string]$Line,
+        [ConsoleColor]$Color = [ConsoleColor]::Gray
+    )
+
+    Add-Content -LiteralPath $changesFile -Value $Line -Encoding utf8
+    Write-Host $Line -ForegroundColor $Color
+}
+
+function Format-InvariantNumber {
+    param([double]$Value, [string]$Format = '0.00')
+    return [string]::Format($script:Invariant, "{0:$Format}", $Value)
+}
 
 function Read-ExactBytes {
     param(
@@ -147,7 +230,7 @@ function Send-WebSocketFrame {
     param(
         [Parameter(Mandatory)][System.IO.Stream]$Stream,
         [Parameter(Mandatory)][ValidateRange(0, 15)][int]$Opcode,
-        [Parameter(Mandatory)][byte[]]$Payload
+        [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Payload
     )
 
     $header = [System.Collections.Generic.List[byte]]::new()
@@ -193,67 +276,244 @@ function Get-MapValue {
     return $Default
 }
 
+function Get-VectorMagnitude {
+    param($Value)
+    if ($null -eq $Value -or $Value.Count -lt 3) {
+        return 0.0
+    }
+    $x = [double]$Value[0]
+    $y = [double]$Value[1]
+    $z = [double]$Value[2]
+    return [Math]::Sqrt(($x * $x) + ($y * $y) + ($z * $z))
+}
+
 function Format-Vector3 {
     param($Value)
     if ($null -eq $Value -or $Value.Count -lt 3) {
         return '(—)'
     }
-    return '({0:N2},{1:N2},{2:N2})' -f [double]$Value[0], [double]$Value[1], [double]$Value[2]
+    return [string]::Format(
+        $script:Invariant,
+        '({0:0.00},{1:0.00},{2:0.00})',
+        [double]$Value[0], [double]$Value[1], [double]$Value[2]
+    )
 }
 
-function Write-TelemetryRecord {
-    param(
-        [Parameter(Mandatory)][System.Collections.IDictionary]$Record,
-        [string]$RawText = ''
-    )
+function Get-FpsBand {
+    param([double]$Fps)
+    if ($Fps -lt 25) { return 'CRITICAL' }
+    if ($Fps -lt 45) { return 'LOW' }
+    if ($Fps -lt 55) { return 'MID' }
+    return 'OK'
+}
 
+function Save-RawRecord {
+    param([Parameter(Mandatory)][string]$Text)
+    Add-Content -LiteralPath $rawFile -Value $Text -Encoding utf8
+}
+
+function Update-StatsFromSnapshot {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Record)
+
+    $app = Get-MapValue -Map $Record -Key 'app' -Default @{}
+    $device = Get-MapValue -Map $Record -Key 'device' -Default @{}
+    $sensors = Get-MapValue -Map $Record -Key 'sensors' -Default @{}
+    $touch = Get-MapValue -Map $Record -Key 'touch' -Default @{}
+    $location = Get-MapValue -Map $Record -Key 'location' -Default @{}
+
+    $fpsRaw = Get-MapValue -Map $app -Key 'fps' -Default $null
+    if ($null -ne $fpsRaw) {
+        $fps = [double]$fpsRaw
+        $script:Stats.LastFps = $fps
+        if ($null -eq $script:Stats.MinFps -or $fps -lt [double]$script:Stats.MinFps) {
+            $script:Stats.MinFps = $fps
+        }
+        if ($null -eq $script:Stats.MaxFps -or $fps -gt [double]$script:Stats.MaxFps) {
+            $script:Stats.MaxFps = $fps
+        }
+        if ($fps -lt 45) { $script:Stats.LowFpsSamples++ }
+        if ($fps -lt 25) { $script:Stats.CriticalFpsSamples++ }
+    }
+
+    $page = [string](Get-MapValue -Map $app -Key 'page' -Default '')
+    if (-not [string]::IsNullOrWhiteSpace($page)) {
+        $script:Stats.LastPage = $page
+    }
+
+    $touchCount = Get-MapValue -Map $touch -Key 'count' -Default $null
+    if ($null -ne $touchCount) {
+        if ($null -eq $script:Stats.TouchStart) { $script:Stats.TouchStart = [int64]$touchCount }
+        $script:Stats.TouchEnd = [int64]$touchCount
+    }
+
+    $battery = Get-MapValue -Map $device -Key 'battery_percent' -Default $null
+    if ($null -ne $battery -and [int]$battery -ge 0) {
+        $script:Stats.LastBatteryPercent = [int]$battery
+    }
+
+    $accel = Get-MapValue -Map $sensors -Key 'accelerometer' -Default $null
+    $gyro = Get-MapValue -Map $sensors -Key 'gyroscope' -Default $null
+    $accelDeviation = [Math]::Abs((Get-VectorMagnitude $accel) - 9.81)
+    $gyroMagnitude = Get-VectorMagnitude $gyro
+    if ($accelDeviation -gt [double]$script:Stats.MaxAccelDeviation) {
+        $script:Stats.MaxAccelDeviation = $accelDeviation
+    }
+    if ($gyroMagnitude -gt [double]$script:Stats.MaxGyroMagnitude) {
+        $script:Stats.MaxGyroMagnitude = $gyroMagnitude
+    }
+
+    if ([bool](Get-MapValue -Map $location -Key 'have_fix' -Default $false)) {
+        $lat = [double](Get-MapValue -Map $location -Key 'latitude' -Default 0)
+        $lon = [double](Get-MapValue -Map $location -Key 'longitude' -Default 0)
+        $accuracy = [double](Get-MapValue -Map $location -Key 'accuracy_m' -Default 0)
+        $gps = [ordered]@{
+            Latitude = $lat
+            Longitude = $lon
+            AccuracyM = $accuracy
+        }
+        if ($null -eq $script:Stats.FirstGpsFix) {
+            $script:Stats.FirstGpsFix = $gps
+        }
+        $script:Stats.LastGps = $gps
+        if ($accuracy -ge 0) {
+            if ($null -eq $script:Stats.BestGpsAccuracyM -or $accuracy -lt [double]$script:Stats.BestGpsAccuracyM) {
+                $script:Stats.BestGpsAccuracyM = $accuracy
+            }
+            if ($null -eq $script:Stats.WorstGpsAccuracyM -or $accuracy -gt [double]$script:Stats.WorstGpsAccuracyM) {
+                $script:Stats.WorstGpsAccuracyM = $accuracy
+            }
+        }
+    }
+
+    if ($null -eq $script:Stats.Build) {
+        $build = Get-MapValue -Map $Record -Key 'build' -Default @{}
+        if ($build -is [System.Collections.IDictionary]) {
+            $script:Stats.Build = $build
+        }
+    }
+    if ($null -eq $script:Stats.Device) {
+        $script:Stats.Device = $device
+    }
+}
+
+function Write-FilteredSnapshot {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Record)
+
+    $app = Get-MapValue -Map $Record -Key 'app' -Default @{}
+    $device = Get-MapValue -Map $Record -Key 'device' -Default @{}
+    $sensors = Get-MapValue -Map $Record -Key 'sensors' -Default @{}
+    $touch = Get-MapValue -Map $Record -Key 'touch' -Default @{}
+    $location = Get-MapValue -Map $Record -Key 'location' -Default @{}
+    $seq = Get-MapValue -Map $Record -Key 'seq' -Default '-'
     $stamp = Get-Date -Format 'HH:mm:ss.fff'
-    if ($Raw) {
-        Write-Host "[$stamp] $RawText"
+
+    $page = [string](Get-MapValue -Map $app -Key 'page' -Default '?')
+    $fps = [double](Get-MapValue -Map $app -Key 'fps' -Default 0)
+    $touchCount = [int64](Get-MapValue -Map $touch -Key 'count' -Default 0)
+    $battery = [int](Get-MapValue -Map $device -Key 'battery_percent' -Default -1)
+    $band = Get-FpsBand $fps
+
+    $gpsText = 'GPS=—'
+    $haveFix = [bool](Get-MapValue -Map $location -Key 'have_fix' -Default $false)
+    $gpsAccuracy = $null
+    if ($haveFix) {
+        $lat = [double](Get-MapValue -Map $location -Key 'latitude' -Default 0)
+        $lon = [double](Get-MapValue -Map $location -Key 'longitude' -Default 0)
+        $gpsAccuracy = [double](Get-MapValue -Map $location -Key 'accuracy_m' -Default 0)
+        $gpsText = [string]::Format($script:Invariant, 'GPS={0:F6},{1:F6} ±{2:F1}m', $lat, $lon, $gpsAccuracy)
+    }
+
+    if ($script:ConsoleState.FirstSnapshot) {
+        $screen = Get-MapValue -Map $device -Key 'screen_px' -Default @()
+        $screenText = if ($screen.Count -ge 2) { "$($screen[0])x$($screen[1])px" } else { '?' }
+        $line = "[$stamp] START SNAP #$seq page=$page fps=$([int]$fps) touch=$touchCount $gpsText BAT=$battery% screen=$screenText"
+        Write-ChangeLine -Line $line -Color Green
+        $script:ConsoleState.FirstSnapshot = $false
+        $script:ConsoleState.Page = $page
+        $script:ConsoleState.FpsBand = $band
+        $script:ConsoleState.Battery = $battery
+        if ($haveFix) {
+            $script:ConsoleState.GpsSeen = $true
+            $script:ConsoleState.GpsAccuracy = $gpsAccuracy
+        }
         return
     }
 
-    $type = [string](Get-MapValue -Map $Record -Key 'type' -Default 'unknown')
-    $seq = Get-MapValue -Map $Record -Key 'seq' -Default '-'
+    if ($page -ne $script:ConsoleState.Page) {
+        Write-ChangeLine -Line "[$stamp] PAGE $($script:ConsoleState.Page) -> $page" -Color Cyan
+        $script:ConsoleState.Page = $page
+    }
 
-    switch ($type) {
-        'snapshot' {
-            $app = Get-MapValue -Map $Record -Key 'app' -Default @{}
-            $device = Get-MapValue -Map $Record -Key 'device' -Default @{}
-            $sensors = Get-MapValue -Map $Record -Key 'sensors' -Default @{}
-            $touch = Get-MapValue -Map $Record -Key 'touch' -Default @{}
-            $location = Get-MapValue -Map $Record -Key 'location' -Default @{}
+    if ($band -ne $script:ConsoleState.FpsBand) {
+        $color = if ($band -eq 'CRITICAL') { [ConsoleColor]::Red } elseif ($band -eq 'LOW') { [ConsoleColor]::Yellow } else { [ConsoleColor]::Green }
+        Write-ChangeLine -Line "[$stamp] FPS $($script:ConsoleState.FpsBand) -> $band · fps=$([int]$fps)" -Color $color
+        $script:ConsoleState.FpsBand = $band
+    }
 
-            $page = Get-MapValue -Map $app -Key 'page' -Default '?'
-            $fps = Get-MapValue -Map $app -Key 'fps' -Default '?'
-            $touchCount = Get-MapValue -Map $touch -Key 'count' -Default 0
-            $battery = Get-MapValue -Map $device -Key 'battery_percent' -Default -1
-            $accel = Format-Vector3 (Get-MapValue -Map $sensors -Key 'accelerometer')
-            $gyro = Format-Vector3 (Get-MapValue -Map $sensors -Key 'gyroscope')
+    if ($battery -ge 0 -and $battery -ne $script:ConsoleState.Battery) {
+        Write-ChangeLine -Line "[$stamp] BATTERY $($script:ConsoleState.Battery)% -> $battery%" -Color DarkCyan
+        $script:ConsoleState.Battery = $battery
+    }
 
-            $gps = 'GPS=—'
-            if ([bool](Get-MapValue -Map $location -Key 'have_fix' -Default $false)) {
-                $lat = [double](Get-MapValue -Map $location -Key 'latitude' -Default 0)
-                $lon = [double](Get-MapValue -Map $location -Key 'longitude' -Default 0)
-                $acc = [double](Get-MapValue -Map $location -Key 'accuracy_m' -Default 0)
-                $gps = 'GPS={0:F6},{1:F6} ±{2:N1}m' -f $lat, $lon, $acc
-            }
-
-            $batteryText = if ([int]$battery -ge 0) { "BAT=$battery%" } else { 'BAT=—' }
-            Write-Host ("[{0}] SNAP #{1} page={2} fps={3} touch={4} ACC={5} GYRO={6} {7} {8}" -f $stamp, $seq, $page, $fps, $touchCount, $accel, $gyro, $gps, $batteryText)
-        }
-
-        'event' {
-            $event = Get-MapValue -Map $Record -Key 'event' -Default @{}
-            $kind = Get-MapValue -Map $event -Key 'kind' -Default 'event'
-            $message = Get-MapValue -Map $event -Key 'message' -Default ''
-            Write-Host ("[{0}] EVENT #{1} {2} :: {3}" -f $stamp, $seq, $kind, $message) -ForegroundColor Cyan
-        }
-
-        default {
-            Write-Host ("[{0}] {1} #{2}" -f $stamp, $type.ToUpperInvariant(), $seq)
+    if ($haveFix -and -not $script:ConsoleState.GpsSeen) {
+        Write-ChangeLine -Line "[$stamp] GPS FIRST FIX · $gpsText" -Color Green
+        $script:ConsoleState.GpsSeen = $true
+        $script:ConsoleState.GpsAccuracy = $gpsAccuracy
+    }
+    elseif ($haveFix -and $null -ne $script:ConsoleState.GpsAccuracy) {
+        $previousAccuracy = [double]$script:ConsoleState.GpsAccuracy
+        if ([Math]::Abs($gpsAccuracy - $previousAccuracy) -ge 5.0) {
+            Write-ChangeLine -Line "[$stamp] GPS ACCURACY $(Format-InvariantNumber $previousAccuracy '0.0')m -> $(Format-InvariantNumber $gpsAccuracy '0.0')m" -Color DarkCyan
+            $script:ConsoleState.GpsAccuracy = $gpsAccuracy
         }
     }
+
+    $accel = Get-MapValue -Map $sensors -Key 'accelerometer' -Default $null
+    $gyro = Get-MapValue -Map $sensors -Key 'gyroscope' -Default $null
+    $accelDeviation = [Math]::Abs((Get-VectorMagnitude $accel) - 9.81)
+    $gyroMagnitude = Get-VectorMagnitude $gyro
+    $now = Get-Date
+    if (($accelDeviation -ge 4.0 -or $gyroMagnitude -ge 2.0) -and (($now - $script:ConsoleState.LastMotionNotice).TotalSeconds -ge 1.5)) {
+        Write-ChangeLine -Line ("[$stamp] MOTION peak accelΔ={0}m/s² gyro={1}rad/s ACC={2} GYRO={3}" -f (Format-InvariantNumber $accelDeviation), (Format-InvariantNumber $gyroMagnitude), (Format-Vector3 $accel), (Format-Vector3 $gyro)) -Color Magenta
+        $script:ConsoleState.LastMotionNotice = $now
+    }
+
+    if (($now - $script:ConsoleState.LastHeartbeat).TotalSeconds -ge $ConsoleHeartbeatSeconds) {
+        $heartbeatGps = if ($haveFix) { $gpsText } else { 'GPS=—' }
+        Write-ChangeLine -Line "[$stamp] HEARTBEAT packets=$($script:Stats.Packets) fps=$([int]$fps) page=$page touch=$touchCount $heartbeatGps" -Color DarkGray
+        $script:ConsoleState.LastHeartbeat = $now
+    }
+}
+
+function Write-EventRecord {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Record)
+
+    $event = Get-MapValue -Map $Record -Key 'event' -Default @{}
+    $kind = [string](Get-MapValue -Map $event -Key 'kind' -Default 'event')
+    $message = [string](Get-MapValue -Map $event -Key 'message' -Default '')
+    $data = Get-MapValue -Map $event -Key 'data' -Default @{}
+    $seq = Get-MapValue -Map $Record -Key 'seq' -Default '-'
+    $stamp = Get-Date -Format 'HH:mm:ss.fff'
+
+    if (-not $script:Stats.EventCounts.ContainsKey($kind)) {
+        $script:Stats.EventCounts[$kind] = 0
+    }
+    $script:Stats.EventCounts[$kind] = [int]$script:Stats.EventCounts[$kind] + 1
+
+    if ($kind.StartsWith('camera_')) {
+        $script:Stats.CameraEvents += [ordered]@{
+            Time = $stamp
+            Kind = $kind
+            Message = $message
+            Data = $data
+        }
+    }
+
+    $dataText = ''
+    if ($data -is [System.Collections.IDictionary] -and $data.Count -gt 0) {
+        $dataText = ' · ' + ($data | ConvertTo-Json -Compress -Depth 20)
+    }
+    Write-ChangeLine -Line "[$stamp] EVENT #$seq $kind :: $message$dataText" -Color Cyan
 }
 
 function Convert-RecordToAckJson {
@@ -269,20 +529,47 @@ function Convert-RecordToAckJson {
 function Process-TelemetryText {
     param([Parameter(Mandatory)][string]$Text)
 
+    Save-RawRecord -Text $Text
+
     try {
         $record = $Text | ConvertFrom-Json -AsHashtable -Depth 32
     }
     catch {
-        Write-Host "[INVALID JSON] $Text" -ForegroundColor Yellow
+        $script:Stats.InvalidPayloads++
+        Write-ChangeLine -Line "[$(Get-Date -Format 'HH:mm:ss.fff')] INVALID JSON" -Color Yellow
         return $null
     }
 
     if ($record -isnot [System.Collections.IDictionary]) {
-        Write-Host '[INVALID PAYLOAD] JSON root is not an object.' -ForegroundColor Yellow
+        $script:Stats.InvalidPayloads++
+        Write-ChangeLine -Line "[$(Get-Date -Format 'HH:mm:ss.fff')] INVALID PAYLOAD · JSON root is not an object" -Color Yellow
         return $null
     }
 
-    Write-TelemetryRecord -Record $record -RawText $Text
+    $script:Stats.Packets++
+    $type = [string](Get-MapValue -Map $record -Key 'type' -Default 'unknown')
+
+    if ($Raw) {
+        Write-Host "[$(Get-Date -Format 'HH:mm:ss.fff')] $Text"
+    }
+
+    switch ($type) {
+        'snapshot' {
+            $script:Stats.Snapshots++
+            Update-StatsFromSnapshot -Record $record
+            if (-not $Raw) {
+                Write-FilteredSnapshot -Record $record
+            }
+        }
+        'event' {
+            $script:Stats.Events++
+            Write-EventRecord -Record $record
+        }
+        default {
+            Write-ChangeLine -Line "[$(Get-Date -Format 'HH:mm:ss.fff')] PACKET type=$type" -Color DarkGray
+        }
+    }
+
     return Convert-RecordToAckJson -Record $record
 }
 
@@ -321,6 +608,10 @@ function Show-ListeningEndpoints {
     Write-Host ''
     Write-Host '=== IOSLAB LIVE TELEMETRY RECEIVER ===' -ForegroundColor Cyan
     Write-Host "LISTENING TCP = $BindAddress`:$ListenPort"
+    Write-Host "SESSION DIR   = $sessionDirectory" -ForegroundColor Green
+    Write-Host "SUMMARY       = $summaryTextFile"
+    Write-Host "CHANGES       = $changesFile"
+    Write-Host "RAW JSONL     = $rawFile"
 
     $tailscaleIp = Get-TailscaleIPv4
     if ($tailscaleIp) {
@@ -349,9 +640,118 @@ function Show-ListeningEndpoints {
     }
 
     Write-Host ''
-    Write-Host 'In the iPhone app: Telemetry > WebSocket > enter host:port > START STREAM.'
-    Write-Host 'Ctrl+C stops the receiver.'
+    Write-Host 'Console mode: meaningful changes/events only + heartbeat.' -ForegroundColor DarkGray
+    Write-Host 'Full snapshots are still preserved in session.raw.jsonl.' -ForegroundColor DarkGray
+    Write-Host 'Ctrl+C stops the receiver and finalizes session-summary.txt.'
     Write-Host ''
+}
+
+function Complete-Session {
+    $script:Stats.EndedAt = Get-Date
+    $duration = [Math]::Round(($script:Stats.EndedAt - $script:Stats.StartedAt).TotalSeconds, 2)
+    $touchDelta = if ($null -ne $script:Stats.TouchStart -and $null -ne $script:Stats.TouchEnd) {
+        [int64]$script:Stats.TouchEnd - [int64]$script:Stats.TouchStart
+    }
+    else {
+        0
+    }
+
+    $summary = [ordered]@{
+        schema                 = 'ioslab.receiver.summary.v1'
+        started_at             = $script:Stats.StartedAt.ToString('o')
+        ended_at               = $script:Stats.EndedAt.ToString('o')
+        duration_seconds       = $duration
+        packets                = $script:Stats.Packets
+        snapshots              = $script:Stats.Snapshots
+        events                 = $script:Stats.Events
+        invalid_payloads       = $script:Stats.InvalidPayloads
+        receiver_errors        = $script:Stats.ReceiverErrors
+        connections            = $script:Stats.Connections
+        disconnects            = $script:Stats.Disconnects
+        fps                    = [ordered]@{
+            min = $script:Stats.MinFps
+            max = $script:Stats.MaxFps
+            last = $script:Stats.LastFps
+            low_samples_below_45 = $script:Stats.LowFpsSamples
+            critical_samples_below_25 = $script:Stats.CriticalFpsSamples
+        }
+        gps                    = [ordered]@{
+            first_fix = $script:Stats.FirstGpsFix
+            last_fix = $script:Stats.LastGps
+            best_accuracy_m = $script:Stats.BestGpsAccuracyM
+            worst_accuracy_m = $script:Stats.WorstGpsAccuracyM
+        }
+        touch                  = [ordered]@{
+            first_count = $script:Stats.TouchStart
+            last_count = $script:Stats.TouchEnd
+            delta = $touchDelta
+        }
+        motion                 = [ordered]@{
+            max_accel_deviation_from_gravity = [Math]::Round([double]$script:Stats.MaxAccelDeviation, 3)
+            max_gyro_magnitude = [Math]::Round([double]$script:Stats.MaxGyroMagnitude, 3)
+        }
+        battery_percent_last   = $script:Stats.LastBatteryPercent
+        last_page              = $script:Stats.LastPage
+        event_counts           = $script:Stats.EventCounts
+        camera_events          = $script:Stats.CameraEvents
+        build                  = $script:Stats.Build
+        device                 = $script:Stats.Device
+        files                  = [ordered]@{
+            summary_text = $summaryTextFile
+            summary_json = $summaryJsonFile
+            changes_log = $changesFile
+            raw_jsonl = $rawFile
+        }
+    }
+
+    $summary | ConvertTo-Json -Depth 24 | Set-Content -LiteralPath $summaryJsonFile -Encoding utf8
+
+    $minFpsText = if ($null -eq $script:Stats.MinFps) { '—' } else { Format-InvariantNumber ([double]$script:Stats.MinFps) '0' }
+    $maxFpsText = if ($null -eq $script:Stats.MaxFps) { '—' } else { Format-InvariantNumber ([double]$script:Stats.MaxFps) '0' }
+    $bestGpsText = if ($null -eq $script:Stats.BestGpsAccuracyM) { '—' } else { (Format-InvariantNumber ([double]$script:Stats.BestGpsAccuracyM) '0.0') + ' m' }
+    $buildSha = '—'
+    if ($script:Stats.Build -is [System.Collections.IDictionary]) {
+        $buildSha = [string](Get-MapValue -Map $script:Stats.Build -Key 'git_sha' -Default '—')
+    }
+
+    $lines = @(
+        'IOSLAB TELEMETRY SESSION SUMMARY'
+        '================================'
+        "Build SHA          : $buildSha"
+        "Started            : $($script:Stats.StartedAt.ToString('o'))"
+        "Duration           : $duration s"
+        "Packets            : $($script:Stats.Packets) ($($script:Stats.Snapshots) snapshots / $($script:Stats.Events) events)"
+        "Connections        : $($script:Stats.Connections)"
+        "Receiver errors    : $($script:Stats.ReceiverErrors)"
+        "FPS min / max      : $minFpsText / $maxFpsText"
+        "FPS < 45 samples   : $($script:Stats.LowFpsSamples)"
+        "FPS < 25 samples   : $($script:Stats.CriticalFpsSamples)"
+        "GPS best accuracy  : $bestGpsText"
+        "Touch delta        : $touchDelta"
+        "Max accel delta    : $(Format-InvariantNumber ([double]$script:Stats.MaxAccelDeviation) '0.00') m/s²"
+        "Max gyro magnitude : $(Format-InvariantNumber ([double]$script:Stats.MaxGyroMagnitude) '0.00') rad/s"
+        "Last page          : $($script:Stats.LastPage)"
+        "Camera events      : $($script:Stats.CameraEvents.Count)"
+        ''
+        'FILES TO SHARE WITH CHATGPT'
+        '----------------------------'
+        "1. $summaryTextFile"
+        "2. $changesFile"
+        "3. $summaryJsonFile"
+        "4. $rawFile  (only if deep raw analysis is needed)"
+    )
+    $lines | Set-Content -LiteralPath $summaryTextFile -Encoding utf8
+
+    try {
+        Write-Host ''
+        Write-Host '=== IOSLAB SESSION FINALIZED ===' -ForegroundColor Green
+        Write-Host "SUMMARY = $summaryTextFile" -ForegroundColor Green
+        Write-Host "CHANGES = $changesFile"
+        Write-Host "RAW     = $rawFile" -ForegroundColor DarkGray
+        Write-Host 'Send session-summary.txt first; add session.changes.log if needed.' -ForegroundColor Cyan
+    }
+    catch {
+    }
 }
 
 $ipAddress = if ($BindAddress -eq '0.0.0.0' -or $BindAddress -eq '*') {
@@ -370,7 +770,8 @@ try {
     while ($true) {
         $client = $listener.AcceptTcpClient()
         $remote = $client.Client.RemoteEndPoint
-        Write-Host "[$(Get-Date -Format 'HH:mm:ss.fff')] CONNECT $remote" -ForegroundColor DarkCyan
+        $script:Stats.Connections++
+        Write-ChangeLine -Line "[$(Get-Date -Format 'HH:mm:ss.fff')] CONNECT $remote" -Color DarkCyan
 
         try {
             $client.NoDelay = $true
@@ -399,12 +800,12 @@ try {
                 $responseBytes = [System.Text.Encoding]::ASCII.GetBytes($response)
                 $stream.Write($responseBytes, 0, $responseBytes.Length)
                 $stream.Flush()
-                Write-Host "[$(Get-Date -Format 'HH:mm:ss.fff')] WEBSOCKET OPEN $remote" -ForegroundColor Green
+                Write-ChangeLine -Line "[$(Get-Date -Format 'HH:mm:ss.fff')] WEBSOCKET OPEN $remote" -Color Green
 
                 while ($client.Connected) {
                     $frame = Read-WebSocketFrame -Stream $stream
                     if (-not $frame.Fin) {
-                        Write-Host '[WARN] Fragmented WebSocket frame ignored.' -ForegroundColor Yellow
+                        Write-ChangeLine -Line "[$(Get-Date -Format 'HH:mm:ss.fff')] WARN fragmented WebSocket frame ignored" -Color Yellow
                         continue
                     }
 
@@ -447,10 +848,12 @@ try {
             }
         }
         catch [System.IO.EndOfStreamException] {
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss.fff')] DISCONNECT $remote" -ForegroundColor DarkGray
+            $script:Stats.Disconnects++
+            Write-ChangeLine -Line "[$(Get-Date -Format 'HH:mm:ss.fff')] DISCONNECT $remote" -Color DarkGray
         }
         catch {
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss.fff')] ERROR $remote :: $($_.Exception.Message)" -ForegroundColor Red
+            $script:Stats.ReceiverErrors++
+            Write-ChangeLine -Line "[$(Get-Date -Format 'HH:mm:ss.fff')] RECEIVER ERROR $remote :: $($_.Exception.Message)" -Color Red
         }
         finally {
             $client.Close()
@@ -459,5 +862,6 @@ try {
     }
 }
 finally {
-    $listener.Stop()
+    try { $listener.Stop() } catch {}
+    Complete-Session
 }

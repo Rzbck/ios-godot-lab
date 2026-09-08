@@ -30,17 +30,15 @@ var _have_location := false
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_constant_override("separation", 12)
+	add_theme_constant_override("separation", 14)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	UI.section_title(
 		self,
-		"GPS & native bridge",
-		"CoreLocation, Bluetooth LE and Apple capability probes are exposed through the IOSLab native plugin built by GitHub Actions."
+		"Location",
+		"GPS, map, Bluetooth LE and Apple hardware capability probes."
 	)
 
-	# Connect before adding the service to the tree, but only add it after the UI
-	# labels exist. LocationService emits availability_changed from its _ready().
 	_service = LocationService.new()
 	_service.availability_changed.connect(_on_availability_changed)
 	_service.authorization_changed.connect(_on_authorization_changed)
@@ -50,8 +48,8 @@ func _ready() -> void:
 
 	var location_card := UI.make_card(
 		self,
-		"GPS · CORELOCATION",
-		"Permission is requested only when you press the button. Location stays local unless you explicitly start Live Telemetry."
+		"GPS",
+		"Permission is requested only when you press Start. Location stays local unless you explicitly enable Telemetry."
 	)
 	_bridge_status = UI.value_row(location_card, "Bridge", "detecting…")
 	_auth_status = UI.value_row(location_card, "Permission", "unknown")
@@ -65,67 +63,54 @@ func _ready() -> void:
 	location_buttons.add_theme_constant_override("separation", 8)
 	location_card.add_child(location_buttons)
 
-	var start := UI.button("REQUEST + START", true)
+	var start := UI.button("Start Location", true)
 	start.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	start.pressed.connect(_request_and_start_location)
 	location_buttons.add_child(start)
 
-	var stop := UI.button("STOP")
+	var stop := UI.button("Stop")
 	stop.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stop.pressed.connect(_stop_location)
 	location_buttons.add_child(stop)
 
-	var maps := UI.button("OPEN IN APPLE MAPS")
+	var maps := UI.button("Open in Apple Maps")
 	maps.pressed.connect(_open_apple_maps)
 	location_card.add_child(maps)
 
-	var map_card := UI.make_card(
-		self,
-		"MAP",
-		"Live position on OpenStreetMap tiles. The map recenters after meaningful movement and can be zoomed."
-	)
+	var map_card := UI.make_card(self, "MAP", "Live OpenStreetMap position with recentering and zoom.")
 	_map = SlippyMap.new()
 	map_card.add_child(_map)
 
-	var ble := UI.make_card(
-		self,
-		"BLUETOOTH LE",
-		"Scans nearby BLE advertisements through CoreBluetooth. No pairing is performed."
-	)
+	var ble := UI.make_card(self, "BLUETOOTH LE", "Scans nearby advertisements without pairing.")
 	_ble_state = UI.value_row(ble, "State", "not started")
-	_ble_devices = UI.value_row(ble, "Devices", "none")
+	_ble_devices = UI.value_row(ble, "Nearby", "none")
 
 	var ble_buttons := HBoxContainer.new()
 	ble_buttons.add_theme_constant_override("separation", 8)
 	ble.add_child(ble_buttons)
 
-	var scan := UI.button("START SCAN", true)
+	var scan := UI.button("Start Scan", true)
 	scan.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scan.pressed.connect(_start_ble)
 	ble_buttons.add_child(scan)
 
-	var stop_scan := UI.button("STOP")
+	var stop_scan := UI.button("Stop")
 	stop_scan.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stop_scan.pressed.connect(_stop_ble)
 	ble_buttons.add_child(stop_scan)
 
-	var apple := UI.make_card(
-		self,
-		"APPLE HARDWARE CAPABILITY",
-		"These are real runtime availability probes. NFC scanning and full AR sessions are not started by this screen."
-	)
+	var apple := UI.make_card(self, "APPLE CAPABILITIES")
 	_arkit = UI.value_row(apple, "ARKit", "checking…")
-	_lidar = UI.value_row(apple, "LiDAR mesh", "checking…")
-	_nfc = UI.value_row(apple, "NFC reader", "checking…")
+	_lidar = UI.value_row(apple, "LiDAR", "checking…")
+	_nfc = UI.value_row(apple, "NFC", "checking…")
 
-	# Adding the service now makes its immediate availability signal safe.
 	add_child(_service)
 	call_deferred("_refresh_capability_probes")
 
 
 func _request_and_start_location() -> void:
 	if not _service.is_available():
-		_bridge_status.text = "IOSLab unavailable in this build"
+		_bridge_status.text = "bridge unavailable"
 		return
 	_service.request_location()
 	_service.start_location()
@@ -147,17 +132,14 @@ func _stop_ble() -> void:
 
 func _open_apple_maps() -> void:
 	if not _have_location:
-		_auth_status.text = "need a GPS fix first"
+		_auth_status.text = "need GPS fix"
 		return
-	var url := "https://maps.apple.com/?ll=%.7f,%.7f&q=Current%%20Location" % [
-		_last_latitude,
-		_last_longitude
-	]
+	var url := "https://maps.apple.com/?ll=%.7f,%.7f&q=Current%%20Location" % [_last_latitude, _last_longitude]
 	OS.shell_open(url)
 
 
 func _on_availability_changed(available: bool) -> void:
-	_bridge_status.text = "IOSLab native bridge ready" if available else "not available on this platform"
+	_bridge_status.text = "ready" if available else "unavailable"
 
 
 func _on_authorization_changed(status: int) -> void:
@@ -169,8 +151,8 @@ func _on_location_updated(latitude: float, longitude: float, accuracy: float, al
 	_last_longitude = longitude
 	_have_location = true
 
-	_latitude.text = "%.7f°" % latitude
-	_longitude.text = "%.7f°" % longitude
+	_latitude.text = "%.6f°" % latitude
+	_longitude.text = "%.6f°" % longitude
 	_accuracy.text = "± %.1f m" % accuracy
 	_altitude.text = "%.1f m" % altitude
 	_speed.text = "%.2f m/s" % maxf(speed, 0.0)
@@ -182,20 +164,12 @@ func _on_ble_state_changed(state: int) -> void:
 
 
 func _on_ble_device_found(name: String, uuid: String, rssi: int) -> void:
-	var key := uuid
-	_ble_seen[key] = {
+	_ble_seen[uuid] = {
 		"name": name if not name.is_empty() else "unnamed",
 		"rssi": rssi,
 	}
-
-	var lines: Array[String] = []
-	for device_uuid in _ble_seen.keys():
-		var info: Dictionary = _ble_seen[device_uuid]
-		lines.append("%s · %d dBm" % [str(info.get("name", "unnamed")), int(info.get("rssi", 0))])
-		if lines.size() >= 8:
-			break
-
-	_ble_devices.text = "\n".join(lines)
+	var label := name if not name.is_empty() else "unnamed"
+	_ble_devices.text = "%d seen · %s · %d dBm" % [_ble_seen.size(), label, rssi]
 
 
 func _refresh_capability_probes() -> void:
@@ -207,7 +181,7 @@ func _refresh_capability_probes() -> void:
 
 	_arkit.text = "supported" if _service.is_arkit_supported() else "not supported"
 	_lidar.text = "supported" if _service.is_lidar_supported() else "not supported"
-	_nfc.text = "reader available" if _service.is_nfc_available() else "not available"
+	_nfc.text = "available" if _service.is_nfc_available() else "not available"
 
 
 func _authorization_name(status: int) -> String:
@@ -219,9 +193,9 @@ func _authorization_name(status: int) -> String:
 		2:
 			return "denied"
 		3:
-			return "authorized always"
+			return "always"
 		4:
-			return "authorized when in use"
+			return "while using"
 		_:
 			return "status %d" % status
 
@@ -237,8 +211,8 @@ func _ble_state_name(state: int) -> String:
 		3:
 			return "unauthorized"
 		4:
-			return "powered off"
+			return "off"
 		5:
-			return "powered on"
+			return "on"
 		_:
 			return "state %d" % state

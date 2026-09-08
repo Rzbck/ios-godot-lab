@@ -363,6 +363,14 @@ func _device_snapshot() -> Dictionary:
 
 
 func _camera_snapshot() -> Dictionary:
+	var monitoring := CameraServer.monitoring_feeds
+	if not monitoring:
+		return {
+			"monitoring_feeds": false,
+			"feed_count": 0,
+			"feeds": [],
+		}
+
 	var metadata: Array = []
 	for raw_feed in CameraServer.feeds():
 		var feed := raw_feed as CameraFeed
@@ -378,7 +386,7 @@ func _camera_snapshot() -> Dictionary:
 			"transform": str(feed.get_transform()),
 		})
 	return {
-		"monitoring_feeds": CameraServer.monitoring_feeds,
+		"monitoring_feeds": true,
 		"feed_count": metadata.size(),
 		"feeds": metadata,
 	}

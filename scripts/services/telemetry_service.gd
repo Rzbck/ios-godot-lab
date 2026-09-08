@@ -55,6 +55,7 @@ var _last_location: Dictionary = {
 }
 var _ble_state := -1
 var _last_ble_device: Dictionary = {}
+var _camera_inventory_signature := ""
 
 
 func _ready() -> void:
@@ -73,6 +74,10 @@ func _ready() -> void:
 		_connect_native_signals()
 	else:
 		_native = null
+
+	if not CameraServer.camera_feeds_updated.is_connected(_on_camera_feeds_updated):
+		CameraServer.camera_feeds_updated.connect(_on_camera_feeds_updated)
+	_camera_inventory_signature = JSON.stringify(_camera_snapshot().get("feeds", []))
 
 	set_process(true)
 	set_process_input(true)
@@ -177,6 +182,7 @@ func get_live_state() -> Dictionary:
 			"state": _ble_state,
 			"last_device": _last_ble_device.duplicate(true),
 		},
+		"camera": _camera_snapshot(),
 		"capabilities": _capability_snapshot(),
 		"telemetry": {
 			"requested_mode": _requested_mode,
@@ -311,7 +317,7 @@ func _send_payload(payload: Dictionary) -> void:
 func _snapshot_payload() -> Dictionary:
 	var payload := _base_payload("snapshot")
 	var live := get_live_state()
-	for key in ["app", "device", "sensors", "touch", "location", "track", "bluetooth", "capabilities", "telemetry"]:
+	for key in ["app", "device", "sensors", "touch", "location", "track", "bluetooth", "camera", "capabilities", "telemetry"]:
 		payload[key] = live.get(key, {})
 	return payload
 
@@ -354,6 +360,28 @@ func _device_snapshot() -> Dictionary:
 		result["battery_state"] = int(_native.call("get_battery_state"))
 
 	return result
+
+
+func _camera_snapshot() -> Dictionary:
+	var metadata: Array = []
+	for raw_feed in CameraServer.feeds():
+		var feed := raw_feed as CameraFeed
+		if feed == null:
+			continue
+		metadata.append({
+			"id": feed.get_id(),
+			"name": feed.get_name(),
+			"position": int(feed.get_position()),
+			"datatype": int(feed.get_datatype()),
+			"format_count": feed.get_formats().size(),
+			"active": feed.is_active(),
+			"transform": str(feed.get_transform()),
+		})
+	return {
+		"monitoring_feeds": CameraServer.monitoring_feeds,
+		"feed_count": metadata.size(),
+		"feeds": metadata,
+	}
 
 
 func _capability_snapshot() -> Dictionary:
@@ -429,6 +457,15 @@ func _on_native_ble_device(name: String, uuid: String, rssi: int) -> void:
 		"uuid": uuid,
 		"rssi": rssi,
 	}
+
+
+func _on_camera_feeds_updated() -> void:
+	var snapshot := _camera_snapshot()
+	var signature := JSON.stringify(snapshot.get("feeds", []))
+	if signature == _camera_inventory_signature:
+		return
+	_camera_inventory_signature = signature
+	record_event("camera_inventory", "CameraServer feed inventory changed", snapshot)
 
 
 func _connect_websocket() -> void:

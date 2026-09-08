@@ -59,8 +59,25 @@ func _build_shell() -> void:
 	shell.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	safe.add_child(shell)
 
+	_build_header(shell)
+
+	if _layout_mode == "tablet":
+		var body := HBoxContainer.new()
+		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		body.add_theme_constant_override("separation", 12)
+		body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		shell.add_child(body)
+		_build_navigation(body, true)
+		_build_page_scroll(body)
+	else:
+		_build_navigation(shell, false)
+		_build_page_scroll(shell)
+
+
+func _build_header(parent: Container) -> void:
 	var header_glass := UI.glass_panel()
-	shell.add_child(header_glass)
+	parent.add_child(header_glass)
 
 	var header_margin := MarginContainer.new()
 	header_margin.add_theme_constant_override("margin_left", 16)
@@ -103,9 +120,15 @@ func _build_shell() -> void:
 	], UI.MUTED)
 	right_stack.add_child(build_badge)
 
+
+func _build_navigation(parent: Container, vertical: bool) -> void:
 	var nav_glass := UI.glass_panel()
-	nav_glass.custom_minimum_size.y = 58
-	shell.add_child(nav_glass)
+	if vertical:
+		nav_glass.custom_minimum_size.x = 164
+		nav_glass.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	else:
+		nav_glass.custom_minimum_size.y = 58
+	parent.add_child(nav_glass)
 
 	var nav_margin := MarginContainer.new()
 	nav_margin.add_theme_constant_override("margin_left", 4)
@@ -115,25 +138,40 @@ func _build_shell() -> void:
 	nav_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	nav_glass.add_child(nav_margin)
 
-	var nav_scroll := ScrollContainer.new()
-	nav_scroll.custom_minimum_size.y = 50
-	nav_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	nav_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
-	nav_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	nav_scroll.scroll_deadzone = 5
-	nav_margin.add_child(nav_scroll)
+	if vertical:
+		var nav := VBoxContainer.new()
+		nav.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nav.add_theme_constant_override("separation", 6)
+		nav.mouse_filter = Control.MOUSE_FILTER_PASS
+		nav_margin.add_child(nav)
+		for page_name in PAGE_ORDER:
+			var button := UI.nav_button(page_name)
+			button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			button.pressed.connect(_show_page.bind(page_name))
+			_nav_buttons[page_name] = button
+			nav.add_child(button)
+	else:
+		var nav_scroll := ScrollContainer.new()
+		nav_scroll.custom_minimum_size.y = 50
+		nav_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nav_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+		nav_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		nav_scroll.scroll_deadzone = 5
+		nav_margin.add_child(nav_scroll)
 
-	var nav := HBoxContainer.new()
-	nav.add_theme_constant_override("separation", 5)
-	nav.mouse_filter = Control.MOUSE_FILTER_PASS
-	nav_scroll.add_child(nav)
+		var nav := HBoxContainer.new()
+		nav.add_theme_constant_override("separation", 5)
+		nav.mouse_filter = Control.MOUSE_FILTER_PASS
+		nav_scroll.add_child(nav)
 
-	for page_name in PAGE_ORDER:
-		var button := UI.nav_button(page_name)
-		button.pressed.connect(_show_page.bind(page_name))
-		_nav_buttons[page_name] = button
-		nav.add_child(button)
+		for page_name in PAGE_ORDER:
+			var button := UI.nav_button(page_name)
+			button.pressed.connect(_show_page.bind(page_name))
+			_nav_buttons[page_name] = button
+			nav.add_child(button)
 
+
+func _build_page_scroll(parent: Container) -> void:
 	_page_scroll = ScrollContainer.new()
 	_page_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_page_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -142,7 +180,7 @@ func _build_shell() -> void:
 	_page_scroll.scroll_deadzone = 4
 	_page_scroll.scroll_hint_mode = ScrollContainer.SCROLL_HINT_MODE_BOTTOM_AND_RIGHT
 	_page_scroll.follow_focus = true
-	shell.add_child(_page_scroll)
+	parent.add_child(_page_scroll)
 
 	var page_margin := MarginContainer.new()
 	page_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL

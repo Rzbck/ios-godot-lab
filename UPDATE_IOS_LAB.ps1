@@ -5,6 +5,8 @@ param(
     [switch]$SkipGitUpdate,
     [switch]$NoAutoBuild,
     [int]$BuildTimeoutMinutes = 30,
+    [ValidateRange(0, 50)]
+    [int]$KeepLocalArtifacts = 2,
     [switch]$OpenFolder
 )
 
@@ -138,6 +140,149 @@ function Wait-ForExactIosBuild {
     throw "Timed out after $TimeoutMinutes minute(s) waiting for an iOS build for exact SHA $CommitSha."
 }
 
+function Test-ArtifactDirectory {
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][string]$ExpectedSha
+    )
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        return $false
+    }
+
+    $ipaFiles = @(Get-ChildItem -LiteralPath $Directory -Filter '*.ipa' -File -ErrorAction SilentlyContinue)
+    $hashFiles = @(Get-ChildItem -LiteralPath $Directory -Filter '*.ipa.sha256' -File -ErrorAction SilentlyContinue)
+    $metaFiles = @(Get-ChildItem -LiteralPath $Directory -Filter 'BUILD-METADATA.json' -File -ErrorAction SilentlyContinue)
+
+    if ($ipaFiles.Count -ne 1 -or $hashFiles.Count -ne 1 -or $metaFiles.Count -ne 1) {
+        return $false
+    }
+
+    try {
+        $expectedLine = (Get-Content -LiteralPath $hashFiles[0].FullName -TotalCount 1).Trim()
+        if ($expectedLine -notmatch '^([0-9a-fA-F]{64})\b') {
+            return $false
+        }
+
+        $expectedHash = $Matches[1].ToLowerInvariant()
+        $actualHash = (Get-FileHash -LiteralPath $ipaFiles[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($expectedHash -ne $actualHash) {
+            return $false
+        }
+
+        $metadata = Get-Content -LiteralPath $metaFiles[0].FullName -Raw | ConvertFrom-Json
+        if ([string]$metadata.sha -ne $ExpectedSha) {
+            return $false
+        }
+    }
+    catch {
+        return $false
+    }
+
+    return $true
+}
+
+function Get-VerifiedBranchArtifactRecords {
+    param(
+        [Parameter(Mandatory)][string]$ArtifactRoot,
+        [Parameter(Mandatory)][string]$BranchName
+    )
+
+    if (-not (Test-Path -LiteralPath $ArtifactRoot -PathType Container)) {
+        return @()
+    }
+
+    $branchRef = "refs/heads/$BranchName"
+    $records = @()
+
+    foreach ($directory in @(Get-ChildItem -LiteralPath $ArtifactRoot -Directory -ErrorAction SilentlyContinue)) {
+        if ($directory.Name -notmatch '^[0-9a-fA-F]{12}$') {
+            continue
+        }
+
+        $metaFile = Join-Path $directory.FullName 'BUILD-METADATA.json'
+        if (-not (Test-Path -LiteralPath $metaFile -PathType Leaf)) {
+            continue
+        }
+
+        try {
+            $metadata = Get-Content -LiteralPath $metaFile -Raw | ConvertFrom-Json
+            $sha = [string]$metadata.sha
+            $ref = [string]$metadata.ref
+
+            if ($ref -ne $branchRef) {
+                continue
+            }
+            if ($sha -notmatch '^[0-9a-fA-F]{40}$') {
+                continue
+            }
+            if ($sha.Substring(0, 12) -ine $directory.Name) {
+                continue
+            }
+            if (-not (Test-ArtifactDirectory -Directory $directory.FullName -ExpectedSha $sha)) {
+                continue
+            }
+
+            $records += [pscustomobject]@{
+                Directory = $directory.FullName
+                Sha = $sha
+                LastWriteTimeUtc = $directory.LastWriteTimeUtc
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    return @($records)
+}
+
+function Prune-OldBranchArtifacts {
+    param(
+        [Parameter(Mandatory)][string]$ArtifactRoot,
+        [Parameter(Mandatory)][string]$BranchName,
+        [Parameter(Mandatory)][string]$CurrentDirectory,
+        [Parameter(Mandatory)][int]$KeepCount
+    )
+
+    if ($KeepCount -le 0) {
+        Write-Host 'LOCAL CACHE = pruning disabled' -ForegroundColor DarkGray
+        return
+    }
+
+    $records = @(Get-VerifiedBranchArtifactRecords -ArtifactRoot $ArtifactRoot -BranchName $BranchName)
+    if ($records.Count -le $KeepCount) {
+        Write-Host ("LOCAL CACHE = {0}/{1} verified artifact(s) for branch" -f $records.Count, $KeepCount) -ForegroundColor DarkGray
+        return
+    }
+
+    $currentFull = [System.IO.Path]::GetFullPath($CurrentDirectory).TrimEnd('\', '/')
+    $keep = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    [void]$keep.Add($currentFull)
+
+    $otherRecords = @($records |
+        Where-Object { [System.IO.Path]::GetFullPath($_.Directory).TrimEnd('\', '/') -ne $currentFull } |
+        Sort-Object LastWriteTimeUtc -Descending)
+
+    $slots = [Math]::Max($KeepCount - 1, 0)
+    foreach ($record in @($otherRecords | Select-Object -First $slots)) {
+        [void]$keep.Add([System.IO.Path]::GetFullPath($record.Directory).TrimEnd('\', '/'))
+    }
+
+    foreach ($record in $records) {
+        $full = [System.IO.Path]::GetFullPath($record.Directory).TrimEnd('\', '/')
+        if ($keep.Contains($full)) {
+            continue
+        }
+
+        Write-Host "PRUNE       = $($record.Directory)" -ForegroundColor DarkYellow
+        Remove-Item -LiteralPath $record.Directory -Recurse -Force
+    }
+
+    $remaining = @(Get-VerifiedBranchArtifactRecords -ArtifactRoot $ArtifactRoot -BranchName $BranchName)
+    Write-Host ("LOCAL CACHE = {0}/{1} verified artifact(s) kept for branch" -f $remaining.Count, $KeepCount) -ForegroundColor Green
+}
+
 Write-Host "`n=== IOS LAB UPDATE + EXACT IPA SYNC ===" -ForegroundColor Cyan
 
 if ($BuildTimeoutMinutes -lt 1 -or $BuildTimeoutMinutes -gt 120) {
@@ -227,41 +372,7 @@ $finalDir = Join-Path $artifactRoot $shortSha
 
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 
-function Test-ExistingArtifact {
-    param([string]$Directory)
-
-    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
-        return $false
-    }
-
-    $ipaFiles = @(Get-ChildItem -LiteralPath $Directory -Filter '*.ipa' -File -ErrorAction SilentlyContinue)
-    $hashFiles = @(Get-ChildItem -LiteralPath $Directory -Filter '*.ipa.sha256' -File -ErrorAction SilentlyContinue)
-    $metaFiles = @(Get-ChildItem -LiteralPath $Directory -Filter 'BUILD-METADATA.json' -File -ErrorAction SilentlyContinue)
-
-    if ($ipaFiles.Count -ne 1 -or $hashFiles.Count -ne 1 -or $metaFiles.Count -ne 1) {
-        return $false
-    }
-
-    $expectedLine = (Get-Content -LiteralPath $hashFiles[0].FullName -TotalCount 1).Trim()
-    if ($expectedLine -notmatch '^([0-9a-fA-F]{64})\b') {
-        return $false
-    }
-
-    $expectedHash = $Matches[1].ToLowerInvariant()
-    $actualHash = (Get-FileHash -LiteralPath $ipaFiles[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($expectedHash -ne $actualHash) {
-        return $false
-    }
-
-    $metadata = Get-Content -LiteralPath $metaFiles[0].FullName -Raw | ConvertFrom-Json
-    if ([string]$metadata.sha -ne $head) {
-        return $false
-    }
-
-    return $true
-}
-
-if (Test-ExistingArtifact -Directory $finalDir) {
+if (Test-ArtifactDirectory -Directory $finalDir -ExpectedSha $head) {
     Write-Host "`nExact artifact already present and hash-verified." -ForegroundColor Green
 }
 else {
@@ -339,6 +450,7 @@ $latest = [ordered]@{
     ipa = $ipa[0].FullName
     ipa_sha256 = $ipaHash
     synced_at = (Get-Date).ToString('o')
+    keep_local_artifacts = $KeepLocalArtifacts
 }
 
 $latestJson = Join-Path $artifactRoot 'LATEST.json'
@@ -346,11 +458,18 @@ $latestTxt = Join-Path $artifactRoot 'LATEST_IPA.txt'
 $latest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $latestJson -Encoding UTF8
 $ipa[0].FullName | Set-Content -LiteralPath $latestTxt -Encoding UTF8
 
+Prune-OldBranchArtifacts `
+    -ArtifactRoot $artifactRoot `
+    -BranchName $branch `
+    -CurrentDirectory $finalDir `
+    -KeepCount $KeepLocalArtifacts
+
 Write-Host "`n=== READY FOR ILOADER ===" -ForegroundColor Green
 Write-Host "SHA         = $head"
 Write-Host "RUN         = $runId"
 Write-Host "IPA         = $($ipa[0].FullName)"
 Write-Host "SHA-256     = $ipaHash"
+Write-Host "LOCAL KEEP  = $KeepLocalArtifacts verified artifact(s) for this branch"
 Write-Host "LATEST JSON = $latestJson"
 
 if ($OpenFolder) {

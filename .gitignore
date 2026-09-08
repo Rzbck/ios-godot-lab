@@ -9,6 +9,9 @@ artifacts/
 *.ipa
 *.xcarchive
 
+# Generated visual assets (recreated deterministically by CI)
+assets/generated/
+
 # Local live telemetry sessions
 telemetry-sessions/
 

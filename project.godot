@@ -6,7 +6,7 @@ config_version=5
 
 config/name="iOS Godot Lab"
 config/description="Personal iPhone capability laboratory built with Godot."
-config/version="0.4.0-dev"
+config/version="0.5.0-dev"
 config/icon="res://assets/icon.svg"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7")

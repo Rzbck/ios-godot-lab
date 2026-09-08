@@ -102,7 +102,6 @@ func _ready() -> void:
 
 	set_process(true)
 	_refresh_system_info()
-	_refresh_camera_feeds(-1, true)
 
 
 func _build_camera_card() -> void:
@@ -321,6 +320,11 @@ func _start_camera() -> void:
 
 
 func _refresh_camera_feeds(preferred_id: int = -1, force_ui: bool = false) -> void:
+	if not CameraServer.monitoring_feeds:
+		_camera_feeds.clear()
+		_camera_inventory_signature = ""
+		return
+
 	var feeds := CameraServer.feeds()
 	var fresh_feeds: Array[CameraFeed] = []
 	var metadata: Array = []
@@ -383,7 +387,7 @@ func _refresh_camera_feeds(preferred_id: int = -1, force_ui: bool = false) -> vo
 
 
 func _on_camera_feeds_updated() -> void:
-	if not CameraServer.monitoring_feeds and _active_feed == null:
+	if not CameraServer.monitoring_feeds:
 		return
 	_refresh_camera_feeds(_camera_requested_feed_id, false)
 
@@ -493,9 +497,10 @@ func _feed_flip_y() -> bool:
 
 func _camera_debug_snapshot() -> Dictionary:
 	var viewport := get_viewport_rect().size
+	var monitoring := CameraServer.monitoring_feeds
 	return {
-		"monitoring_feeds": CameraServer.monitoring_feeds,
-		"godot_feed_count": CameraServer.get_feed_count(),
+		"monitoring_feeds": monitoring,
+		"godot_feed_count": CameraServer.get_feed_count() if monitoring else 0,
 		"cached_feed_count": _camera_feeds.size(),
 		"selected_feed_id": _camera_requested_feed_id,
 		"active_feed_id": _active_feed.get_id() if _active_feed != null else -1,

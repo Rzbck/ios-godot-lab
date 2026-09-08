@@ -29,13 +29,14 @@ var _http_url: LineEdit
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	custom_minimum_size.x = 0
 	add_theme_constant_override("separation", 14)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	UI.section_title(
 		self,
 		"Live Output",
-		"Route real iPhone data continuously to creative tools, servers or recorders. No manual message typing is required."
+		"Send live iPhone data to TouchDesigner, OSC, UDP, WebSocket or HTTP."
 	)
 
 	_router = get_tree().get_first_node_in_group("ios_lab_router")
@@ -59,25 +60,16 @@ func _ready() -> void:
 func _build_stream_card() -> void:
 	var card := UI.make_card(
 		self,
-		"LIVE DATA ROUTER",
-		"Choose a data profile and sample rate. Enabled outputs run at the same time, so one iPhone can feed TouchDesigner, OSC and a recorder simultaneously."
+		"LIVE DATA",
+		"Choose what to send and how often. Several outputs can run at the same time."
 	)
 
-	_profile = UI.option_button([
-		"All · full device snapshot",
-		"Motion · accelerometer / gravity / gyro / magnetometer",
-		"Location · GPS + track metrics",
-		"Touch · touch / drag",
-		"Device · battery / BLE / capabilities",
-	])
+	card.add_child(_field_label("DATA PROFILE"))
+	_profile = UI.option_button(["All", "Motion", "Location", "Touch", "Device"])
 	card.add_child(_profile)
 
-	_rate = UI.option_button([
-		"1 Hz",
-		"5 Hz",
-		"10 Hz",
-		"30 Hz · motion / realtime",
-	])
+	card.add_child(_field_label("SAMPLE RATE"))
+	_rate = UI.option_button(["1 Hz", "5 Hz", "10 Hz", "30 Hz"])
 	_rate.select(2)
 	card.add_child(_rate)
 
@@ -93,53 +85,55 @@ func _build_stream_card() -> void:
 func _build_ws_card() -> void:
 	var card := UI.make_card(
 		self,
-		"WEBSOCKET / WSS",
-		"Continuous JSON stream. Ideal for a custom server, TouchDesigner WebSocket DAT or a Tailscale peer."
+		"WEBSOCKET",
+		"Continuous JSON stream. Use a WebSocket server, not the PowerShell telemetry receiver unless that is the destination you want."
 	)
-	_ws_enabled = _switch("Enable WebSocket")
+	_ws_enabled = _switch("WebSocket / WSS")
 	card.add_child(_ws_enabled)
-	_ws_url = UI.line_edit("100.x.x.x:9001 or wss://host/path")
+	card.add_child(_field_label("SERVER URL"))
+	_ws_url = UI.line_edit("100.x.x.x:9001")
+	_ws_url.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_URL
 	card.add_child(_ws_url)
 
 
 func _build_udp_card() -> void:
 	var card := UI.make_card(
 		self,
-		"UDP · JSON",
-		"One UTF-8 JSON datagram per sample. Low overhead and simple to receive in TouchDesigner, Python or another realtime process."
+		"UDP JSON",
+		"One UTF-8 JSON datagram per sample. This is the simplest TouchDesigner test."
 	)
-	_udp_enabled = _switch("Enable UDP JSON")
+	_udp_enabled = _switch("UDP JSON")
 	card.add_child(_udp_enabled)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	card.add_child(row)
+
+	card.add_child(_field_label("DESTINATION HOST"))
 	_udp_host = UI.line_edit("100.x.x.x")
-	_udp_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(_udp_host)
+	card.add_child(_udp_host)
+
+	card.add_child(_field_label("PORT"))
 	_udp_port = UI.line_edit("7000")
-	_udp_port.custom_minimum_size.x = 90
-	row.add_child(_udp_port)
+	_udp_port.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER
+	card.add_child(_udp_port)
 
 
 func _build_osc_card() -> void:
 	var card := UI.make_card(
 		self,
 		"OSC",
-		"Sends the selected live JSON snapshot as one OSC string at <prefix>/json. This is easy to parse in TouchDesigner or another OSC receiver."
+		"Sends the selected snapshot as one OSC string at <prefix>/json."
 	)
-	_osc_enabled = _switch("Enable OSC")
+	_osc_enabled = _switch("OSC")
 	card.add_child(_osc_enabled)
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	card.add_child(row)
+	card.add_child(_field_label("DESTINATION HOST"))
 	_osc_host = UI.line_edit("100.x.x.x")
-	_osc_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(_osc_host)
-	_osc_port = UI.line_edit("7001")
-	_osc_port.custom_minimum_size.x = 90
-	row.add_child(_osc_port)
+	card.add_child(_osc_host)
 
+	card.add_child(_field_label("PORT"))
+	_osc_port = UI.line_edit("7001")
+	_osc_port.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_NUMBER
+	card.add_child(_osc_port)
+
+	card.add_child(_field_label("OSC PREFIX"))
 	_osc_prefix = UI.line_edit("/ioslab")
 	card.add_child(_osc_prefix)
 
@@ -147,33 +141,41 @@ func _build_osc_card() -> void:
 func _build_http_card() -> void:
 	var card := UI.make_card(
 		self,
-		"HTTP / HTTPS",
-		"POST the selected live snapshot as JSON. Best for APIs and recorders that do not expose WebSocket or UDP."
+		"HTTP POST",
+		"POST the selected live snapshot as JSON to an API or recorder."
 	)
-	_http_enabled = _switch("Enable HTTP POST")
+	_http_enabled = _switch("HTTP / HTTPS")
 	card.add_child(_http_enabled)
-	_http_url = UI.line_edit("https://host/api/iphone or http://100.x.x.x:9002/data")
+	card.add_child(_field_label("ENDPOINT"))
+	_http_url = UI.line_edit("http://100.x.x.x:9002/data")
+	_http_url.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_URL
 	card.add_child(_http_url)
 
 
 func _build_format_card() -> void:
 	var card := UI.make_card(
 		self,
-		"DATA FORMAT",
-		"WebSocket, UDP and HTTP send ioslab.live.v1 JSON. OSC sends the same JSON as one string message at <prefix>/json."
+		"FORMAT",
+		"Schema: ioslab.live.v1. All includes motion, touch, GPS, track, device, Bluetooth, capabilities and camera diagnostics."
 	)
 	card.add_child(UI.label(
-		"Profiles are only filters; the source is the same canonical live state used by telemetry. GPS track metrics include distance, elevation gain/loss, duration, moving time, average speed and max speed.",
+		"Motion = accelerometer, gravity, gyroscope and magnetometer. Location = GPS plus distance, elevation, duration and speed metrics.",
 		13,
 		UI.MUTED
 	))
 
 
+func _field_label(text_value: String) -> Label:
+	return UI.single_line_label(text_value, 11, UI.MUTED)
+
+
 func _switch(text_value: String) -> CheckButton:
 	var node := CheckButton.new()
 	node.text = text_value
-	node.custom_minimum_size.y = 44
-	node.add_theme_font_size_override("font_size", 15)
+	node.clip_text = true
+	node.custom_minimum_size = Vector2(0, 48)
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	node.add_theme_font_size_override("font_size", 16)
 	node.add_theme_color_override("font_color", UI.TEXT)
 	node.add_theme_color_override("font_pressed_color", UI.ACCENT)
 	node.mouse_filter = Control.MOUSE_FILTER_PASS

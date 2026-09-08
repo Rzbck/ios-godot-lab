@@ -75,8 +75,10 @@ Ne plus transmettre les IPA à l'utilisateur sous forme de lien GitHub Actions �
 
 - GitHub Actions reste la source des artifacts de build ; les `.ipa` ne sont pas commités dans Git.
 - Le poste Windows récupère l'IPA exact-SHA via `UPDATE_IOS_LAB.ps1` et GitHub CLI.
-- Le script exige un worktree CLEAN, fait seulement un fast-forward strict de la branche courante, cherche un build iOS `success` pour le HEAD exact, télécharge l'artifact, vérifie `BUILD-METADATA.json` et le SHA-256, puis range le résultat dans le dossier local `artifacts/<sha-court>/`.
-- Si le HEAD exact n'a pas de build iOS réussi, STOP : ne jamais prendre silencieusement un autre artifact.
+- Le script exige un worktree CLEAN, fait seulement un fast-forward strict de la branche courante et cherche un build iOS `success` pour le HEAD exact.
+- Si aucun build exact n'existe encore, le script déclenche lui-même le workflow iOS sur cette branche et attend sa fin.
+- Si le build exact réussit, le script télécharge uniquement l'artifact de ce SHA, vérifie `BUILD-METADATA.json` et le SHA-256, puis range le résultat dans le dossier local `artifacts/<sha-court>/`.
+- Si le build exact échoue/est annulé/time out, STOP : ne jamais prendre silencieusement un artifact d'un autre SHA.
 
 ## 6. But permanent
 
@@ -86,4 +88,4 @@ La solution de sideload retenue au bootstrap est **SideStore** pour son rafraîc
 
 ## 7. Raccourci mental
 
-`HANDOFF -> HEADs -> latest activity -> règles -> état -> worktree exact -> changement minimal -> CI exact-SHA -> UPDATE_IOS_LAB.ps1 -> IPA exact local -> test iPhone -> classification -> publication humaine`
+`HANDOFF -> HEADs -> latest activity -> règles -> état -> worktree exact -> changement minimal -> UPDATE_IOS_LAB.ps1 -> build CI exact-SHA si nécessaire -> IPA exact local -> test iPhone -> classification -> publication humaine`

@@ -69,6 +69,15 @@ Ne jamais fournir `if { ... }`, puis `elseif { ... }`, puis `else { ... }` comme
 
 Après toute erreur dans un gros collage, vérifier l'état réel avant de « relancer tout » : certaines instructions suivantes peuvent quand même avoir été exécutées. Voir `docs/POWERSHELL_WORKTREE_WORKFLOW.md` pour les règles détaillées.
 
+### Invariant artifacts iOS
+
+Ne plus transmettre les IPA à l'utilisateur sous forme de lien GitHub Actions à cliquer.
+
+- GitHub Actions reste la source des artifacts de build ; les `.ipa` ne sont pas commités dans Git.
+- Le poste Windows récupère l'IPA exact-SHA via `UPDATE_IOS_LAB.ps1` et GitHub CLI.
+- Le script exige un worktree CLEAN, fait seulement un fast-forward strict de la branche courante, cherche un build iOS `success` pour le HEAD exact, télécharge l'artifact, vérifie `BUILD-METADATA.json` et le SHA-256, puis range le résultat dans le dossier local `artifacts/<sha-court>/`.
+- Si le HEAD exact n'a pas de build iOS réussi, STOP : ne jamais prendre silencieusement un autre artifact.
+
 ## 6. But permanent
 
 Développer depuis Windows des applications iPhone avec Godot, compiler sur un runner macOS GitHub Actions standard d'un repository public, produire un IPA testable et l'installer sur un iPhone personnel avec une chaîne gratuite quand Apple le permet.
@@ -77,4 +86,4 @@ La solution de sideload retenue au bootstrap est **SideStore** pour son rafraîc
 
 ## 7. Raccourci mental
 
-`HANDOFF -> HEADs -> latest activity -> règles -> état -> worktree exact -> changement minimal -> CI exact-SHA -> IPA exact -> test iPhone -> classification -> publication humaine`
+`HANDOFF -> HEADs -> latest activity -> règles -> état -> worktree exact -> changement minimal -> CI exact-SHA -> UPDATE_IOS_LAB.ps1 -> IPA exact local -> test iPhone -> classification -> publication humaine`

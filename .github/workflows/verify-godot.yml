@@ -75,17 +75,23 @@ jobs:
           fi
           grep -F 'SMOKE_PASS: project parsed and main scene instantiated' "$LOG"
 
-      - name: Parse PowerShell telemetry receiver
+      - name: Parse PowerShell helper scripts
         shell: bash
         run: |
           set -euo pipefail
           pwsh -NoProfile -Command '
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("./tools/Receive-IOSLabTelemetry.ps1", [ref]$tokens, [ref]$errors) | Out-Null
-          if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error $_.Message }
-              exit 1
+          $files = @(
+              "./tools/Receive-IOSLabTelemetry.ps1",
+              "./UPDATE_IOS_LAB.ps1"
+          )
+          foreach ($file in $files) {
+              $tokens = $null
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$tokens, [ref]$errors) | Out-Null
+              if ($errors.Count -gt 0) {
+                  $errors | ForEach-Object { Write-Error ("{0}: {1}" -f $file, $_.Message) }
+                  exit 1
+              }
+              Write-Host ("POWERSHELL_PARSE_PASS {0}" -f $file)
           }
-          Write-Host "POWERSHELL_PARSE_PASS"
           '

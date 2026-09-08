@@ -1,12 +1,13 @@
 extends RefCounted
 
-# iOS Lab visual system.
-# The app uses a 390x844 logical iPhone viewport, so these values are treated
-# like point-sized UI measurements rather than desktop pixels.
+# iOS Lab visual system. The app uses a 390x844 logical iPhone canvas.
+# Live values must never change the vertical geometry of a page: dynamic labels
+# are single-line, clipped and ellipsized so sensor/network updates cannot make
+# cards jump between one and two lines.
 const BG := Color("000202")
 const SURFACE := Color("080c0f")
 const SURFACE_ALT := Color("05080a")
-const GLASS := Color(0.035, 0.050, 0.058, 0.90)
+const GLASS := Color(0.035, 0.050, 0.058, 0.92)
 const BORDER := Color("1d2a30")
 const BORDER_SOFT := Color("11191d")
 const TEXT := Color("f4f7f8")
@@ -37,6 +38,9 @@ static func label(text_value: String, size: int = BODY_SIZE, color: Color = TEXT
 static func single_line_label(text_value: String, size: int = BODY_SIZE, color: Color = TEXT) -> Label:
 	var node := label(text_value, size, color)
 	node.autowrap_mode = TextServer.AUTOWRAP_OFF
+	node.clip_text = true
+	node.max_lines_visible = 1
+	node.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	return node
 
 
@@ -65,6 +69,12 @@ static func badge(text_value: String, color: Color = ACCENT) -> PanelContainer:
 	text.name = "Text"
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	panel.add_child(text)
+	return panel
+
+
+static func status_pill(text_value: String, color: Color = GOOD) -> PanelContainer:
+	var panel := badge(text_value, color)
+	panel.custom_minimum_size = Vector2(0, 32)
 	return panel
 
 
@@ -97,11 +107,11 @@ static func glass_panel(radius: int = 20) -> PanelContainer:
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var style := StyleBoxFlat.new()
 	style.bg_color = GLASS
-	style.border_color = Color("1d2a30")
+	style.border_color = BORDER
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(radius)
-	style.shadow_color = Color(0, 0, 0, 0.18)
-	style.shadow_size = 3
+	style.shadow_color = Color(0, 0, 0, 0.16)
+	style.shadow_size = 2
 	panel.add_theme_stylebox_override("panel", style)
 	return panel
 
@@ -112,23 +122,23 @@ static func tab_button(text_value: String) -> Button:
 	node.toggle_mode = true
 	node.custom_minimum_size = Vector2(0, 56)
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	node.add_theme_font_size_override("font_size", 12)
+	node.add_theme_font_size_override("font_size", 11)
 	node.add_theme_color_override("font_color", MUTED)
-	node.add_theme_color_override("font_pressed_color", TEXT)
+	node.add_theme_color_override("font_pressed_color", ACCENT)
 	node.focus_mode = Control.FOCUS_NONE
-	node.mouse_filter = Control.MOUSE_FILTER_PASS
+	node.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = Color(0, 0, 0, 0)
 	normal.border_color = Color(0, 0, 0, 0)
 	normal.set_border_width_all(0)
-	normal.set_corner_radius_all(16)
+	normal.set_corner_radius_all(15)
 	node.add_theme_stylebox_override("normal", normal)
 	node.add_theme_stylebox_override("hover", normal)
 
 	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color(ACCENT, 0.10)
-	pressed.border_color = Color(ACCENT, 0.24)
+	pressed.bg_color = Color(ACCENT, 0.09)
+	pressed.border_color = Color(ACCENT, 0.20)
 	pressed.set_border_width_all(1)
 	node.add_theme_stylebox_override("pressed", pressed)
 	node.add_theme_stylebox_override("hover_pressed", pressed)
@@ -143,9 +153,9 @@ static func side_nav_button(text_value: String) -> Button:
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.add_theme_font_size_override("font_size", 15)
 	node.add_theme_color_override("font_color", MUTED)
-	node.add_theme_color_override("font_pressed_color", TEXT)
+	node.add_theme_color_override("font_pressed_color", ACCENT)
 	node.focus_mode = Control.FOCUS_NONE
-	node.mouse_filter = Control.MOUSE_FILTER_PASS
+	node.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = Color(0, 0, 0, 0)
@@ -158,15 +168,14 @@ static func side_nav_button(text_value: String) -> Button:
 	node.add_theme_stylebox_override("hover", normal)
 
 	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color(ACCENT, 0.10)
-	pressed.border_color = Color(ACCENT, 0.22)
+	pressed.bg_color = Color(ACCENT, 0.09)
+	pressed.border_color = Color(ACCENT, 0.20)
 	pressed.set_border_width_all(1)
 	node.add_theme_stylebox_override("pressed", pressed)
 	node.add_theme_stylebox_override("hover_pressed", pressed)
 	return node
 
 
-# Compatibility helper for older page code.
 static func nav_button(text_value: String) -> Button:
 	return side_nav_button(text_value)
 
@@ -179,7 +188,6 @@ static func set_nav_active(node: Button, active: bool) -> void:
 static func make_card(parent: Container, title_text: String, description: String = "") -> VBoxContainer:
 	var panel := PanelContainer.new()
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	# Content surfaces never swallow the parent vertical scroll gesture.
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var style := StyleBoxFlat.new()
@@ -200,7 +208,7 @@ static func make_card(parent: Container, title_text: String, description: String
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(content)
 
-	var title := label(title_text, 16, TEXT)
+	var title := single_line_label(title_text, 16, TEXT)
 	content.add_child(title)
 
 	if not description.is_empty():
@@ -212,6 +220,7 @@ static func make_card(parent: Container, title_text: String, description: String
 static func value_row(parent: Container, key: String, value: String = "—") -> Label:
 	var row := HBoxContainer.new()
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.custom_minimum_size.y = 30
 	row.add_theme_constant_override("separation", 10)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(row)
@@ -221,7 +230,7 @@ static func value_row(parent: Container, key: String, value: String = "—") -> 
 	key_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(key_label)
 
-	var value_label := label(value, 15, TEXT)
+	var value_label := single_line_label(value, 14, TEXT)
 	value_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -236,12 +245,11 @@ static func button(text_value: String, accent: bool = false) -> Button:
 	node.add_theme_font_size_override("font_size", CONTROL_SIZE)
 	node.add_theme_color_override("font_color", TEXT)
 	node.focus_mode = Control.FOCUS_ALL
-	# PASS lets ScrollContainer keep receiving a drag that begins on a control.
 	node.mouse_filter = Control.MOUSE_FILTER_PASS
 
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = Color("0b1114") if not accent else Color(ACCENT, 0.11)
-	normal.border_color = BORDER if not accent else Color(ACCENT, 0.48)
+	normal.border_color = BORDER if not accent else Color(ACCENT, 0.46)
 	normal.set_border_width_all(1)
 	normal.set_corner_radius_all(14)
 	node.add_theme_stylebox_override("normal", normal)
@@ -319,7 +327,7 @@ static func terminal_log(min_height: float = 190.0) -> RichTextLabel:
 
 
 static func section_title(parent: Container, title_text: String, subtitle: String = "") -> void:
-	var title := label(title_text, 25, TEXT)
+	var title := single_line_label(title_text, 26, TEXT)
 	parent.add_child(title)
 	if not subtitle.is_empty():
 		parent.add_child(label(subtitle, 14, MUTED))

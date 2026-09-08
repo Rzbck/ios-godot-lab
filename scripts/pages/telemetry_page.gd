@@ -17,13 +17,13 @@ var _start_button: Button
 
 func _ready() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_theme_constant_override("separation", 12)
+	add_theme_constant_override("separation", 14)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	UI.section_title(
 		self,
 		"Live telemetry",
-		"Stream runtime diagnostics directly to PowerShell over your LAN or Tailscale. WebSocket is the default; HTTP POST remains available as a fallback."
+		"Stream runtime diagnostics directly to PowerShell over LAN or Tailscale. The PC receiver stores the full session to files while the console only prints meaningful changes, events and alerts."
 	)
 
 	_service = get_tree().get_first_node_in_group("ios_lab_telemetry")
@@ -50,7 +50,7 @@ func _build_connection_card() -> void:
 	var card := UI.make_card(
 		self,
 		"POWERSHELL BRIDGE",
-		"Enter the PC address that the iPhone can reach. For Tailscale this is normally the PC's 100.x.x.x address plus port 8787. Nothing is transmitted until you press START STREAM."
+		"Enter the PC address reachable by the iPhone. For Tailscale this is normally the PC 100.x.x.x address plus port 8787. Nothing is transmitted until START STREAM."
 	)
 
 	_transport = UI.option_button([
@@ -66,9 +66,9 @@ func _build_connection_card() -> void:
 
 	_rate = UI.option_button([
 		"1 Hz · low traffic",
-		"2 Hz",
-		"5 Hz · recommended",
-		"10 Hz · dense debug",
+		"2 Hz · normal",
+		"5 Hz · debug capture / filtered console",
+		"10 Hz · dense raw capture",
 	])
 	_rate.select(2)
 	card.add_child(_rate)
@@ -95,13 +95,13 @@ func _build_stats_card() -> void:
 	var card := UI.make_card(
 		self,
 		"LINK HEALTH",
-		"Every packet carries a sequence number. The PowerShell receiver sends an ACK so round-trip time and packet acknowledgement can be checked live."
+		"Every packet carries a sequence number. The receiver ACKs each packet so the app can show transport health without requiring the console to print every snapshot."
 	)
 	_sent = UI.value_row(card, "Sent", "0")
 	_acked = UI.value_row(card, "ACK", "0")
 	_rtt = UI.value_row(card, "Last RTT", "—")
 
-	_log = UI.terminal_log(180)
+	_log = UI.terminal_log(190)
 	_log.text = "telemetry log ready"
 	card.add_child(_log)
 
@@ -110,11 +110,11 @@ func _build_payload_card() -> void:
 	var card := UI.make_card(
 		self,
 		"PAYLOAD · ioslab.telemetry.v1",
-		"Snapshots include build identity, current page, FPS, touch events, accelerometer, gravity, gyroscope, magnetometer, latest GPS fix, BLE state, Apple capability probes, battery level and local IP addresses."
+		"Raw snapshots preserve build identity, page/FPS, touch, motion sensors, GPS, BLE, Apple capability probes, battery and network state. Device actions such as camera selection/configuration are emitted as events."
 	)
 	card.add_child(UI.label(
-		"Privacy: no Apple ID, UDID, pairing material, clipboard contents, camera frames or microphone audio are included. Telemetry goes only to the endpoint you enter.",
-		13,
+		"Privacy: no Apple ID, UDID, pairing material, clipboard contents, camera frames or microphone audio are transmitted. GPS is included only because this diagnostic app explicitly tests location.",
+		14,
 		UI.MUTED
 	))
 
@@ -122,8 +122,8 @@ func _build_payload_card() -> void:
 func _build_receiver_card() -> void:
 	var card := UI.make_card(
 		self,
-		"PC RECEIVER",
-		"The repository contains a dependency-free PowerShell receiver. It listens with TcpListener, so it does not require an HTTP URL reservation or administrator rights just to bind the port."
+		"PC RECEIVER · SESSION FILES",
+		"PowerShell writes continuously, so you do not need to copy a huge terminal. When you stop it with Ctrl+C it finalizes a compact summary."
 	)
 
 	var command := "pwsh -ExecutionPolicy Bypass -File .\\tools\\Receive-IOSLabTelemetry.ps1 -Port 8787"
@@ -138,8 +138,8 @@ func _build_receiver_card() -> void:
 	card.add_child(copy)
 
 	card.add_child(UI.label(
-		"When the receiver starts, it prints the Tailscale and LAN endpoints it detects. Put the matching host:port above, start the stream, then copy the PowerShell output back into ChatGPT for live diagnosis.",
-		13,
+		"Each receiver run creates telemetry-sessions/<date-time>/ with session-summary.txt (send this first), session.changes.log (meaningful changes/events), session.summary.json and session.raw.jsonl (full raw evidence). The console is change-only plus a periodic heartbeat.",
+		14,
 		UI.MUTED
 	))
 

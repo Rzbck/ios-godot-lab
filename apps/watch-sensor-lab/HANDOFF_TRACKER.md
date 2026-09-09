@@ -82,3 +82,39 @@ For the current iLoader regression test, continue using the previously known Wat
 - `main`;
 - current exact-SHA tooling test artifacts;
 - Watch bundle identity/companion relationship unless a new packaging failure proves it is necessary.
+
+## 2026-09-09 — one-click iPhone + Apple Watch deployment gate cleared
+
+The separate tooling chantier has now reached the required physical milestone. The user physically confirmed that the same known-good regression IPA installs successfully on the iPhone and that the embedded Watch Sensor Lab companion installs and works correctly on the real Apple Watch through the one-click iLoader path.
+
+Exact physically validated tooling chain:
+
+- iLoader code SHA: `88ca24bbb6fd028f4f180a5f28a5683fba10e7f5`;
+- pinned isideload SHA: `9d43554571360cb27c701efbe1fbd1f5456769ae`;
+- iLoader workflow run: `34406032515`;
+- first Windows attempt failed only while Tauri was downloading WiX (`os error 10054`) after the Rust/Tauri application binary had compiled;
+- rerunning the failed jobs on the same exact SHA succeeded;
+- Windows artifact: `windows-exe`, artifact ID `10125812841`;
+- artifact ZIP digest: `sha256:739826aa9404bda38d666f6e10c7e0b1690b7d63918053d40e0f16bf5672da74`;
+- exact local setup SHA-256: `4FE492056689602C9F02A35763959A14E11A522562825990C579C9390A74AEB9`;
+- regression IPA used for the validation: `WatchSensorLab-companion-unsigned-f539fe4105df.ipa`.
+
+Important failure progression before success:
+
+1. the older one-click path failed at the initial Watch `StartForwardingServicePort` call with `device socket io failed`;
+2. reconnecting CompanionProxy after the iPhone install advanced far enough to display the real Watch pairing/trust request;
+3. after trust was accepted, the next blocker was forwarding `com.apple.mobile.installation_proxy`, again with `device socket io failed`;
+4. the final isideload change switched to a fresh `com.apple.companion_proxy` service connection for each Watch forwarding start/stop command, matching the working pymobiledevice3 lifecycle;
+5. with iLoader `88ca24b...` pinned to isideload `9d435545...`, the full one-click installation physically succeeded.
+
+This strongly supports persistent CompanionProxy service reuse as the final transport-lifetime blocker. Earlier fixes for Watch provisioning/signing/routing and preserving the selected usbmux transport remain part of the validated chain; do not remove them merely because the last blocker was CompanionProxy lifetime.
+
+The previous tracker isolation gate is therefore cleared. It is now appropriate to build and physically test this tracker branch with the same validated iLoader path.
+
+### Next exact step
+
+1. build the tracker branch with `.github/workflows/watch-sensor-lab-bootstrap.yml` at the exact tracker SHA;
+2. require successful Godot/iPhone/watchOS/package verification before downloading the artifact;
+3. use `apps/watch-sensor-lab/UPDATE_WATCH_SENSOR_LAB.ps1` from the tracker worktree with `-ExpectedBranch feat/watch-sensor-tracker-recorder-20260909` so the downloaded IPA is exact-SHA verified;
+4. install that exact tracker IPA with the physically validated iLoader build above;
+5. separately record iPhone tracker behavior and real Watch behavior. CI/build success must not be treated as physical validation.

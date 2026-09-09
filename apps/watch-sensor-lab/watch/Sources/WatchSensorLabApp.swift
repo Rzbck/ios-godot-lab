@@ -18,7 +18,7 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                Text("WATCH SENSOR LAB")
+                Text("WATCH TRACKER")
                     .font(.headline)
 
                 Text("SHA \(BuildInfo.gitSHA)")
@@ -39,6 +39,12 @@ struct ContentView: View {
                     Text(String(format: "x %.3f", model.gyroX))
                     Text(String(format: "y %.3f", model.gyroY))
                     Text(String(format: "z %.3f", model.gyroZ))
+
+                    Text("GRAVITY")
+                        .font(.caption.bold())
+                    Text(String(format: "x %.3f", model.gravityX))
+                    Text(String(format: "y %.3f", model.gravityY))
+                    Text(String(format: "z %.3f", model.gravityZ))
                 }
                 .font(.system(.caption, design: .monospaced))
 

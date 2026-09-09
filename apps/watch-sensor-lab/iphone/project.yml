@@ -1,0 +1,36 @@
+name: WatchSensorLab
+options:
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+targets:
+  WatchSensorLab:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Watch Tracker
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocationWhenInUseUsageDescription: Watch Tracker utilise votre position pendant une session pour tracer le parcours, calculer la distance, la vitesse, l'altitude et le dénivelé.
+        NSHealthShareUsageDescription: Watch Tracker lit la fréquence cardiaque et les données d'entraînement de votre Apple Watch pour afficher les métriques de la session.
+        NSHealthUpdateUsageDescription: Watch Tracker enregistre vos entraînements et leurs métriques dans Santé lorsque vous lancez une session.
+        UIBackgroundModes:
+          - location
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab
+        PRODUCT_NAME: WatchSensorLab
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_ENTITLEMENTS: Sources/WatchSensorLab.entitlements
+    scheme: {}

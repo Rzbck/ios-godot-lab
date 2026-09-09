@@ -1,116 +1,132 @@
-# Watch Sensor Lab — session data schema v1
+# Watch Tracker — session data schema v2
 
-This schema is intentionally source-agnostic so iPhone, Apple Watch and derived metrics can be merged into one session timeline.
+The product uses one source-agnostic timeline for iPhone, Apple Watch and derived metrics. The previous Godot recorder schema v1 is retained as a prototype/reference; the native SwiftUI product writes schema v2.
 
-## Storage layout
+## Native storage layout
 
 ```text
-user://sessions/<session_id>/
+Documents/Sessions/<session_id>/
   samples.jsonl
   summary.json
 ```
 
-`samples.jsonl` is append-only during recording. Each line is one JSON object. This avoids keeping a high-frequency session entirely in memory and makes partial recordings recoverable.
+`samples.jsonl` is append-only while a session is active so a long recording does not need to stay entirely in memory.
 
 ## Common sample envelope
 
 ```json
 {
   "record": "sample",
-  "schema": 1,
-  "session_id": "...",
-  "timestamp": 1788980000.123,
-  "elapsed_ms": 15340,
+  "schema": 2,
+  "session_id": "1788990000123",
+  "timestamp": 1788990000.123,
   "source": "iphone",
-  "kind": "motion",
+  "kind": "location",
   "payload": {},
   "quality": {}
 }
 ```
 
-Required semantics:
+Semantics:
 
 - `timestamp`: Unix time in seconds at acquisition/ingestion time;
-- `elapsed_ms`: monotonic offset from session start when recorded on the iPhone;
 - `source`: `iphone`, `watch` or `derived`;
-- `kind`: sensor family such as `motion`, `location`, `altitude`, `heart_rate`, `session_event`;
-- `payload`: sensor-specific values;
-- `quality`: optional accuracy, freshness, confidence or gap information.
+- `kind`: `location`, `heart_rate`, `motion`, `session_control` or another explicit sensor family;
+- `payload`: sensor/metric values;
+- `quality`: accuracy or freshness information when available.
 
-## iPhone / Watch motion payload
-
-```json
-{
-  "accel": [0.0, 0.0, 0.0],
-  "gyro": [0.0, 0.0, 0.0],
-  "gravity": [0.0, 0.0, 0.0],
-  "magnetometer": [0.0, 0.0, 0.0]
-}
-```
-
-The first recorder implementation samples the iPhone motion values at 20 Hz. Watch motion uses the same envelope once the iPhone WatchConnectivity receiver is wired.
-
-## Planned native location payload
+## iPhone location payload
 
 ```json
 {
   "latitude": 48.8566,
   "longitude": 2.3522,
   "altitude_m": 37.2,
-  "speed_m_s": 4.3,
-  "course_deg": 112.0,
-  "horizontal_accuracy_m": 4.8,
-  "vertical_accuracy_m": 7.0,
-  "speed_accuracy_m_s": 0.5,
-  "course_accuracy_deg": 8.0
+  "speed_mps": 4.3,
+  "distance_m": 1820.4,
+  "elevation_gain_m": 83.0,
+  "elevation_loss_m": 41.0
 }
 ```
 
-This payload will be produced by the native iPhone location bridge. The recorder format already accepts it through `ingest_external_sample("iphone", "location", ...)`.
+Quality carries `horizontal_accuracy_m` and `vertical_accuracy_m`. The live tracker rejects stale or very inaccurate points before using them for distance and route rendering.
 
-## Planned Watch payload
+## Apple Watch health payload
 
-WatchConnectivity messages should carry the original Watch acquisition timestamp and sequence number. The iPhone recorder must preserve those values inside `payload` or `quality` while also assigning the iPhone-side `elapsed_ms` used to merge the complete session.
-
-Example:
+Heart-rate samples received from the Watch use:
 
 ```json
 {
+  "record": "sample",
+  "schema": 2,
+  "source": "watch",
+  "kind": "heart_rate",
+  "payload": {
+    "bpm": 146.0
+  }
+}
+```
+
+Live Watch state also carries average heart rate and active energy so the iPhone UI can stay synchronized without polling HealthKit continuously.
+
+## Apple Watch motion payload
+
+```json
+{
+  "type": "sensor_sample",
+  "schema": 2,
   "source": "watch",
   "kind": "motion",
+  "timestamp": 1788990000.123,
   "payload": {
-    "watch_timestamp": 1788980000.123,
-    "sequence": 42,
     "accel": [0.0, 0.0, 0.0],
     "gyro": [0.0, 0.0, 0.0]
   }
 }
 ```
 
-## Derived records
+Motion remains auxiliary data and is not shown as primary workout UI.
 
-Derived metrics are written or generated from the raw timeline rather than replacing raw sensor data. Planned values include:
+## Shared live session state
 
+WatchConnectivity uses a compact latest-state document so both devices converge even if a live `sendMessage` is missed:
+
+```json
+{
+  "type": "tracker_state",
+  "phase": "active",
+  "session_id": "1788990000123",
+  "origin": "watch",
+  "elapsed_s": 532.0,
+  "distance_m": 1820.4,
+  "speed_mps": 4.3,
+  "altitude_m": 37.2,
+  "elevation_gain_m": 83.0,
+  "elevation_loss_m": 41.0,
+  "heart_rate_bpm": 146.0,
+  "average_heart_rate_bpm": 139.0,
+  "active_energy_kcal": 121.0
+}
+```
+
+Control messages use `type=tracker_control` and `command=start|pause|resume|stop`. START/PAUSE/RESUME/STOP initiated on either device updates the same product session state.
+
+## Derived live metrics
+
+The native product currently derives or displays:
+
+- route polyline;
 - distance;
-- instantaneous / average / maximum speed;
+- current and average speed;
 - pace;
+- maximum speed for the final summary;
+- altitude;
 - elevation gain/loss;
-- route gaps;
-- Watch <-> iPhone latency/jitter statistics.
+- current and average heart rate;
+- active energy;
+- GPS accuracy/readiness;
+- Watch connectivity state.
 
-## Current implementation boundary
+## Validation boundary
 
-Ready now on the tracker branch:
-
-- local iPhone session creation/finalization;
-- append-only JSONL persistence;
-- 20 Hz iPhone motion ingestion;
-- summary persistence;
-- generic external sample entry point.
-
-Still pending native bridge work:
-
-- CLLocation GPS/speed/altitude;
-- WatchConnectivity receiver on iPhone;
-- HealthKit/workout data;
-- route/map and graph review UI.
+Schema v2 describes the native product implementation. CI compilation, signing with HealthKit capability, real heart-rate authorization and physical iPhone/Watch synchronization must still be validated for each exact product SHA before the implementation is called device-validated.

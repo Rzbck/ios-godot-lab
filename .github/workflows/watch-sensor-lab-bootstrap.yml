@@ -25,7 +25,7 @@ env:
 
 jobs:
   build-bootstrap:
-    name: Build iPhone + embedded watchOS companion
+    name: Build native iPhone + embedded watchOS companion
     runs-on: macos-26
     timeout-minutes: 30
 
@@ -44,45 +44,22 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           xcrun --sdk watchos --show-sdk-version
 
-      - name: Install pinned Godot and iOS templates
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          GODOT_ARCHIVE="$RUNNER_TEMP/godot.zip"
-          GODOT_DIR="$RUNNER_TEMP/godot"
-          GODOT_URL="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
-
-          TEMPLATES_ARCHIVE="$RUNNER_TEMP/templates.tpz"
-          TEMPLATES_UNPACK="$RUNNER_TEMP/templates-unpack"
-          TEMPLATES_URL="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
-          TEMPLATES_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
-
-          mkdir -p "$GODOT_DIR" "$TEMPLATES_UNPACK" "$TEMPLATES_DIR"
-          curl --fail --location --retry 3 --retry-delay 2 "$GODOT_URL" --output "$GODOT_ARCHIVE"
-          unzip -q "$GODOT_ARCHIVE" -d "$GODOT_DIR"
-
-          curl --fail --location --retry 3 --retry-delay 2 "$TEMPLATES_URL" --output "$TEMPLATES_ARCHIVE"
-          unzip -q "$TEMPLATES_ARCHIVE" -d "$TEMPLATES_UNPACK"
-          cp -R "$TEMPLATES_UNPACK/templates/." "$TEMPLATES_DIR/"
-
-          GODOT_BIN="$GODOT_DIR/Godot.app/Contents/MacOS/Godot"
-          chmod +x "$GODOT_BIN"
-          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
-          "$GODOT_BIN" --version
-          test -f "$TEMPLATES_DIR/ios.zip"
-
       - name: Stamp exact build identity
         shell: bash
         run: |
           set -euo pipefail
           SHORT_SHA="${GITHUB_SHA:0:12}"
-          mkdir -p "$APP_DIR/godot/config"
+          mkdir -p "$APP_DIR/godot/config" "$APP_DIR/iphone/Sources" "$APP_DIR/watch/Sources"
           cat > "$APP_DIR/godot/config/build_info.json" <<EOF
           {
-            "version": "0.1.0-dev",
+            "version": "0.2.0-dev",
             "git_sha": "$SHORT_SHA",
-            "channel": "github-actions-companion"
+            "channel": "github-actions-native-tracker"
+          }
+          EOF
+          cat > "$APP_DIR/iphone/Sources/BuildInfo.swift" <<EOF
+          enum BuildInfo {
+              static let gitSHA = "$SHORT_SHA"
           }
           EOF
           cat > "$APP_DIR/watch/Sources/BuildInfo.swift" <<EOF
@@ -91,36 +68,57 @@ jobs:
           }
           EOF
 
-      - name: Verify Godot project
+      - name: Verify retained Godot recorder prototype
         shell: bash
         run: |
           set -euo pipefail
+          GODOT_ARCHIVE="$RUNNER_TEMP/godot.zip"
+          GODOT_DIR="$RUNNER_TEMP/godot"
+          GODOT_URL="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+          curl --fail --location --retry 3 --retry-delay 2 "$GODOT_URL" --output "$GODOT_ARCHIVE"
+          unzip -q "$GODOT_ARCHIVE" -d "$GODOT_DIR"
+          GODOT_BIN="$GODOT_DIR/Godot.app/Contents/MacOS/Godot"
+          chmod +x "$GODOT_BIN"
+          "$GODOT_BIN" --version
           "$GODOT_BIN" --headless --path "$APP_DIR/godot" --import
           "$GODOT_BIN" --headless --path "$APP_DIR/godot" --quit-after 2
 
-      - name: Export Godot iPhone Xcode project
+      - name: Install pinned XcodeGen
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "$RUNNER_TEMP/iphone-export"
-          mkdir -p "$RUNNER_TEMP/iphone-export"
-          "$GODOT_BIN" --headless --path "$APP_DIR/godot" --export-release "iOS" "$RUNNER_TEMP/iphone-export/WatchSensorLab.xcodeproj"
-
-          IPHONE_XCODEPROJ="$(find "$RUNNER_TEMP/iphone-export" -maxdepth 2 -type d -name '*.xcodeproj' | head -n 1)"
-          if [ -z "$IPHONE_XCODEPROJ" ]; then
-            echo "No iPhone Xcode project generated." >&2
+          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
+          DEST="$RUNNER_TEMP/xcodegen"
+          URL="https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          mkdir -p "$DEST"
+          curl --fail --location --retry 3 --retry-delay 2 "$URL" --output "$ARCHIVE"
+          unzip -q "$ARCHIVE" -d "$DEST"
+          XCODEGEN_BIN="$(find "$DEST" -type f -name xcodegen | head -n 1)"
+          if [ -z "$XCODEGEN_BIN" ]; then
+            echo "xcodegen binary not found in release archive." >&2
             exit 1
           fi
+          chmod +x "$XCODEGEN_BIN"
+          echo "XCODEGEN_BIN=$XCODEGEN_BIN" >> "$GITHUB_ENV"
+          "$XCODEGEN_BIN" --version
+
+      - name: Generate native iPhone project
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPHONE_DIR="$GITHUB_WORKSPACE/$APP_DIR/iphone"
+          "$XCODEGEN_BIN" generate --spec "$IPHONE_DIR/project.yml" --project "$IPHONE_DIR"
+          IPHONE_XCODEPROJ="$IPHONE_DIR/WatchSensorLab.xcodeproj"
+          test -d "$IPHONE_XCODEPROJ"
           echo "IPHONE_XCODEPROJ=$IPHONE_XCODEPROJ" >> "$GITHUB_ENV"
           xcodebuild -project "$IPHONE_XCODEPROJ" -list
 
-      - name: Build unsigned iPhone app
+      - name: Build unsigned native iPhone app
         shell: bash
         run: |
           set -euo pipefail
           IPHONE_DERIVED="$RUNNER_TEMP/DerivedData-iPhone"
           rm -rf "$IPHONE_DERIVED"
-
           xcodebuild \
             -project "$IPHONE_XCODEPROJ" \
             -scheme WatchSensorLab \
@@ -136,30 +134,10 @@ jobs:
 
           IPHONE_APP_PATH="$(find "$IPHONE_DERIVED/Build/Products" -type d -path '*Release-iphoneos/*.app' | head -n 1)"
           if [ -z "$IPHONE_APP_PATH" ]; then
-            echo "No iPhone .app produced." >&2
+            echo "No native iPhone .app produced." >&2
             exit 1
           fi
           echo "IPHONE_APP_PATH=$IPHONE_APP_PATH" >> "$GITHUB_ENV"
-
-      - name: Install pinned XcodeGen
-        shell: bash
-        run: |
-          set -euo pipefail
-          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
-          DEST="$RUNNER_TEMP/xcodegen"
-          URL="https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
-          mkdir -p "$DEST"
-          curl --fail --location --retry 3 --retry-delay 2 "$URL" --output "$ARCHIVE"
-          unzip -q "$ARCHIVE" -d "$DEST"
-          XCODEGEN_BIN="$(find "$DEST" -type f -name xcodegen | head -n 1)"
-          if [ -z "$XCODEGEN_BIN" ]; then
-            echo "xcodegen binary not found in release archive." >&2
-            find "$DEST" -maxdepth 4 -print
-            exit 1
-          fi
-          chmod +x "$XCODEGEN_BIN"
-          echo "XCODEGEN_BIN=$XCODEGEN_BIN" >> "$GITHUB_ENV"
-          "$XCODEGEN_BIN" --version
 
       - name: Generate and build unsigned watchOS app
         shell: bash
@@ -196,8 +174,18 @@ jobs:
           WATCH_APPLICATION="$(/usr/libexec/PlistBuddy -c 'Print :WKApplication' "$WATCH_APP_PATH/Info.plist")"
           echo "Watch WKApplication: $WATCH_APPLICATION"
           test "$WATCH_APPLICATION" = "true"
-
           echo "WATCH_APP_PATH=$WATCH_APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Verify HealthKit declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'com.apple.developer.healthkit' "$APP_DIR/iphone/Sources/WatchSensorLab.entitlements"
+          grep -Fq 'com.apple.developer.healthkit' "$APP_DIR/watch/Sources/WatchSensorLab.entitlements"
+          /usr/libexec/PlistBuddy -c 'Print :NSHealthShareUsageDescription' "$IPHONE_APP_PATH/Info.plist" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :NSHealthShareUsageDescription' "$WATCH_APP_PATH/Info.plist" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :NSLocationWhenInUseUsageDescription' "$IPHONE_APP_PATH/Info.plist" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :NSLocationWhenInUseUsageDescription' "$WATCH_APP_PATH/Info.plist" >/dev/null
 
       - name: Assemble iPhone app with embedded watchOS companion
         shell: bash
@@ -263,7 +251,7 @@ jobs:
             "repository": "${GITHUB_REPOSITORY}",
             "ref": "${GITHUB_REF}",
             "sha": "${GITHUB_SHA}",
-            "godot": "$("$GODOT_BIN" --version | head -n 1)",
+            "product_shell": "native-swiftui",
             "xcode": "$(xcodebuild -version | tr '\n' ' ')",
             "iphoneos_sdk": "$(xcrun --sdk iphoneos --show-sdk-version)",
             "watchos_sdk": "$(xcrun --sdk watchos --show-sdk-version)",
@@ -271,10 +259,11 @@ jobs:
             "iphone_bundle_id": "${IPHONE_BUNDLE_ID}",
             "watch_bundle_id": "${WATCH_BUNDLE_ID}",
             "watch_application": true,
+            "healthkit_declared": true,
             "signed": false,
             "watch_companion_integrated_in_ipa": true,
             "hardware_validated": false,
-            "classification": "CI ASSEMBLED COMPANION - HARDWARE NOT VALIDATED"
+            "classification": "CI ASSEMBLED NATIVE TRACKER - HARDWARE NOT VALIDATED"
           }
           EOF
 

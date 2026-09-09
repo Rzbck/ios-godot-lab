@@ -14,18 +14,22 @@ targets:
     info:
       path: Info.plist
       properties:
-        CFBundleDisplayName: Watch Sensor Lab
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleDisplayName: Watch Tracker
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.rzbck.watchsensorlab
         WKRunsIndependentlyOfCompanionApp: false
+        NSLocationWhenInUseUsageDescription: Watch Tracker utilise le GPS de l’Apple Watch pendant la session pour la vitesse, l’altitude et le tracé.
+        NSHealthShareUsageDescription: Watch Tracker lit votre fréquence cardiaque et les métriques d’entraînement pendant une session.
+        NSHealthUpdateUsageDescription: Watch Tracker enregistre la session comme entraînement dans Santé.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watchkitapp
         PRODUCT_NAME: WatchSensorLabWatch
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_ENTITLEMENTS: Sources/WatchSensorLab.entitlements
         TARGETED_DEVICE_FAMILY: "4"
         SKIP_INSTALL: NO
     scheme: {}

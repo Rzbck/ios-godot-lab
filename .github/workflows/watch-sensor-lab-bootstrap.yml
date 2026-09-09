@@ -20,10 +20,12 @@ env:
   GODOT_VERSION: '4.7.2'
   XCODEGEN_VERSION: '2.46.0'
   APP_DIR: apps/watch-sensor-lab
+  IPHONE_BUNDLE_ID: com.rzbck.watchsensorlab
+  WATCH_BUNDLE_ID: com.rzbck.watchsensorlab.watchkitapp
 
 jobs:
   build-bootstrap:
-    name: Build iPhone and watchOS bootstrap
+    name: Build iPhone + embedded watchOS companion
     runs-on: macos-26
     timeout-minutes: 30
 
@@ -80,7 +82,7 @@ jobs:
           {
             "version": "0.1.0-dev",
             "git_sha": "$SHORT_SHA",
-            "channel": "github-actions-bootstrap"
+            "channel": "github-actions-companion"
           }
           EOF
           cat > "$APP_DIR/watch/Sources/BuildInfo.swift" <<EOF
@@ -192,22 +194,60 @@ jobs:
           fi
           echo "WATCH_APP_PATH=$WATCH_APP_PATH" >> "$GITHUB_ENV"
 
-      - name: Package exact-SHA bootstrap artifact
+      - name: Assemble iPhone app with embedded watchOS companion
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMBINED_ROOT="$RUNNER_TEMP/combined-app"
+          rm -rf "$COMBINED_ROOT"
+          mkdir -p "$COMBINED_ROOT"
+
+          COMBINED_APP_PATH="$COMBINED_ROOT/$(basename "$IPHONE_APP_PATH")"
+          ditto "$IPHONE_APP_PATH" "$COMBINED_APP_PATH"
+
+          mkdir -p "$COMBINED_APP_PATH/Watch"
+          EMBEDDED_WATCH_PATH="$COMBINED_APP_PATH/Watch/$(basename "$WATCH_APP_PATH")"
+          ditto "$WATCH_APP_PATH" "$EMBEDDED_WATCH_PATH"
+
+          IPHONE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$COMBINED_APP_PATH/Info.plist")"
+          WATCH_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EMBEDDED_WATCH_PATH/Info.plist")"
+          COMPANION_ID="$(/usr/libexec/PlistBuddy -c 'Print :WKCompanionAppBundleIdentifier' "$EMBEDDED_WATCH_PATH/Info.plist")"
+          RUNS_INDEPENDENT="$(/usr/libexec/PlistBuddy -c 'Print :WKRunsIndependentlyOfCompanionApp' "$EMBEDDED_WATCH_PATH/Info.plist")"
+
+          echo "iPhone bundle: $IPHONE_ID"
+          echo "Watch bundle: $WATCH_ID"
+          echo "Watch companion: $COMPANION_ID"
+          echo "Watch independent: $RUNS_INDEPENDENT"
+
+          test "$IPHONE_ID" = "$IPHONE_BUNDLE_ID"
+          test "$WATCH_ID" = "$WATCH_BUNDLE_ID"
+          test "$COMPANION_ID" = "$IPHONE_BUNDLE_ID"
+          test "$RUNS_INDEPENDENT" = "false"
+          test -d "$COMBINED_APP_PATH/Watch/$(basename "$WATCH_APP_PATH")"
+
+          echo "COMBINED_APP_PATH=$COMBINED_APP_PATH" >> "$GITHUB_ENV"
+          echo "EMBEDDED_WATCH_PATH=$EMBEDDED_WATCH_PATH" >> "$GITHUB_ENV"
+
+      - name: Package exact-SHA companion IPA
         shell: bash
         run: |
           set -euo pipefail
           SHORT_SHA="${GITHUB_SHA:0:12}"
-          OUT="$GITHUB_WORKSPACE/build/watch-sensor-lab-bootstrap"
+          OUT="$GITHUB_WORKSPACE/build/watch-sensor-lab-companion"
           PACKAGE="$RUNNER_TEMP/iphone-ipa"
+          rm -rf "$OUT" "$PACKAGE"
           mkdir -p "$OUT" "$PACKAGE/Payload"
 
-          ditto "$IPHONE_APP_PATH" "$PACKAGE/Payload/$(basename "$IPHONE_APP_PATH")"
+          ditto "$COMBINED_APP_PATH" "$PACKAGE/Payload/$(basename "$COMBINED_APP_PATH")"
           (
             cd "$PACKAGE"
-            /usr/bin/zip -qry "$OUT/WatchSensorLab-iPhone-unsigned-${SHORT_SHA}.ipa" Payload
+            /usr/bin/zip -qry "$OUT/WatchSensorLab-companion-unsigned-${SHORT_SHA}.ipa" Payload
           )
 
-          ditto -c -k --sequesterRsrc --keepParent "$WATCH_APP_PATH" "$OUT/WatchSensorLab-Watch-unsigned-${SHORT_SHA}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$WATCH_APP_PATH" "$OUT/WatchSensorLab-Watch-diagnostic-${SHORT_SHA}.zip"
+
+          /usr/bin/unzip -l "$OUT/WatchSensorLab-companion-unsigned-${SHORT_SHA}.ipa" > "$OUT/IPA-CONTENTS.txt"
+          grep -F "Payload/$(basename "$COMBINED_APP_PATH")/Watch/$(basename "$WATCH_APP_PATH")/Info.plist" "$OUT/IPA-CONTENTS.txt"
 
           cat > "$OUT/BUILD-METADATA.json" <<EOF
           {
@@ -219,21 +259,22 @@ jobs:
             "iphoneos_sdk": "$(xcrun --sdk iphoneos --show-sdk-version)",
             "watchos_sdk": "$(xcrun --sdk watchos --show-sdk-version)",
             "xcodegen": "${XCODEGEN_VERSION}",
-            "iphone_bundle_id": "com.rzbck.watchsensorlab",
-            "watch_bundle_id": "com.rzbck.watchsensorlab.watchkitapp",
+            "iphone_bundle_id": "${IPHONE_BUNDLE_ID}",
+            "watch_bundle_id": "${WATCH_BUNDLE_ID}",
             "signed": false,
-            "watch_companion_integrated_in_ipa": false,
-            "classification": "BOOTSTRAP BUILD ONLY"
+            "watch_companion_integrated_in_ipa": true,
+            "hardware_validated": false,
+            "classification": "CI ASSEMBLED COMPANION - HARDWARE NOT VALIDATED"
           }
           EOF
 
           shasum -a 256 "$OUT"/* | tee "$OUT/SHA256SUMS.txt"
           cat "$OUT/BUILD-METADATA.json"
 
-      - name: Upload bootstrap artifact
+      - name: Upload companion artifact
         uses: actions/upload-artifact@v4
         with:
-          name: watch-sensor-lab-bootstrap-${{ github.sha }}
-          path: build/watch-sensor-lab-bootstrap/
+          name: watch-sensor-lab-companion-${{ github.sha }}
+          path: build/watch-sensor-lab-companion/
           if-no-files-found: error
           retention-days: 14

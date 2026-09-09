@@ -70,34 +70,52 @@ Principe de données : chaque échantillon doit être horodaté et identifier sa
 - séparation en worktree dédié : **VALIDÉ UTILISATEUR** ;
 - branche distante dédiée : **VALIDÉ** ;
 - `iphone-lab-v2` non modifié : **VALIDÉ par périmètre Git** ;
-- bootstrap Godot parse/import au SHA `56dd48bfe822e916a177f1e79f5c9adb05a1cbb7` : **CI PASS** ;
-- premier export iOS au même SHA : **FAIL** avant Xcode à cause d'une configuration d'export ;
-- partie watchOS non atteinte dans ce run.
+- bootstrap iPhone + watchOS au SHA `3a16a663aee99f13ff21759c233ae5a2c056c637` : **BUILD CI VALIDÉ** ;
+- export Godot iOS : **PASS** sur ce SHA ;
+- build Xcode iPhone unsigned : **PASS** sur ce SHA ;
+- build Xcode watchOS unsigned : **PASS** sur ce SHA ;
+- aucune validation matérielle iPhone/Watch pour cette nouvelle app à ce stade.
 
-## Correction en cours
+## Intégration companion en cours
 
-Le premier export iOS n'avait aucune icône de base. L'exporteur iOS de Godot retombe sur `application/config/icon`; un chemin vide/invalide produit une erreur de configuration. Une icône propre à Watch Sensor Lab est ajoutée et référencée explicitement dans le projet/preset.
+Le workflow assemble maintenant le produit final de test sous forme d'une IPA iPhone contenant l'app watchOS dans :
+
+```text
+Payload/WatchSensorLab.app/Watch/WatchSensorLabWatch.app
+```
+
+Le workflow vérifie avant packaging :
+
+- bundle iPhone : `com.rzbck.watchsensorlab` ;
+- bundle Watch : `com.rzbck.watchsensorlab.watchkitapp` ;
+- `WKCompanionAppBundleIdentifier` côté Watch = `com.rzbck.watchsensorlab` ;
+- `WKRunsIndependentlyOfCompanionApp = false` ;
+- présence réelle de l'app Watch dans l'IPA finale ;
+- association de l'artifact au SHA exact.
+
+Cette étape reproduit la structure finale d'un companion embarqué mais reste **EXPÉRIMENTALE** tant qu'iLoader n'a pas signé les bundles imbriqués et qu'une vraie Apple Watch n'a pas installé/lancé la companion app.
 
 ## Pas encore validé
 
-- nouvel export iOS après correction ;
-- build iPhone Xcode ;
-- build watchOS ;
-- bridge WatchConnectivity côté iPhone/Godot ;
-- empaquetage companion Watch dans l'IPA ;
+- CI du nouvel assemblage companion ;
 - signature iLoader des bundles imbriqués ;
-- installation réelle sur Apple Watch ;
+- installation de l'IPA sur iPhone ;
+- apparition/installation de la companion app dans l'app Watch de l'iPhone ;
+- lancement réel sur Apple Watch ;
+- bridge WatchConnectivity côté iPhone/Godot ;
 - données réelles Watch -> iPhone -> Godot ;
-- tracking réel sur appareil.
+- tracking réel sur appareil ;
+- HealthKit.
 
 ## Prochaine étape exacte
 
-1. obtenir un CI bootstrap vert pour iPhone et watchOS séparément ;
-2. intégrer la companion watchOS dans l'app iPhone ;
-3. produire une IPA exact-SHA contenant les deux ;
-4. tester signature/installation avec iLoader ;
-5. valider WatchConnectivity sur appareils réels ;
-6. seulement ensuite construire le recorder GPS/motion puis HealthKit.
+1. obtenir un CI vert pour l'IPA companion intégrée ;
+2. récupérer l'IPA exact-SHA sur Windows ;
+3. la signer/installer avec iLoader ;
+4. vérifier sur l'iPhone si la companion Watch est proposée et installable ;
+5. lancer l'app sur la vraie Watch ;
+6. si ce jalon matériel passe, implémenter le receiver WatchConnectivity iPhone -> Godot ;
+7. ensuite construire le recorder GPS/motion puis HealthKit.
 
 ## Ne pas modifier depuis ce chantier
 

@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feat/watch-sensor-lab-bootstrap-20260909
+      - feat/watch-sensor-tracker-recorder-20260909
     paths:
       - 'apps/watch-sensor-lab/**'
       - '.github/workflows/watch-sensor-lab-bootstrap.yml'

@@ -192,6 +192,11 @@ jobs:
             echo "No watchOS .app produced." >&2
             exit 1
           fi
+
+          WATCH_APPLICATION="$(/usr/libexec/PlistBuddy -c 'Print :WKApplication' "$WATCH_APP_PATH/Info.plist")"
+          echo "Watch WKApplication: $WATCH_APPLICATION"
+          test "$WATCH_APPLICATION" = "true"
+
           echo "WATCH_APP_PATH=$WATCH_APP_PATH" >> "$GITHUB_ENV"
 
       - name: Assemble iPhone app with embedded watchOS companion
@@ -213,16 +218,19 @@ jobs:
           WATCH_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EMBEDDED_WATCH_PATH/Info.plist")"
           COMPANION_ID="$(/usr/libexec/PlistBuddy -c 'Print :WKCompanionAppBundleIdentifier' "$EMBEDDED_WATCH_PATH/Info.plist")"
           RUNS_INDEPENDENT="$(/usr/libexec/PlistBuddy -c 'Print :WKRunsIndependentlyOfCompanionApp' "$EMBEDDED_WATCH_PATH/Info.plist")"
+          WATCH_APPLICATION="$(/usr/libexec/PlistBuddy -c 'Print :WKApplication' "$EMBEDDED_WATCH_PATH/Info.plist")"
 
           echo "iPhone bundle: $IPHONE_ID"
           echo "Watch bundle: $WATCH_ID"
           echo "Watch companion: $COMPANION_ID"
           echo "Watch independent: $RUNS_INDEPENDENT"
+          echo "Watch WKApplication: $WATCH_APPLICATION"
 
           test "$IPHONE_ID" = "$IPHONE_BUNDLE_ID"
           test "$WATCH_ID" = "$WATCH_BUNDLE_ID"
           test "$COMPANION_ID" = "$IPHONE_BUNDLE_ID"
           test "$RUNS_INDEPENDENT" = "false"
+          test "$WATCH_APPLICATION" = "true"
           test -d "$COMBINED_APP_PATH/Watch/$(basename "$WATCH_APP_PATH")"
 
           echo "COMBINED_APP_PATH=$COMBINED_APP_PATH" >> "$GITHUB_ENV"
@@ -262,6 +270,7 @@ jobs:
             "xcodegen": "${XCODEGEN_VERSION}",
             "iphone_bundle_id": "${IPHONE_BUNDLE_ID}",
             "watch_bundle_id": "${WATCH_BUNDLE_ID}",
+            "watch_application": true,
             "signed": false,
             "watch_companion_integrated_in_ipa": true,
             "hardware_validated": false,

@@ -48,7 +48,7 @@ SHA `3a16a663aee99f13ff21759c233ae5a2c056c637` : **BUILD CI VALIDÉ**.
 - build Xcode iPhone unsigned : PASS ;
 - build Xcode watchOS unsigned : PASS.
 
-### Companion intégré
+### Companion intégré avant validation matérielle
 
 SHA `fc484f61a27e6cca9e6f255c75194402ad3e4291` : **BUILD CI VALIDÉ**.
 
@@ -76,6 +76,25 @@ Identités vérifiées :
 
 Classification : **CI ASSEMBLED COMPANION - HARDWARE NOT VALIDATED**.
 
+## Résultat matériel iLoader
+
+Test utilisateur réel : iLoader a bien importé l'IPA et l'installation a atteint `installd` sur l'iPhone, mais l'installation a été refusée avec :
+
+```text
+InvalidWatchKitApp
+Found WatchKit 2.0 app .../WatchSensorLab.app/Watch/WatchSensorLabWatch.app
+but it does not have a WKWatchKitApp or WKApplication key set to true in its Info.plist
+```
+
+Conclusion :
+
+- l'app Watch embarquée est bien détectée par iOS ;
+- le blocker courant est structurel dans le `Info.plist` watchOS ;
+- la Watch app est un **single-target watchOS app**, donc la correction retenue est `WKApplication = true` ;
+- le workflow doit maintenant vérifier explicitement cette clé avant de produire une IPA.
+
+Ce test matériel **ne valide pas encore** la signature imbriquée ni l'installation finale sur Apple Watch ; il valide seulement que l'IPA a atteint le validateur d'installation iOS et que le rejet actuel est précisément identifié.
+
 ## Synchronisation Windows dédiée
 
 Script :
@@ -97,7 +116,7 @@ Il reprend la discipline du updater iOS déjà validé sans modifier celui de l'
 - range les fichiers dans `artifacts/watch-sensor-lab/<sha-court>/` ;
 - prépare `LATEST.json` et `LATEST_IPA.txt` pour iLoader.
 
-Script implémenté mais **NON ENCORE VALIDÉ UTILISATEUR**.
+Le script a été utilisé par l'utilisateur pour récupérer l'IPA testée avec iLoader ; le prochain test doit utiliser le nouveau SHA corrigé.
 
 ## Données visées progressivement
 
@@ -129,9 +148,9 @@ Script implémenté mais **NON ENCORE VALIDÉ UTILISATEUR**.
 
 ## PAS encore validé
 
-- script Windows `UPDATE_WATCH_SENSOR_LAB.ps1` en conditions réelles ;
-- signature iLoader des bundles imbriqués ;
-- installation de l'IPA sur iPhone ;
+- CI du correctif `WKApplication = true` ;
+- signature iLoader des bundles imbriqués jusqu'au bout ;
+- installation de l'IPA corrigée sur iPhone ;
 - apparition/installation de la companion app dans l'app Watch de l'iPhone ;
 - lancement réel sur Apple Watch ;
 - bridge WatchConnectivity côté iPhone/Godot ;
@@ -141,14 +160,15 @@ Script implémenté mais **NON ENCORE VALIDÉ UTILISATEUR**.
 
 ## Prochaine étape exacte
 
-1. synchroniser le worktree Windows au HEAD exact ;
-2. lancer `apps\\watch-sensor-lab\\UPDATE_WATCH_SENSOR_LAB.ps1 -OpenFolder` ;
-3. signer/installer l'IPA exacte avec iLoader ;
-4. vérifier que la nouvelle app iPhone se lance ;
-5. ouvrir l'app Watch sur l'iPhone et vérifier si `Watch Sensor Lab` apparaît comme companion installable ;
-6. installer/lancer sur la vraie Apple Watch ;
-7. si ce jalon matériel passe, implémenter le receiver WatchConnectivity iPhone -> Godot ;
-8. ensuite construire le recorder GPS/motion puis HealthKit.
+1. obtenir un CI vert avec `WKApplication = true` présent dans le `Info.plist` watchOS final ;
+2. synchroniser le worktree Windows au nouveau HEAD exact ;
+3. lancer `apps\\watch-sensor-lab\\UPDATE_WATCH_SENSOR_LAB.ps1 -OpenFolder` ;
+4. signer/installer l'IPA exacte avec iLoader ;
+5. vérifier que la nouvelle app iPhone se lance ;
+6. ouvrir l'app Watch sur l'iPhone et vérifier si `Watch Sensor Lab` apparaît comme companion installable ;
+7. installer/lancer sur la vraie Apple Watch ;
+8. si ce jalon matériel passe, implémenter le receiver WatchConnectivity iPhone -> Godot ;
+9. ensuite construire le recorder GPS/motion puis HealthKit.
 
 ## Ne pas modifier depuis ce chantier
 

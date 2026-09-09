@@ -17,6 +17,7 @@ targets:
         CFBundleDisplayName: Watch Sensor Lab
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+        WKApplication: true
         WKCompanionAppBundleIdentifier: com.rzbck.watchsensorlab
         WKRunsIndependentlyOfCompanionApp: false
     settings:

@@ -1,13 +1,18 @@
 ; Engine configuration file.
-; Watch Sensor Lab — independent Godot iPhone application.
+; Watch Sensor Lab — independent iPhone + Apple Watch recorder application.
 
 config_version=5
 
 [application]
 
 config/name="WatchSensorLab"
+config/description="Independent iPhone and Apple Watch sensor recorder."
+config/version="0.1.0-dev"
+config/icon="res://assets/icon.svg"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.7")
+boot_splash/show_image=false
+boot_splash/minimum_display_time=0
 
 [display]
 
@@ -15,10 +20,14 @@ window/size/viewport_width=390
 window/size/viewport_height=844
 window/size/window_width_override=390
 window/size/window_height_override=844
+window/handheld/orientation=1
 window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/dpi/allow_hidpi=true
 
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
 environment/defaults/default_clear_color=Color(0.02, 0.025, 0.035, 1)

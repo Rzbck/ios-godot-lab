@@ -1,0 +1,7 @@
+.godot/
+build/
+DerivedData/
+watch/*.xcodeproj/
+watch/Info.plist
+*.ipa
+*.xcarchive

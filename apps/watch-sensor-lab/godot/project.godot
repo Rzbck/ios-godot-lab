@@ -1,0 +1,24 @@
+; Engine configuration file.
+; Watch Sensor Lab — independent Godot iPhone application.
+
+config_version=5
+
+[application]
+
+config/name="WatchSensorLab"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7")
+
+[display]
+
+window/size/viewport_width=390
+window/size/viewport_height=844
+window/size/window_width_override=390
+window/size/window_height_override=844
+window/stretch/mode="canvas_items"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.02, 0.025, 0.035, 1)

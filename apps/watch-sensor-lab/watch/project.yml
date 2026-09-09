@@ -1,0 +1,30 @@
+name: WatchSensorLabWatch
+options:
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+targets:
+  WatchSensorLabWatch:
+    type: application
+    platform: watchOS
+    deploymentTarget: "10.0"
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Watch Sensor Lab
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        WKCompanionAppBundleIdentifier: com.rzbck.watchsensorlab
+        WKRunsIndependentlyOfCompanionApp: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watchkitapp
+        PRODUCT_NAME: WatchSensorLabWatch
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        TARGETED_DEVICE_FAMILY: "4"
+        SKIP_INSTALL: NO
+    scheme: {}

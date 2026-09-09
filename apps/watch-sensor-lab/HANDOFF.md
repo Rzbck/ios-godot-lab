@@ -76,7 +76,7 @@ Principe de données : chaque échantillon doit être horodaté et identifier sa
 - build Xcode watchOS unsigned : **PASS** sur ce SHA ;
 - aucune validation matérielle iPhone/Watch pour cette nouvelle app à ce stade.
 
-## Intégration companion en cours
+## Intégration companion
 
 Le workflow assemble maintenant le produit final de test sous forme d'une IPA iPhone contenant l'app watchOS dans :
 
@@ -91,13 +91,38 @@ Le workflow vérifie avant packaging :
 - `WKCompanionAppBundleIdentifier` côté Watch = `com.rzbck.watchsensorlab` ;
 - `WKRunsIndependentlyOfCompanionApp = false` ;
 - présence réelle de l'app Watch dans l'IPA finale ;
-- association de l'artifact au SHA exact.
+- association de l'artifact au SHA exact ;
+- SHA-256 spécifique de l'IPA.
 
-Cette étape reproduit la structure finale d'un companion embarqué mais reste **EXPÉRIMENTALE** tant qu'iLoader n'a pas signé les bundles imbriqués et qu'une vraie Apple Watch n'a pas installé/lancé la companion app.
+Cette étape reste **EXPÉRIMENTALE** tant qu'iLoader n'a pas signé les bundles imbriqués et qu'une vraie Apple Watch n'a pas installé/lancé la companion app.
+
+## Synchronisation Windows dédiée
+
+Nouveau script :
+
+```text
+apps/watch-sensor-lab/UPDATE_WATCH_SENSOR_LAB.ps1
+```
+
+Il reprend la discipline du updater iOS déjà validé sans modifier celui de l'ancienne app :
+
+- exige le worktree/branche Watch Sensor Lab ;
+- refuse un worktree DIRTY ;
+- fast-forward strict seulement ;
+- cherche ou déclenche le workflow pour le HEAD exact ;
+- télécharge uniquement `watch-sensor-lab-companion-<SHA exact>` ;
+- vérifie `BUILD-METADATA.json` ;
+- exige `watch_companion_integrated_in_ipa = true` ;
+- vérifie le SHA-256 de l'IPA ;
+- range les fichiers dans `artifacts/watch-sensor-lab/<sha-court>/` ;
+- prépare `LATEST.json` et `LATEST_IPA.txt` pour iLoader.
+
+Script implémenté mais **NON ENCORE VALIDÉ UTILISATEUR**.
 
 ## Pas encore validé
 
 - CI du nouvel assemblage companion ;
+- script Windows `UPDATE_WATCH_SENSOR_LAB.ps1` en conditions réelles ;
 - signature iLoader des bundles imbriqués ;
 - installation de l'IPA sur iPhone ;
 - apparition/installation de la companion app dans l'app Watch de l'iPhone ;
@@ -110,12 +135,13 @@ Cette étape reproduit la structure finale d'un companion embarqué mais reste *
 ## Prochaine étape exacte
 
 1. obtenir un CI vert pour l'IPA companion intégrée ;
-2. récupérer l'IPA exact-SHA sur Windows ;
-3. la signer/installer avec iLoader ;
-4. vérifier sur l'iPhone si la companion Watch est proposée et installable ;
-5. lancer l'app sur la vraie Watch ;
-6. si ce jalon matériel passe, implémenter le receiver WatchConnectivity iPhone -> Godot ;
-7. ensuite construire le recorder GPS/motion puis HealthKit.
+2. synchroniser le worktree Windows au HEAD exact ;
+3. lancer `apps\\watch-sensor-lab\\UPDATE_WATCH_SENSOR_LAB.ps1 -OpenFolder` ;
+4. signer/installer l'IPA exacte avec iLoader ;
+5. vérifier sur l'iPhone si la companion Watch est proposée et installable ;
+6. lancer l'app sur la vraie Watch ;
+7. si ce jalon matériel passe, implémenter le receiver WatchConnectivity iPhone -> Godot ;
+8. ensuite construire le recorder GPS/motion puis HealthKit.
 
 ## Ne pas modifier depuis ce chantier
 

@@ -239,14 +239,15 @@ jobs:
           mkdir -p "$OUT" "$PACKAGE/Payload"
 
           ditto "$COMBINED_APP_PATH" "$PACKAGE/Payload/$(basename "$COMBINED_APP_PATH")"
+          IPA_PATH="$OUT/WatchSensorLab-companion-unsigned-${SHORT_SHA}.ipa"
           (
             cd "$PACKAGE"
-            /usr/bin/zip -qry "$OUT/WatchSensorLab-companion-unsigned-${SHORT_SHA}.ipa" Payload
+            /usr/bin/zip -qry "$IPA_PATH" Payload
           )
 
           ditto -c -k --sequesterRsrc --keepParent "$WATCH_APP_PATH" "$OUT/WatchSensorLab-Watch-diagnostic-${SHORT_SHA}.zip"
 
-          /usr/bin/unzip -l "$OUT/WatchSensorLab-companion-unsigned-${SHORT_SHA}.ipa" > "$OUT/IPA-CONTENTS.txt"
+          /usr/bin/unzip -l "$IPA_PATH" > "$OUT/IPA-CONTENTS.txt"
           grep -F "Payload/$(basename "$COMBINED_APP_PATH")/Watch/$(basename "$WATCH_APP_PATH")/Info.plist" "$OUT/IPA-CONTENTS.txt"
 
           cat > "$OUT/BUILD-METADATA.json" <<EOF
@@ -268,8 +269,16 @@ jobs:
           }
           EOF
 
-          shasum -a 256 "$OUT"/* | tee "$OUT/SHA256SUMS.txt"
+          shasum -a 256 "$IPA_PATH" > "$IPA_PATH.sha256"
+          for FILE in "$OUT"/*; do
+            if [ "$(basename "$FILE")" = "SHA256SUMS.txt" ]; then
+              continue
+            fi
+            shasum -a 256 "$FILE"
+          done > "$OUT/SHA256SUMS.txt"
+
           cat "$OUT/BUILD-METADATA.json"
+          cat "$IPA_PATH.sha256"
 
       - name: Upload companion artifact
         uses: actions/upload-artifact@v4

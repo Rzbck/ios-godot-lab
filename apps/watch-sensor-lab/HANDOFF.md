@@ -1,54 +1,106 @@
 # HANDOFF — Watch Sensor Lab
 
-Date de création : **2026-09-09**.
+Date : **2026-09-09**.
 
 ## Objectif
 
-Créer une nouvelle application iPhone Godot reliée à une Apple Watch, sans modifier l'application `IOSGodotLab` existante.
+Créer une **nouvelle application** iPhone + Apple Watch, indépendante de `IOSGodotLab`, centrée sur la collecte, la synchronisation et l'enregistrement des données disponibles publiquement sur les deux appareils.
+
+Premier usage produit visé : **tracking / recorder** d'une session réelle avec route, temps, distance, vitesse, altitude et données de mouvement, puis enrichissement progressif avec les données Apple Watch autorisées (par exemple fréquence cardiaque pendant une session HealthKit).
+
+Ce chantier ne doit pas reproduire l'UX, les pages ni la logique produit de `IOSGodotLab`. Seules les méthodes d'infrastructure déjà éprouvées peuvent servir de référence : GitHub Actions macOS, build exact-SHA, IPA unsigned, récupération Windows et installation iLoader.
 
 ## Identité chantier
 
 - repository : `Rzbck/ios-godot-lab` ;
+- application : `apps/watch-sensor-lab` ;
 - branche : `feat/watch-sensor-lab-bootstrap-20260909` ;
-- worktree Windows attendu : `E:\\_Project\\IOS APP\\ios-godot-lab\\worktrees\\watch-sensor-lab` ;
-- base de branche : `main` au SHA `1a7c6e7b947cf2177eb56cbb43e924e7c39fd83f` ;
+- worktree Windows : `E:\\_Project\\IOS APP\\ios-godot-lab\\worktrees\\watch-sensor-lab` ;
+- base initiale : `main` au SHA `1a7c6e7b947cf2177eb56cbb43e924e7c39fd83f` ;
 - HEAD courant : toujours re-fetcher Git/GitHub avant modification.
 
-## Ce qui est validé
+## Architecture cible
 
-- séparation locale en worktree dédié : **VALIDÉ UTILISATEUR** ;
-- branche distante dédiée créée : **VALIDÉ** ;
-- aucune modification de `iphone-lab-v2` : **VALIDÉ par périmètre Git**.
+```text
+Apple Watch native watchOS
+  Core Motion / Core Location / HealthKit selon permissions
+                 |
+                 | WatchConnectivity
+                 v
+iPhone native bridge
+  Core Motion / Core Location / autres APIs iOS
+                 |
+                 v
+Godot iPhone
+  session recorder + visualisation + stockage/export
+```
 
-## Bootstrap implémenté
+Principe de données : chaque échantillon doit être horodaté et identifier sa source (`iphone`, `watch`, `derived`) afin de pouvoir fusionner proprement les flux.
 
-- `apps/watch-sensor-lab/godot` : app Godot iPhone minimale ;
-- `apps/watch-sensor-lab/watch` : app SwiftUI watchOS minimale ;
-- Core Motion : accéléromètre + gyroscope côté Watch ;
-- WatchConnectivity : émission préparée côté Watch si le compagnon iPhone est joignable ;
-- `.github/workflows/watch-sensor-lab-bootstrap.yml` : build iPhone et Watch séparés, unsigned, exact-SHA.
+## Données visées progressivement
 
-## PAS encore validé
+### iPhone
+- position GPS, précision, altitude ;
+- vitesse, précision vitesse, course/cap ;
+- accéléromètre, gyroscope, gravity, attitude/device motion ;
+- magnétomètre et baromètre/altimètre quand disponibles ;
+- informations de session et état appareil utiles au diagnostic.
 
-- CI du bootstrap ;
-- build iPhone réel ;
-- build watchOS réel ;
-- receiver WatchConnectivity dans Godot/iOS ;
-- embarquement de l'app watchOS dans l'IPA iPhone ;
+### Apple Watch
+- accéléromètre, gyroscope, device motion ;
+- pedometer / cadence / mouvement quand exposés et pertinents ;
+- altitude/baromètre quand disponibles ;
+- position/vitesse quand disponible et pertinente ;
+- fréquence cardiaque et métriques workout via HealthKit uniquement après autorisation utilisateur.
+
+### Dérivées
+- distance cumulée ;
+- durée ;
+- vitesse instantanée/moyenne/max ;
+- allure ;
+- dénivelé positif/négatif ;
+- route / trace ;
+- qualité des mesures et trous de données ;
+- statistiques de synchronisation Watch <-> iPhone.
+
+`Tout récupérer` signifie : exploiter au maximum les APIs publiques réellement disponibles sur les appareils, avec leurs permissions et limites. Cela ne signifie pas accès arbitraire aux données privées/système.
+
+## État vérifié
+
+- séparation en worktree dédié : **VALIDÉ UTILISATEUR** ;
+- branche distante dédiée : **VALIDÉ** ;
+- `iphone-lab-v2` non modifié : **VALIDÉ par périmètre Git** ;
+- bootstrap Godot parse/import au SHA `56dd48bfe822e916a177f1e79f5c9adb05a1cbb7` : **CI PASS** ;
+- premier export iOS au même SHA : **FAIL** avant Xcode à cause d'une configuration d'export ;
+- partie watchOS non atteinte dans ce run.
+
+## Correction en cours
+
+Le premier export iOS n'avait aucune icône de base. L'exporteur iOS de Godot retombe sur `application/config/icon`; un chemin vide/invalide produit une erreur de configuration. Une icône propre à Watch Sensor Lab est ajoutée et référencée explicitement dans le projet/preset.
+
+## Pas encore validé
+
+- nouvel export iOS après correction ;
+- build iPhone Xcode ;
+- build watchOS ;
+- bridge WatchConnectivity côté iPhone/Godot ;
+- empaquetage companion Watch dans l'IPA ;
 - signature iLoader des bundles imbriqués ;
-- installation de la companion app sur Apple Watch ;
-- données réelles Apple Watch -> iPhone -> Godot.
+- installation réelle sur Apple Watch ;
+- données réelles Watch -> iPhone -> Godot ;
+- tracking réel sur appareil.
 
 ## Prochaine étape exacte
 
-1. synchroniser le worktree local par fast-forward strict ;
-2. vérifier le HEAD et le status CLEAN ;
-3. observer le workflow `Watch Sensor Lab bootstrap` pour ce SHA exact ;
-4. corriger uniquement les erreurs de bootstrap jusqu'à obtenir un build CI vert ;
-5. ensuite seulement intégrer le bridge iOS WatchConnectivity et l'embarquement watchOS dans l'IPA.
+1. obtenir un CI bootstrap vert pour iPhone et watchOS séparément ;
+2. intégrer la companion watchOS dans l'app iPhone ;
+3. produire une IPA exact-SHA contenant les deux ;
+4. tester signature/installation avec iLoader ;
+5. valider WatchConnectivity sur appareils réels ;
+6. seulement ensuite construire le recorder GPS/motion puis HealthKit.
 
-## Ne pas modifier
+## Ne pas modifier depuis ce chantier
 
-- le worktree `iphone-lab-v2` ;
-- sa branche `feat/iphone-lab-v2-20260908` ;
-- son workflow, ses artifacts ou `UPDATE_IOS_LAB.ps1` depuis ce chantier.
+- `iphone-lab-v2` ;
+- `feat/iphone-lab-v2-20260908` ;
+- le workflow/artifacts/`UPDATE_IOS_LAB.ps1` de cette ancienne application, sauf demande utilisateur explicite distincte.

@@ -6,7 +6,7 @@ Date : **2026-09-09**.
 
 Créer une **nouvelle application** iPhone + Apple Watch, indépendante de `IOSGodotLab`, centrée sur la collecte, la synchronisation et l'enregistrement des données disponibles publiquement sur les deux appareils.
 
-Premier usage produit visé : **tracking / recorder** d'une session réelle avec route, temps, distance, vitesse, altitude et données de mouvement, puis enrichissement progressif avec les données Apple Watch autorisées (par exemple fréquence cardiaque pendant une session HealthKit).
+Premier usage produit visé : **tracking / recorder** d'une session réelle avec route, temps, distance, vitesse, altitude et données de mouvement, puis enrichissement progressif avec les données Apple Watch autorisées, par exemple la fréquence cardiaque pendant une session HealthKit.
 
 Ce chantier ne doit pas reproduire l'UX, les pages ni la logique produit de `IOSGodotLab`. Seules les méthodes d'infrastructure déjà éprouvées peuvent servir de référence : GitHub Actions macOS, build exact-SHA, IPA unsigned, récupération Windows et installation iLoader.
 
@@ -37,6 +37,68 @@ Godot iPhone
 
 Principe de données : chaque échantillon doit être horodaté et identifier sa source (`iphone`, `watch`, `derived`) afin de pouvoir fusionner proprement les flux.
 
+## État CI validé
+
+### Bootstrap séparé
+
+SHA `3a16a663aee99f13ff21759c233ae5a2c056c637` : **BUILD CI VALIDÉ**.
+
+- import/parse Godot : PASS ;
+- export Godot iOS : PASS ;
+- build Xcode iPhone unsigned : PASS ;
+- build Xcode watchOS unsigned : PASS.
+
+### Companion intégré
+
+SHA `fc484f61a27e6cca9e6f255c75194402ad3e4291` : **BUILD CI VALIDÉ**.
+
+- workflow run : `34360880180` ;
+- build iPhone : PASS ;
+- build watchOS : PASS ;
+- assemblage companion : PASS ;
+- packaging IPA : PASS ;
+- artifact : `watch-sensor-lab-companion-fc484f61a27e6cca9e6f255c75194402ad3e4291` ;
+- IPA : `WatchSensorLab-companion-unsigned-fc484f61a27e.ipa` ;
+- SHA-256 IPA : `7369f40a19f6f74e322d1620c81351feb3ca6fe6cdfebc07d7d0fdb9d968a31e`.
+
+Inspection de l'artifact confirmée :
+
+```text
+Payload/WatchSensorLab.app/Watch/WatchSensorLabWatch.app/Info.plist
+```
+
+Identités vérifiées :
+
+- iPhone `CFBundleIdentifier` : `com.rzbck.watchsensorlab` ;
+- Watch `CFBundleIdentifier` : `com.rzbck.watchsensorlab.watchkitapp` ;
+- Watch `WKCompanionAppBundleIdentifier` : `com.rzbck.watchsensorlab` ;
+- Watch `WKRunsIndependentlyOfCompanionApp` : `false`.
+
+Classification : **CI ASSEMBLED COMPANION - HARDWARE NOT VALIDATED**.
+
+## Synchronisation Windows dédiée
+
+Script :
+
+```text
+apps/watch-sensor-lab/UPDATE_WATCH_SENSOR_LAB.ps1
+```
+
+Il reprend la discipline du updater iOS déjà validé sans modifier celui de l'ancienne app :
+
+- exige le worktree/branche Watch Sensor Lab ;
+- refuse un worktree DIRTY ;
+- fast-forward strict seulement ;
+- cherche ou déclenche le workflow pour le HEAD exact ;
+- télécharge uniquement `watch-sensor-lab-companion-<SHA exact>` ;
+- vérifie `BUILD-METADATA.json` ;
+- exige `watch_companion_integrated_in_ipa = true` ;
+- vérifie le SHA-256 de l'IPA ;
+- range les fichiers dans `artifacts/watch-sensor-lab/<sha-court>/` ;
+- prépare `LATEST.json` et `LATEST_IPA.txt` pour iLoader.
+
+Script implémenté mais **NON ENCORE VALIDÉ UTILISATEUR**.
+
 ## Données visées progressivement
 
 ### iPhone
@@ -65,63 +127,8 @@ Principe de données : chaque échantillon doit être horodaté et identifier sa
 
 `Tout récupérer` signifie : exploiter au maximum les APIs publiques réellement disponibles sur les appareils, avec leurs permissions et limites. Cela ne signifie pas accès arbitraire aux données privées/système.
 
-## État vérifié
+## PAS encore validé
 
-- séparation en worktree dédié : **VALIDÉ UTILISATEUR** ;
-- branche distante dédiée : **VALIDÉ** ;
-- `iphone-lab-v2` non modifié : **VALIDÉ par périmètre Git** ;
-- bootstrap iPhone + watchOS au SHA `3a16a663aee99f13ff21759c233ae5a2c056c637` : **BUILD CI VALIDÉ** ;
-- export Godot iOS : **PASS** sur ce SHA ;
-- build Xcode iPhone unsigned : **PASS** sur ce SHA ;
-- build Xcode watchOS unsigned : **PASS** sur ce SHA ;
-- aucune validation matérielle iPhone/Watch pour cette nouvelle app à ce stade.
-
-## Intégration companion
-
-Le workflow assemble maintenant le produit final de test sous forme d'une IPA iPhone contenant l'app watchOS dans :
-
-```text
-Payload/WatchSensorLab.app/Watch/WatchSensorLabWatch.app
-```
-
-Le workflow vérifie avant packaging :
-
-- bundle iPhone : `com.rzbck.watchsensorlab` ;
-- bundle Watch : `com.rzbck.watchsensorlab.watchkitapp` ;
-- `WKCompanionAppBundleIdentifier` côté Watch = `com.rzbck.watchsensorlab` ;
-- `WKRunsIndependentlyOfCompanionApp = false` ;
-- présence réelle de l'app Watch dans l'IPA finale ;
-- association de l'artifact au SHA exact ;
-- SHA-256 spécifique de l'IPA.
-
-Cette étape reste **EXPÉRIMENTALE** tant qu'iLoader n'a pas signé les bundles imbriqués et qu'une vraie Apple Watch n'a pas installé/lancé la companion app.
-
-## Synchronisation Windows dédiée
-
-Nouveau script :
-
-```text
-apps/watch-sensor-lab/UPDATE_WATCH_SENSOR_LAB.ps1
-```
-
-Il reprend la discipline du updater iOS déjà validé sans modifier celui de l'ancienne app :
-
-- exige le worktree/branche Watch Sensor Lab ;
-- refuse un worktree DIRTY ;
-- fast-forward strict seulement ;
-- cherche ou déclenche le workflow pour le HEAD exact ;
-- télécharge uniquement `watch-sensor-lab-companion-<SHA exact>` ;
-- vérifie `BUILD-METADATA.json` ;
-- exige `watch_companion_integrated_in_ipa = true` ;
-- vérifie le SHA-256 de l'IPA ;
-- range les fichiers dans `artifacts/watch-sensor-lab/<sha-court>/` ;
-- prépare `LATEST.json` et `LATEST_IPA.txt` pour iLoader.
-
-Script implémenté mais **NON ENCORE VALIDÉ UTILISATEUR**.
-
-## Pas encore validé
-
-- CI du nouvel assemblage companion ;
 - script Windows `UPDATE_WATCH_SENSOR_LAB.ps1` en conditions réelles ;
 - signature iLoader des bundles imbriqués ;
 - installation de l'IPA sur iPhone ;
@@ -134,12 +141,12 @@ Script implémenté mais **NON ENCORE VALIDÉ UTILISATEUR**.
 
 ## Prochaine étape exacte
 
-1. obtenir un CI vert pour l'IPA companion intégrée ;
-2. synchroniser le worktree Windows au HEAD exact ;
-3. lancer `apps\\watch-sensor-lab\\UPDATE_WATCH_SENSOR_LAB.ps1 -OpenFolder` ;
-4. signer/installer l'IPA exacte avec iLoader ;
-5. vérifier sur l'iPhone si la companion Watch est proposée et installable ;
-6. lancer l'app sur la vraie Watch ;
+1. synchroniser le worktree Windows au HEAD exact ;
+2. lancer `apps\\watch-sensor-lab\\UPDATE_WATCH_SENSOR_LAB.ps1 -OpenFolder` ;
+3. signer/installer l'IPA exacte avec iLoader ;
+4. vérifier que la nouvelle app iPhone se lance ;
+5. ouvrir l'app Watch sur l'iPhone et vérifier si `Watch Sensor Lab` apparaît comme companion installable ;
+6. installer/lancer sur la vraie Apple Watch ;
 7. si ce jalon matériel passe, implémenter le receiver WatchConnectivity iPhone -> Godot ;
 8. ensuite construire le recorder GPS/motion puis HealthKit.
 

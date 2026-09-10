@@ -43,6 +43,7 @@ private struct ReadyWatchHomeView: View {
             WatchLaunchPage().tag(0)
             WatchProgressionDepthView().tag(1)
             WatchVisualRecentPage(showHistory: $showHistory).tag(2)
+            WatchStatusDepthView().tag(3)
         }
         .tabViewStyle(.page)
         .sheet(isPresented: $showHistory) {
@@ -69,9 +70,7 @@ private struct WatchLaunchPage: View {
 
             Spacer(minLength: 0)
 
-            Button {
-                showSportPicker = true
-            } label: {
+            Button { showSportPicker = true } label: {
                 VStack(spacing: 5) {
                     Image(systemName: "play.fill")
                         .font(.system(size: 30, weight: .black))
@@ -82,11 +81,7 @@ private struct WatchLaunchPage: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 92)
                 .background(
-                    LinearGradient(
-                        colors: [.cyan, .mint],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
+                    LinearGradient(colors: [.cyan, .mint], startPoint: .topLeading, endPoint: .bottomTrailing),
                     in: RoundedRectangle(cornerRadius: 28, style: .continuous)
                 )
             }
@@ -97,9 +92,7 @@ private struct WatchLaunchPage: View {
                     .font(.caption.weight(.bold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
-
                 Spacer(minLength: 2)
-
                 Button {
                     model.setAutoPauseEnabled(!model.autoPauseEnabled)
                 } label: {
@@ -173,10 +166,7 @@ private struct WatchSportStartPicker: View {
                                 .foregroundStyle(sportAccent(activity))
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 61)
-                                .background(
-                                    sportAccent(activity).opacity(0.13),
-                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                )
+                                .background(sportAccent(activity).opacity(0.13), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                             }
                             .buttonStyle(.plain)
                         }
@@ -202,86 +192,6 @@ private struct WatchSportStartPicker: View {
     }
 }
 
-private struct WatchVisualProgressionPage: View {
-    @ObservedObject private var history = WatchRecentHistoryStore.shared
-
-    private var weeklyReference: TimeInterval {
-        history.twentyEightDays.duration / 4
-    }
-
-    private var progressRatio: Double {
-        guard weeklyReference > 0 else { return 0 }
-        return min(1.5, history.sevenDays.duration / weeklyReference)
-    }
-
-    private var comparison: String {
-        guard weeklyReference > 0 else { return "—" }
-        let delta = (history.sevenDays.duration - weeklyReference) / weeklyReference
-        if abs(delta) < 0.05 { return "≈ habituel" }
-        return String(format: "%+.0f%%", delta * 100)
-    }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("PROGRESSION")
-                        .font(.system(size: 9, weight: .black))
-                        .foregroundStyle(.secondary)
-                    Text("7 derniers jours")
-                        .font(.caption.weight(.bold))
-                }
-                Spacer()
-                Image(systemName: "chart.line.uptrend.xyaxis")
-                    .foregroundStyle(.cyan)
-            }
-
-            HStack(spacing: 10) {
-                ZStack {
-                    Circle()
-                        .stroke(.white.opacity(0.08), lineWidth: 8)
-                    Circle()
-                        .trim(from: 0, to: min(1, progressRatio))
-                        .stroke(
-                            LinearGradient(colors: [.cyan, .mint], startPoint: .top, endPoint: .bottom),
-                            style: StrokeStyle(lineWidth: 8, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
-                    VStack(spacing: 1) {
-                        Text(compactVisualDuration(history.sevenDays.duration))
-                            .font(.headline.weight(.black))
-                            .minimumScaleFactor(0.65)
-                        Text(comparison)
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.cyan)
-                    }
-                }
-                .frame(width: 82, height: 82)
-
-                VStack(spacing: 7) {
-                    WatchVisualMetric(
-                        value: "\(history.sevenDays.count)",
-                        label: "séances",
-                        symbol: "figure.run",
-                        accent: .orange
-                    )
-                    WatchVisualMetric(
-                        value: compactVisualDistance(history.sevenDays.distanceMeters),
-                        label: "distance",
-                        symbol: "location.fill",
-                        accent: .mint
-                    )
-                }
-            }
-
-            Text("Swipe → pour les activités récentes")
-                .font(.system(size: 8, weight: .medium))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 4)
-    }
-}
-
 private struct WatchVisualRecentPage: View {
     @ObservedObject private var history = WatchRecentHistoryStore.shared
     @Binding var showHistory: Bool
@@ -299,46 +209,38 @@ private struct WatchVisualRecentPage: View {
             }
 
             if let latest = history.activities.first {
-                VStack(spacing: 6) {
-                    HStack(spacing: 8) {
-                        Image(systemName: latest.activityKind?.symbol ?? "figure.mixed.cardio")
-                            .font(.title2.weight(.bold))
-                            .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(latest.activityKind?.label ?? latest.activity)
-                                .font(.headline.weight(.black))
-                                .lineLimit(1)
-                            Text(latest.date, format: .dateTime.day().month().hour().minute())
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
+                Button { showHistory = true } label: {
+                    VStack(spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: latest.activityKind?.symbol ?? "figure.mixed.cardio")
+                                .font(.title2.weight(.bold))
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(latest.activityKind?.label ?? latest.activity)
+                                    .font(.headline.weight(.black))
+                                    .lineLimit(1)
+                                Text(latest.date, format: .dateTime.day().month().hour().minute())
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.tertiary)
                         }
-                        Spacer()
-                    }
 
-                    HStack(spacing: 7) {
-                        WatchVisualMetric(
-                            value: compactVisualDuration(latest.duration),
-                            label: "temps",
-                            symbol: "clock.fill",
-                            accent: .cyan
-                        )
-                        WatchVisualMetric(
-                            value: compactVisualDistance(latest.distanceMeters),
-                            label: "distance",
-                            symbol: "location.fill",
-                            accent: .mint
-                        )
+                        HStack(spacing: 7) {
+                            WatchVisualMetric(value: compactVisualDuration(latest.duration), label: "temps", symbol: "clock.fill", accent: .cyan)
+                            WatchVisualMetric(value: compactVisualDistance(latest.distanceMeters), label: "distance", symbol: "location.fill", accent: .mint)
+                        }
                     }
+                    .padding(9)
+                    .background(
+                        LinearGradient(colors: [.orange.opacity(0.16), .pink.opacity(0.08)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
                 }
-                .padding(9)
-                .background(
-                    LinearGradient(
-                        colors: [.orange.opacity(0.16), .pink.opacity(0.08)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                )
+                .buttonStyle(.plain)
             } else {
                 VStack(spacing: 5) {
                     Image(systemName: "arrow.triangle.2.circlepath")
@@ -350,9 +252,7 @@ private struct WatchVisualRecentPage: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            Button {
-                showHistory = true
-            } label: {
+            Button { showHistory = true } label: {
                 Label("Tout voir", systemImage: "rectangle.stack.fill")
                     .font(.caption.weight(.bold))
                     .frame(maxWidth: .infinity)

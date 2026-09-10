@@ -37,6 +37,7 @@ struct ContentView: View {
 
 private struct ReadyWorkoutView: View {
     @EnvironmentObject private var model: SensorModel
+    @State private var showHistory = false
 
     private var activityBinding: Binding<ActivityKind> {
         Binding(get: { model.selectedActivity }, set: { model.selectActivity($0) })
@@ -101,6 +102,13 @@ private struct ReadyWorkoutView: View {
                 .tint(.green)
                 .controlSize(.large)
 
+                Button { showHistory = true } label: {
+                    Label("Activités récentes", systemImage: "clock.arrow.circlepath")
+                        .font(.caption.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
                 Text(model.sessionStatus)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -108,6 +116,9 @@ private struct ReadyWorkoutView: View {
                     .multilineTextAlignment(.center)
             }
             .padding(.horizontal, 4)
+        }
+        .sheet(isPresented: $showHistory) {
+            WatchRecentHistoryView()
         }
     }
 }

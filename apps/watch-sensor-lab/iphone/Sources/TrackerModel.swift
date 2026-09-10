@@ -37,6 +37,7 @@ final class TrackerModel: NSObject, ObservableObject {
     @Published private(set) var lastSummary: TrackerSummary?
     @Published private(set) var currentWeather: SessionWeatherSnapshot?
     @Published private(set) var autoPauseEnabled = false
+    @Published private(set) var autoPauseProfiles: [AutoPauseProfileKind: AutoPauseProfilePreference] = PhoneAutoPausePreferences.load()
 
     var isActive: Bool { phase == .active || phase == .paused }
     var isPaused: Bool { phase == .paused }
@@ -79,6 +80,7 @@ final class TrackerModel: NSObject, ObservableObject {
         super.init()
         lastPurgeID = defaults.string(forKey: "tracker.lastPurgeID") ?? ""
         autoPauseEnabled = defaults.bool(forKey: "tracker.autoPauseEnabled")
+        autoPauseProfiles = PhoneAutoPausePreferences.load(defaults: defaults)
         recoverLiveActivity()
         configureLocation()
         configureHealthMirroring()
@@ -113,6 +115,27 @@ final class TrackerModel: NSObject, ObservableObject {
         guard !isActive else { return }
         autoPauseEnabled = enabled
         defaults.set(enabled, forKey: "tracker.autoPauseEnabled")
+        sendPreferences()
+    }
+
+    func setAutoPauseProfile(
+        _ profile: AutoPauseProfileKind,
+        enabled: Bool? = nil,
+        pauseDwell: Double? = nil,
+        resumeDwell: Double? = nil
+    ) {
+        guard !isActive else { return }
+        var value = autoPauseProfiles[profile] ?? profile.defaultPreference
+        if let enabled { value.enabled = enabled }
+        if let pauseDwell {
+            value.pauseDwell = min(max(pauseDwell, profile.pauseRange.lowerBound), profile.pauseRange.upperBound)
+        }
+        if let resumeDwell {
+            value.resumeDwell = min(max(resumeDwell, profile.resumeRange.lowerBound), profile.resumeRange.upperBound)
+        }
+        autoPauseProfiles[profile] = value
+        PhoneAutoPausePreferences.save(value, for: profile, defaults: defaults)
+        statusMessage = "Réglages \(profile.label) synchronisés vers la Watch"
         sendPreferences()
     }
 
@@ -233,8 +256,6 @@ final class TrackerModel: NSObject, ObservableObject {
 
     private func launchWatchWorkout() {
         let configuration = HKWorkoutConfiguration()
-        // Auto no longer starts as Mixed Cardio. Until multi-segment Auto is promoted, it starts
-        // with the current conservative effective type (Walking by default) instead of lying in Health.
         configuration.activityType = selectedActivity.isAutomatic ? effectiveActivity.healthKitType : selectedActivity.healthKitType
         configuration.locationType = .outdoor
 
@@ -715,11 +736,17 @@ final class TrackerModel: NSObject, ObservableObject {
 
     private func sendPreferences() {
         guard WCSession.isSupported() else { return }
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "type": "tracker_preferences_v4",
             "auto_pause_enabled": autoPauseEnabled,
             "timestamp": Date().timeIntervalSince1970,
         ]
+        for profile in AutoPauseProfileKind.allCases where PhoneAutoPausePreferences.isConfigured(profile, defaults: defaults) {
+            let value = autoPauseProfiles[profile] ?? profile.defaultPreference
+            payload[profile.enabledPayloadKey] = value.enabled
+            payload[profile.pausePayloadKey] = value.pauseDwell
+            payload[profile.resumePayloadKey] = value.resumeDwell
+        }
         let session = WCSession.default
         try? session.updateApplicationContext(payload)
         if session.activationState == .activated, session.isReachable {
@@ -921,6 +948,7 @@ extension TrackerModel: WCSessionDelegate {
             if self.isActive, previous != session.isReachable {
                 self.store.appendEvent("watch_reachability_changed", source: "iphone", payload: ["reachable": session.isReachable])
             }
+            if session.isReachable { self.sendPreferences() }
         }
     }
 

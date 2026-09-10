@@ -1,18 +1,16 @@
 # HANDOFF — Watch Tracker native product
 
-Date: 2026-09-09
+Date: 2026-09-10
 
 ## Objective
 
-Build a real, compact, polished iPhone + Apple Watch activity tracker. The two devices are two views/controllers of the same live session, not two independent sensor demos.
+Continue the real native iPhone + Apple Watch tracker as one shared session with Watch authority during an active workout. The next phase is no longer basic bring-up: it is data correctness, richer metrics, history, auto-pause and multisport, while preserving the exact-SHA deployment pipeline and the first real field-test corpus.
 
-Required product behavior:
+Detailed field-test findings and the evolving product backlog are in:
 
-- START / PAUSE / RESUME / STOP from either iPhone or Apple Watch must converge to one shared session;
-- iPhone: responsive native UI, Apple Map, live GPS trace, elapsed time, distance, speed, pace, altitude, elevation gain/loss, heart rate and session persistence;
-- Apple Watch: glanceable workout UI, live metrics, heart rate, route map, terrain/elevation page and large controls;
-- heart rate comes from a real HealthKit workout on Apple Watch;
-- raw motion remains auxiliary recorded data, not the primary UI.
+`apps/watch-sensor-lab/FIELD_TEST_2026-09-10.md`
+
+Read that file before changing tracker behavior. Update TODO -> IMPLEMENTED -> CI_VALIDATED -> PHYSICALLY_VALIDATED explicitly.
 
 ## Repository / worktree / branch
 
@@ -20,201 +18,151 @@ Required product behavior:
 - application: `apps/watch-sensor-lab`
 - branch: `feat/watch-sensor-tracker-recorder-20260909`
 - Windows worktree: `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-tracker-recorder`
-- native product code commit: `3c536fdc5b0fd0556b9017e425e7f610693890be`
-- commit message: `feat(tracker): build native iPhone and Watch workout UI`
-- parent: `5174f1e8e97493a1dd6821ed02f0f19139329edc`
+- physically tested application SHA: `1bbd803f491651acb9f4ccb0b2518c4f71d5c55e`
+- application version: `0.3.1 (4)`
+- CI run for tested SHA: `34451272790` — SUCCESS
+- CI artifact id: `10141689980`
+- exact IPA SHA-256: `8a8478b7b9ead0afdec7ad17dc3105f41d8e220ca39266ceb75ba9fa9fd6d4b6`
+- exact IPA path: `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\1bbd803f4916\WatchSensorLab-companion-unsigned-1bbd803f4916.ipa`
 
-This HANDOFF update is a docs commit on top of the native product code. Re-fetch the branch and verify the actual HEAD before doing any work; do not assume the code commit above is still branch HEAD.
+Important: docs commits were added after the physically tested application SHA. Re-fetch branch and verify actual HEAD/status before code changes. Do not treat a docs-only HEAD as a new physically tested build.
 
-## What was physically validated before the native product pivot
+## Current architecture
 
-The previous tracker scaffold at `5174f1e...` was built and installed successfully on the real iPhone and Apple Watch through the validated iLoader path. The user confirmed that it technically worked, but explicitly rejected the product/UI quality:
+### Shared session
 
-- iPhone interface could drift / feel badly framed left-right and was not convincingly designed for iPhone;
-- the screen looked like a sensor/debug recorder rather than a real tracker;
-- Watch UI was essentially raw sensor/debug information;
-- there was no real shared-map / shared-workout product experience.
+- Watch is the single authority while an Apple Watch workout is active.
+- iPhone sends requests; Watch applies state, increments authority revision and broadcasts authoritative state.
+- HealthKit workout mirroring is used for Watch/iPhone workout coordination.
+- WatchConnectivity provides bootstrap/durable context/fallback and raw sample transport.
+- stale authority/control state is rejected by revision/session sentinels.
+- START / PAUSE / RESUME / STOP can be initiated from either side and should converge to one session.
 
-That observation is the reason for the native product pivot. Do not regress to the old debug UI.
+### iPhone
 
-## Validated one-click deployment chain — preserve it
+- native SwiftUI + MapKit product UI;
+- background Core Location route recording;
+- Live Activity for Lock Screen / Dynamic Island;
+- local durable session store under `Documents/Sessions/<session_id>/samples.jsonl` + `summary.json`;
+- Watch HR/energy/motion ingestion;
+- app-local purge command synchronized to Watch.
 
-Physically validated tooling:
+### Watch
 
-- iLoader SHA: `88ca24bbb6fd028f4f180a5f28a5683fba10e7f5`;
-- pinned isideload SHA: `9d43554571360cb27c701efbe1fbd1f5456769ae`;
-- iLoader workflow run: `34406032515`;
-- Windows artifact: `windows-exe`, artifact ID `10125812841`;
-- artifact ZIP digest: `sha256:739826aa9404bda38d666f6e10c7e0b1690b7d63918053d40e0f16bf5672da74`;
-- exact local installer SHA-256: `4FE492056689602C9F02A35763959A14E11A522562825990C579C9390A74AEB9`;
-- installer path: `E:\_Project\IOS APP\_Tools\iloader-watch\artifacts\88ca24bbb6fd028f4f180a5f28a5683fba10e7f5\nsis\iloader_2.3.1_x64-setup.exe`.
+- `HKWorkoutSession` + `HKLiveWorkoutBuilder` + `HKLiveWorkoutDataSource`;
+- HealthKit workout saving enabled in `0.3.1 (4)`;
+- `HKWorkoutRouteBuilder` route saving;
+- Watch GPS, HR, active energy and motion;
+- Auto currently conservatively classifies only Walk / Run / Cycle with 8-second stability and rejects low confidence;
+- broad manual `HKWorkoutActivityType` catalog;
+- `WKBackgroundModes`: workout processing + location.
 
-Physical result with the known-good regression IPA `WatchSensorLab-companion-unsigned-f539fe4105df.ipa`: iPhone installed/worked and the embedded Watch app installed/launched/worked.
+## First real long field test — physically observed
 
-Important tooling failure history before that success:
+The user completed a real outdoor walk on `1bbd803f...` and reports that the overall activity went well. Manual Pause was used during the outing.
 
-1. original nested Watch packaging / companion identifier problems;
-2. direct Watch provisioning/signing and direct streaming_zip_conduit diagnostics proved the signed Watch bundle itself was valid;
-3. one-click path then failed at the first CompanionProxy forwarding call;
-4. reconnecting after iPhone install advanced to a real Watch pairing/trust prompt;
-5. after trust was accepted it advanced again but failed forwarding `com.apple.mobile.installation_proxy`;
-6. final fix used a fresh `com.apple.companion_proxy` service connection for each forwarding start/stop operation;
-7. one-click iPhone + Watch install then physically succeeded.
+Extracted field corpus is preserved on PC:
 
-Do not remove those tooling fixes just because the final blocker was CompanionProxy lifetime.
+- `E:\_Project\IOS APP\_Analysis\watch-sensor-lab\walk-20260910-111806`
+- `E:\_Project\IOS APP\_Analysis\watch-sensor-lab\walk-20260910-111806.zip`
+- main session: `1789026745407`
+- short pre-walk session: `1789026601777`
 
-## Native product pivot in `3c536fdc...`
+Do not delete this baseline corpus. It is the regression reference for algorithm/UI evolution.
 
-The product shell is now native SwiftUI on iPhone and native SwiftUI on watchOS. The old Godot recorder remains in the repository only as a retained prototype/regression reference; it is no longer the intended product UI.
+Main measured results are recorded in `FIELD_TEST_2026-09-10.md`. Key points:
 
-### Native iPhone
+- long session logging completed without JSON corruption;
+- active duration ~58m33s inside ~1h09m29s wall time, consistent with user manual pauses;
+- Watch-authoritative distance ~5.798 km, iPhone integrated distance ~5.931 km (~2.29% difference);
+- Auto stayed Walking for the full walking test with no false Run/Cycle switch;
+- Watch->iPhone motion stream was ~4.89 samples/s against a 5 Hz target with one notable ~14 s gap;
+- iPhone GPS quality was generally good (median horizontal accuracy ~5.1 m);
+- HR stream was present and functional;
+- data analysis exposed objective defects listed below.
 
-New tree: `apps/watch-sensor-lab/iphone/`
+## Current high-priority defects / next-version scope
 
-Implemented:
+Full checklist is in `FIELD_TEST_2026-09-10.md`. Do not lose these items:
 
-- XcodeGen native iOS target, same bundle ID `com.rzbck.watchsensorlab`;
-- full-screen MapKit SwiftUI map with user location and live `MapPolyline` route;
-- safe-area-driven layout instead of the old fixed 390x844 product canvas;
-- responsive bottom metrics/control panel;
-- current elapsed time, distance, speed, pace, heart rate, altitude and elevation gain;
-- large Start, Pause/Resume and Finish controls;
-- Watch/GPS/Health readiness state;
-- Core Location with navigation-level accuracy, point filtering and simple speed smoothing;
-- route accumulation, distance, maximum speed and elevation gain/loss;
-- WatchConnectivity receiver and sender;
-- shared `tracker_state` and `tracker_control` messages;
-- start/pause/resume/stop from iPhone mirrored to Watch;
-- Watch-started session can create the matching iPhone recorder session;
-- `HKHealthStore.startWatchApp(toHandle:)` used to wake/start the Watch workout from iPhone;
-- `workoutSessionMirroringStartHandler` installed early so a Watch-started mirrored workout can wake the iPhone app and keep the mirrored session alive;
-- durable native session log under `Documents/Sessions/<session_id>/samples.jsonl` plus `summary.json`;
-- Watch heart-rate / energy / motion data ingestion.
+1. Fix Auto HealthKit semantics: `automatic` currently creates a `.mixedCardio` workout even when effective activity is Walking.
+2. Remove implausible Watch GPS/speed outliers; field summary reported ~30.2 km/h max during a walk.
+3. Make elevation gain/loss robust; current accumulation is too sensitive to vertical GPS noise.
+4. Diagnose gyroscope: all logged gyro axes were zero in the field corpus while accelerometer was valid.
+5. Add bounded event logging for START/PAUSE/RESUME/STOP, authority revision, selection revision, Auto transitions, transport/reconnect and errors.
+6. Log enough Watch GPS evidence to compare Watch and iPhone routes quantitatively.
+7. Physically verify saved Health/Fitness workout type, HealthKit route and deletion of only Watch Tracker-created workout/route objects.
+8. Perform deliberate Auto transition tests: Walk -> Run -> Walk, then Cycle.
+9. Fix iPhone map being obscured by the redundant top-right Watch badge; compact GPS/Watch/Health status row.
+10. Show live active calories on both iPhone and Watch.
+11. Explore an additional horizontal Watch metric-page interaction while preserving glanceability and simple controls.
+12. Research/implement feasible richer metrics: respiration-related data, gait/asymmetry/balance, cadence/step metrics, richer HR, barometric elevation and environmental context.
+13. Add post-activity summary + persistent activity history on iPhone and useful recent-history access on Watch.
+14. Preserve historical sessions across app upgrades; include schema/app/build/algorithm identity per session.
+15. Add reliable weather/ambient-temperature context with provenance; never confuse wrist temperature with outdoor temperature.
+16. Fix startup display jitter by gating/smoothing values and exposing acquisition state.
+17. Add optional configurable activity-specific auto-pause with hysteresis and manual-control precedence.
+18. Expand Auto conservatively, including hiking inference only if evidence supports it.
+19. Design first-class multisport segments. Target triathlon swim -> bike -> run and general bike -> walk -> run outings in one coherent session, with manual transitions as reliable baseline and automatic transitions only when confidence is strong.
 
-### Native Apple Watch
+## HealthKit delete behavior
 
-Updated tree: `apps/watch-sensor-lab/watch/`
+Current Watch code tags app-created HealthKit workout/route objects with private metadata and deletes matching route objects then matching workout objects during synchronized purge. This compiled in CI but deletion has NOT yet been physically validated. Do not claim it works until the user confirms in Health/Fitness.
 
-Implemented:
+## Exact-SHA sync / deployment workflow — preserve
 
-- HealthKit `HKWorkoutSession` + `HKLiveWorkoutBuilder` + `HKLiveWorkoutDataSource`;
-- live current and average heart rate;
-- active energy;
-- HealthKit walking/running distance contribution;
-- Core Location GPS, route, speed, altitude and elevation gain/loss;
-- Core Motion auxiliary samples;
-- WatchConnectivity shared session state/control;
-- start from Watch and start from iPhone;
-- iPhone workout configuration handled through `WKApplicationDelegate`;
-- Watch workout starts mirroring to companion iPhone;
-- watchOS-specific vertical paged UI using the Digital Crown pattern:
-  1. primary metrics page — time, distance, heart rate, speed, ascent;
-  2. route page — live map / route polyline;
-  3. terrain page — altitude, ascent, descent, average HR;
-  4. controls page — Pause/Resume and Finish;
-- compact idle screen with readiness state and large Start button.
+Use existing script, do not invent a parallel downloader:
 
-Bundle relationship remains unchanged:
+```powershell
+& {
+    $ErrorActionPreference = 'Stop'
 
-- iPhone: `com.rzbck.watchsensorlab`
-- Watch: `com.rzbck.watchsensorlab.watchkitapp`
-- `WKCompanionAppBundleIdentifier = com.rzbck.watchsensorlab`
-- `WKRunsIndependentlyOfCompanionApp = false`
-- `WKApplication = true`
+    Set-Location 'E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-tracker-recorder'
 
-## UI/UX research basis
+    .\apps\watch-sensor-lab\UPDATE_WATCH_SENSOR_LAB.ps1 `
+        -ExpectedBranch 'feat/watch-sensor-tracker-recorder-20260909' `
+        -NoAutoBuild `
+        -OpenFolder
+}
+```
 
-The implementation was deliberately based on current Apple platform guidance rather than making another arbitrary debug layout:
+The exact-SHA artifact then goes through the already validated iLoader/isideload Watch companion install path. Keep artifact/generated/install/physical-validation states distinct.
 
-- watchOS should prioritize glanceable information and shallow interactions, with the Digital Crown used for vertical navigation;
-- workout controls must be easy to find and hit while moving;
-- iOS/watchOS controls are sized around Apple touch-target guidance;
-- MapKit for SwiftUI is used for the native map and polyline route;
-- HealthKit workout sessions/builders are used for real Watch heart-rate workout data and multi-device workout behavior;
-- current Strava iPhone/Watch recording patterns were reviewed only for information hierarchy (map, live metrics, HR, elevation), not copied visually.
+Observed installed iPhone bundle after iLoader signing for the tested build was `com.rzbck.watchsensorlab.59858TV9N2`; do not assume the suffix for every future install without querying the device.
 
-Design notes are in `apps/watch-sensor-lab/PRODUCT_UX.md`.
+## Tooling to preserve
 
-## Data schema
+Do not modify iLoader/isideload transport/provisioning unless a concrete signing/install problem requires it. The Watch companion/HealthKit install path is already validated. Do not touch `main` or `iphone-lab-v2`.
 
-`apps/watch-sensor-lab/DATA_SCHEMA.md` is now schema v2 for the native product:
+## Current validation boundary
 
-- location / route metrics;
-- Watch heart rate;
-- Watch motion;
-- shared `tracker_state`;
-- shared `tracker_control`;
-- native session storage.
+Physically validated on the long field outing:
 
-## Workflow changes
+- app installed/launched on real iPhone + Apple Watch;
+- long shared activity completed;
+- user manually paused during activity;
+- local iPhone session data survived and was extracted after the walk;
+- GPS/HR/motion data streams exist in the extracted corpus;
+- Auto did not falsely leave Walking during this walking test.
 
-`.github/workflows/watch-sensor-lab-bootstrap.yml` now builds the native iPhone SwiftUI product plus the existing native watchOS companion, while still headless-verifying the retained Godot prototype.
+Not yet physically validated / not yet proven from this corpus:
 
-The packaging contract is intentionally preserved:
-
-- unsigned iPhone app;
-- unsigned Watch app;
-- Watch app embedded in `Watch/`;
-- exact bundle/companion identity checks;
-- exact-SHA IPA artifact naming compatible with the existing sync/deployment workflow.
-
-The workflow also verifies that HealthKit and location usage declarations are present.
-
-## IMPORTANT — current validation boundary
-
-The native product commit `3c536fdc...` is **NOT YET CI-VALIDATED and NOT YET PHYSICALLY VALIDATED** at the time of this HANDOFF update.
-
-Do not claim any of the following until evidence exists:
-
-- Swift/iOS build success;
-- Swift/watchOS build success;
-- HealthKit compile/signing success;
-- IPA packaging success;
-- iPhone layout on physical device;
-- Watch layout on physical device;
-- real GPS trace quality;
-- bidirectional START/PAUSE/STOP behavior on hardware;
-- real heart-rate value on Watch or iPhone.
-
-## HealthKit provisioning risk — likely next tooling boundary
-
-The native targets declare `com.apple.developer.healthkit` and Health privacy usage strings.
-
-However, the currently validated isideload backend does not yet have general entitlement/capability handling. Its signing flow largely uses entitlements from the generated provisioning profile. Therefore an unsigned CI build succeeding does **not** prove the final iLoader-signed app will retain a valid HealthKit entitlement.
-
-If the exact native IPA fails during signing/install or HealthKit authorization does not work physically, investigate this before changing app UI:
-
-- detect HealthKit entitlement in the iPhone/Watch bundles;
-- enable the corresponding Apple App ID capability generically for each required App ID;
-- regenerate the correct provisioning profiles;
-- preserve the already validated Watch provisioning/routing/signing/streaming_zip_conduit logic;
-- build a new exact-SHA isideload + iLoader pair and physically validate it.
-
-Do not hard-code this application/team into generic tooling.
-
-## Known script issue
-
-`apps/watch-sensor-lab/UPDATE_WATCH_SENSOR_LAB.ps1` has a small control-flow/output bug discovered on the previous exact build: after it dispatched and successfully waited for a workflow, output from `gh workflow run` leaked from `Wait-ForExactBuild`, and the caller later received an unexpected object, causing:
-
-`The property 'databaseId' cannot be found on this object.`
-
-The actual workflow was successful; this was only the local sync script. Fix by suppressing the command output from `gh workflow run` while preserving its exit-code check. Do not replace the exact-SHA workflow with a competing downloader.
+- correct Health/Fitness activity type for Auto (known code issue: Mixed Cardio semantics);
+- HealthKit route appearance/quality in Health/Fitness;
+- deletion of app-created HealthKit workout + route;
+- Run/Cycle Auto transitions;
+- gyro functionality;
+- trustworthy max speed / elevation gain;
+- richer gait/respiration/environmental metrics;
+- auto-pause;
+- multisport.
 
 ## Next exact step
 
-1. fetch/fast-forward the tracker worktree and verify clean branch/HEAD;
-2. run `.github/workflows/watch-sensor-lab-bootstrap.yml` for the exact current branch HEAD;
-3. inspect/fix any Swift/HealthKit/MapKit build error without weakening the product UI architecture;
-4. after CI success, download the exact-SHA IPA and install it with the physically validated iLoader build;
-5. on hardware test both directions separately:
-   - START on iPhone -> Watch joins, HR appears, both controls sync;
-   - START on Watch -> iPhone joins the same session, map/route starts, controls sync;
-6. record exact physical behavior and any error in this HANDOFF before further changes.
+Before implementing the next version:
 
-## Do not modify
-
-- `main`;
-- `iphone-lab-v2`;
-- validated iLoader/isideload transport logic unless HealthKit provisioning specifically requires a tooling change;
-- Watch bundle identity/companion relationship without a proven packaging reason;
-- old physically validated tooling artifacts.
+1. read `FIELD_TEST_2026-09-10.md`;
+2. verify worktree clean/current branch/actual HEAD after the docs commits;
+3. use the preserved field session as the regression baseline;
+4. research current Apple capabilities for the requested richer metrics/multisport/background behavior;
+5. implement the next version in prioritized slices, keeping field-test status updated after every CI/hardware milestone.

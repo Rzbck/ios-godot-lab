@@ -198,6 +198,7 @@ struct SessionPauseSummaryView: View {
             }
 
             SessionHeartRateZonesView(summary: summary)
+            SessionSegmentMetricsView(summary: summary)
             SessionAutoDecisionView(summary: summary)
         }
         .task(id: summary.sessionID) {

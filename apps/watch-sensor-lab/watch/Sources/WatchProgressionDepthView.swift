@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct WatchProgressionDepthView: View {
@@ -221,7 +222,8 @@ private struct WatchWeeklyBars: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            ForEach(Array(values.enumerated()), id: \.offset) { index, value in
+            ForEach(values.indices, id: \.self) { index in
+                let value = values[index]
                 VStack(spacing: 4) {
                     Capsule()
                         .fill(

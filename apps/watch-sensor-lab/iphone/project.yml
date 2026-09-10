@@ -11,7 +11,12 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: Sources
+      - path: ../Shared/TrackerShared.swift
       - path: Assets.xcassets
+    dependencies:
+      - target: WatchTrackerLiveActivity
+        embed: true
+        codeSign: false
     preBuildScripts:
       - name: Generate App Icon
         shell: /bin/bash
@@ -23,11 +28,12 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Watch Tracker
-        CFBundleShortVersionString: "0.2.0"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "0.3.0"
+        CFBundleVersion: "3"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        NSSupportsLiveActivities: true
         NSLocationWhenInUseUsageDescription: Watch Tracker utilise votre position pendant une session pour tracer le parcours, calculer la distance, la vitesse, l'altitude et le dénivelé.
         NSHealthShareUsageDescription: Watch Tracker lit la fréquence cardiaque et les données d'entraînement de votre Apple Watch pour afficher les métriques de la session.
         NSHealthUpdateUsageDescription: Watch Tracker utilise HealthKit pour la session en direct. Les sessions de test ne sont pas sauvegardées dans Santé.
@@ -43,3 +49,27 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Sources/WatchSensorLab.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     scheme: {}
+
+  WatchTrackerLiveActivity:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: LiveActivity
+      - path: Sources/LiveActivityAttributes.swift
+    info:
+      path: LiveActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Watch Tracker Live
+        CFBundleShortVersionString: "0.3.0"
+        CFBundleVersion: "3"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.liveactivity
+        PRODUCT_NAME: WatchTrackerLiveActivity
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES

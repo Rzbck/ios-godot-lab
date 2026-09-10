@@ -8,60 +8,11 @@ import WatchConnectivity
 final class SensorModel: NSObject, ObservableObject {
     static let shared = SensorModel()
 
-    enum Phase: String {
-        case ready
-        case active
-        case paused
-    }
-
-    enum ActivityKind: String, CaseIterable, Identifiable {
-        case walking
-        case running
-        case hiking
-        case cycling
-
-        var id: String { rawValue }
-
-        var label: String {
-            switch self {
-            case .walking: return "Marche"
-            case .running: return "Course"
-            case .hiking: return "Randonnée"
-            case .cycling: return "Vélo"
-            }
-        }
-
-        var symbol: String {
-            switch self {
-            case .walking: return "figure.walk"
-            case .running: return "figure.run"
-            case .hiking: return "figure.hiking"
-            case .cycling: return "bicycle"
-            }
-        }
-
-        var healthKitType: HKWorkoutActivityType {
-            switch self {
-            case .walking: return .walking
-            case .running: return .running
-            case .hiking: return .hiking
-            case .cycling: return .cycling
-            }
-        }
-
-        init?(healthKitType: HKWorkoutActivityType) {
-            switch healthKitType {
-            case .walking: self = .walking
-            case .running: self = .running
-            case .hiking: self = .hiking
-            case .cycling: self = .cycling
-            default: return nil
-            }
-        }
-    }
+    enum Phase: String { case ready, active, paused }
 
     @Published private(set) var phase: Phase = .ready
-    @Published var selectedActivity: ActivityKind = .walking
+    @Published private(set) var selectedActivity: ActivityKind = .automatic
+    @Published private(set) var effectiveActivity: ActivityKind = .walking
     @Published private(set) var sessionID = ""
     @Published private(set) var elapsedSeconds: TimeInterval = 0
     @Published private(set) var distanceMeters = 0.0
@@ -88,12 +39,15 @@ final class SensorModel: NSObject, ObservableObject {
 
     var running: Bool { phase == .active || phase == .paused }
     var isPaused: Bool { phase == .paused }
+    var displayActivity: ActivityKind { selectedActivity.isAutomatic ? effectiveActivity : selectedActivity }
 
     private let healthStore = HKHealthStore()
     private let locationManager = CLLocationManager()
     private let motion = CMMotionManager()
+    private let activityManager = CMMotionActivityManager()
+    private let defaults = UserDefaults.standard
 
-    // Development builds intentionally do not persist a workout into Apple Health.
+    // Development builds deliberately discard the Health workout when finished.
     private let saveWorkoutToHealth = false
 
     private var workoutSession: HKWorkoutSession?
@@ -108,11 +62,16 @@ final class SensorModel: NSObject, ObservableObject {
     private var lastMotionSend = Date.distantPast
     private var pendingRemoteSessionID: String?
     private var pendingPhoneConfiguration: HKWorkoutConfiguration?
-    private var controlRevision: Int64 = 0
+    private var authorityRevision: Int64 = 0
+    private var selectionRevision: Int64 = 0
     private var lastEndedSessionID = ""
+    private var lastPurgeID = ""
+    private var autoCandidate: ActivityKind?
+    private var autoCandidateToken = UUID()
 
     private override init() {
         super.init()
+        lastPurgeID = defaults.string(forKey: "tracker.lastPurgeID") ?? ""
         configureLocation()
         activateSession()
         requestHealthAuthorization()
@@ -129,58 +88,62 @@ final class SensorModel: NSObject, ObservableObject {
         phoneReachable = session.isReachable
     }
 
+    func selectActivity(_ activity: ActivityKind) {
+        guard !running else { return }
+        selectedActivity = activity
+        effectiveActivity = activity.isAutomatic ? .walking : activity
+        selectionRevision = Self.revisionNow()
+        sessionStatus = activity.isAutomatic ? "Auto · marche/course/vélo" : activity.label
+        sendWC(makeMessage(kind: .selection))
+    }
+
     func requestHealthAuthorization() {
         guard HKHealthStore.isHealthDataAvailable() else { return }
-        guard
-            let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate),
-            let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned),
-            let distanceType = HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)
-        else { return }
-
-        let readTypes: Set<HKObjectType> = [heartRateType, energyType, distanceType]
+        var readTypes = Set<HKObjectType>()
+        for identifier in [
+            HKQuantityTypeIdentifier.heartRate,
+            .activeEnergyBurned,
+            .distanceWalkingRunning,
+            .distanceCycling,
+            .distanceSwimming,
+        ] {
+            if let type = HKQuantityType.quantityType(forIdentifier: identifier) { readTypes.insert(type) }
+        }
         let shareTypes: Set<HKSampleType> = [HKObjectType.workoutType()]
 
         healthStore.requestAuthorization(toShare: shareTypes, read: readTypes) { [weak self] success, error in
             DispatchQueue.main.async {
                 self?.healthAuthorized = success
-                if let error {
-                    self?.sessionStatus = "Santé: \(error.localizedDescription)"
-                }
+                if let error { self?.sessionStatus = "Santé: \(error.localizedDescription)" }
             }
         }
     }
 
     func start() {
         guard !running else { return }
-        controlRevision = 1
+        authorityRevision = max(1, authorityRevision + 1)
         lastEndedSessionID = ""
         start(configuration: nil, origin: "watch", sessionID: nil)
     }
 
     func startFromPhoneConfiguration(_ configuration: HKWorkoutConfiguration) {
-        if let activity = ActivityKind(healthKitType: configuration.activityType) {
-            selectedActivity = activity
-        }
+        guard !running else { return }
         pendingPhoneConfiguration = configuration
+        if selectedActivity != .automatic, let activity = ActivityKind(healthKitType: configuration.activityType) {
+            selectedActivity = activity
+            effectiveActivity = activity
+        }
 
-        // Give WatchConnectivity a short window to deliver the exact shared session id/revision.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, !self.running, let config = self.pendingPhoneConfiguration else { return }
             self.pendingPhoneConfiguration = nil
-            self.start(
-                configuration: config,
-                origin: "iphone",
-                sessionID: self.pendingRemoteSessionID
-            )
+            self.authorityRevision = max(1, self.authorityRevision + 1)
+            self.start(configuration: config, origin: "iphone", sessionID: self.pendingRemoteSessionID)
         }
     }
 
-    func start(configuration: HKWorkoutConfiguration?, origin: String, sessionID: String? = nil) {
-        guard !running else {
-            if self.sessionID.isEmpty, let sessionID { self.sessionID = sessionID }
-            return
-        }
-
+    private func start(configuration: HKWorkoutConfiguration?, origin: String, sessionID: String?) {
+        guard !running else { return }
         let identifier = sessionID ?? pendingRemoteSessionID ?? Self.makeSessionID()
         pendingRemoteSessionID = nil
         pendingPhoneConfiguration = nil
@@ -192,8 +155,9 @@ final class SensorModel: NSObject, ObservableObject {
             return value
         }()
 
-        if let activity = ActivityKind(healthKitType: config.activityType) {
+        if selectedActivity != .automatic, let activity = ActivityKind(healthKitType: config.activityType) {
             selectedActivity = activity
+            effectiveActivity = activity
         }
 
         guard healthAuthorized else {
@@ -203,18 +167,17 @@ final class SensorModel: NSObject, ObservableObject {
         startAuthorized(config, origin: origin, sessionID: identifier)
     }
 
-    private func requestHealthAuthorizationAndStart(
-        _ configuration: HKWorkoutConfiguration,
-        origin: String,
-        sessionID: String
-    ) {
-        guard
-            let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate),
-            let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned),
-            let distanceType = HKQuantityType.quantityType(forIdentifier: .distanceWalkingRunning)
-        else { return }
-
-        let readTypes: Set<HKObjectType> = [heartRateType, energyType, distanceType]
+    private func requestHealthAuthorizationAndStart(_ configuration: HKWorkoutConfiguration, origin: String, sessionID: String) {
+        var readTypes = Set<HKObjectType>()
+        for identifier in [
+            HKQuantityTypeIdentifier.heartRate,
+            .activeEnergyBurned,
+            .distanceWalkingRunning,
+            .distanceCycling,
+            .distanceSwimming,
+        ] {
+            if let type = HKQuantityType.quantityType(forIdentifier: identifier) { readTypes.insert(type) }
+        }
         let shareTypes: Set<HKSampleType> = [HKObjectType.workoutType()]
 
         healthStore.requestAuthorization(toShare: shareTypes, read: readTypes) { [weak self] success, error in
@@ -230,18 +193,11 @@ final class SensorModel: NSObject, ObservableObject {
         }
     }
 
-    private func startAuthorized(
-        _ configuration: HKWorkoutConfiguration,
-        origin: String,
-        sessionID: String
-    ) {
+    private func startAuthorized(_ configuration: HKWorkoutConfiguration, origin: String, sessionID: String) {
         do {
             let session = try HKWorkoutSession(healthStore: healthStore, configuration: configuration)
             let builder = session.associatedWorkoutBuilder()
-            builder.dataSource = HKLiveWorkoutDataSource(
-                healthStore: healthStore,
-                workoutConfiguration: configuration
-            )
+            builder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: configuration)
             session.delegate = self
             builder.delegate = self
             workoutSession = session
@@ -251,15 +207,16 @@ final class SensorModel: NSObject, ObservableObject {
             startedAt = Date()
             pausedAt = nil
             pausedDuration = 0
-            resetPresentationData()
+            resetPresentationData(keepActivity: true)
             phase = .active
-            sessionStatus = origin == "iphone"
-                ? "\(selectedActivity.label) depuis l’iPhone"
-                : "\(selectedActivity.label) en cours"
+            if selectedActivity.isAutomatic { effectiveActivity = .walking }
+            authorityRevision = max(authorityRevision, 1)
+            sessionStatus = selectedActivity.isAutomatic ? "Auto · analyse en cours" : "\(selectedActivity.label) en cours"
 
             requestLocationPermission()
             locationManager.startUpdatingLocation()
             startMotion()
+            startAutomaticClassifierIfNeeded()
             startClock()
 
             let date = startedAt ?? Date()
@@ -267,24 +224,18 @@ final class SensorModel: NSObject, ObservableObject {
             builder.beginCollection(withStart: date) { [weak self] success, error in
                 DispatchQueue.main.async {
                     guard let self else { return }
-                    if !success, let error {
-                        self.sessionStatus = "Entraînement: \(error.localizedDescription)"
-                    }
+                    if !success, let error { self.sessionStatus = "Entraînement: \(error.localizedDescription)" }
                 }
             }
 
-            session.startMirroringToCompanionDevice { [weak self] success, _ in
+            session.startMirroringToCompanionDevice { [weak self] success, error in
                 DispatchQueue.main.async {
-                    if success {
-                        self?.sessionStatus = "iPhone + Watch synchronisés"
-                    }
+                    guard let self else { return }
+                    self.sessionStatus = success ? "iPhone + Watch synchronisés" : "Miroir iPhone: \(error?.localizedDescription ?? "indisponible")"
+                    self.sendAuthority(force: true)
                 }
             }
-
-            sendState(force: true)
-            if origin == "watch" {
-                sendControl(command: "start")
-            }
+            sendAuthority(force: true)
         } catch {
             sessionStatus = "Impossible de démarrer: \(error.localizedDescription)"
             phase = .ready
@@ -293,22 +244,21 @@ final class SensorModel: NSObject, ObservableObject {
 
     func pause() {
         guard phase == .active else { return }
-        controlRevision += 1
+        authorityRevision += 1
         pauseCore()
-        sendControl(command: "pause")
+        sendAuthority(force: true)
     }
 
     func resume() {
         guard phase == .paused else { return }
-        controlRevision += 1
+        authorityRevision += 1
         resumeCore()
-        sendControl(command: "resume")
+        sendAuthority(force: true)
     }
 
     func stop() {
         guard running else { return }
-        controlRevision += 1
-        sendControl(command: "stop")
+        authorityRevision += 1
         stopCore(status: "Session terminée")
     }
 
@@ -317,12 +267,11 @@ final class SensorModel: NSObject, ObservableObject {
             sessionStatus = "Termine la session avant d’effacer"
             return
         }
-        resetPresentationData()
-        sessionID = ""
-        lastEndedSessionID = ""
-        controlRevision = 0
-        sessionStatus = "Données de test effacées"
-        sendDevAction(action: "clear_test_data")
+        let purgeID = UUID().uuidString
+        applyPurge(purgeID)
+        var message = makeMessage(kind: .purge)
+        message.purgeID = purgeID
+        sendWC(message)
     }
 
     private func pauseCore() {
@@ -332,51 +281,43 @@ final class SensorModel: NSObject, ObservableObject {
         currentSpeedMps = 0
         locationManager.stopUpdatingLocation()
         workoutSession?.pause()
-        sessionStatus = "En pause"
-        sendState(force: true)
+        sessionStatus = "En pause · Watch autoritaire"
     }
 
     private func resumeCore() {
         guard phase == .paused else { return }
-        if let pausedAt {
-            pausedDuration += Date().timeIntervalSince(pausedAt)
-        }
+        if let pausedAt { pausedDuration += Date().timeIntervalSince(pausedAt) }
         self.pausedAt = nil
         previousLocation = nil
         previousAltitudeLocation = nil
         phase = .active
         workoutSession?.resume()
         locationManager.startUpdatingLocation()
-        sessionStatus = "\(selectedActivity.label) en cours"
-        sendState(force: true)
+        sessionStatus = selectedActivity.isAutomatic ? "Auto · \(effectiveActivity.label)" : "\(selectedActivity.label) en cours"
     }
 
     private func stopCore(status: String) {
         guard running else { return }
         let end = Date()
-        if phase == .paused, let pausedAt {
-            pausedDuration += end.timeIntervalSince(pausedAt)
-        }
+        if phase == .paused, let pausedAt { pausedDuration += end.timeIntervalSince(pausedAt) }
         refreshElapsed()
-
         locationManager.stopUpdatingLocation()
         stopMotion()
+        stopAutomaticClassifier()
         timer?.invalidate()
         timer = nil
         currentSpeedMps = 0
         lastEndedSessionID = sessionID
-        sendState(force: true, phaseOverride: "ended")
+
+        sendAuthority(force: true, phaseOverride: "ended")
 
         let builder = workoutBuilder
         workoutSession?.end()
         if saveWorkoutToHealth {
-            builder?.endCollection(withEnd: end) { _, _ in
-                builder?.finishWorkout { _, _ in }
-            }
+            builder?.endCollection(withEnd: end) { _, _ in builder?.finishWorkout { _, _ in } }
         } else {
             builder?.discardWorkout()
         }
-
         workoutSession = nil
         workoutBuilder = nil
         startedAt = nil
@@ -385,7 +326,7 @@ final class SensorModel: NSObject, ObservableObject {
         sessionStatus = saveWorkoutToHealth ? status : "\(status) · Santé non modifiée"
     }
 
-    private func resetPresentationData() {
+    private func resetPresentationData(keepActivity: Bool) {
         elapsedSeconds = 0
         distanceMeters = 0
         currentSpeedMps = 0
@@ -406,6 +347,11 @@ final class SensorModel: NSObject, ObservableObject {
         gyroX = 0
         gyroY = 0
         gyroZ = 0
+        autoCandidate = nil
+        if !keepActivity {
+            selectedActivity = .automatic
+            effectiveActivity = .walking
+        }
     }
 
     private func configureLocation() {
@@ -413,38 +359,75 @@ final class SensorModel: NSObject, ObservableObject {
         locationManager.activityType = .fitness
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.distanceFilter = 1.0
+        locationManager.pausesLocationUpdatesAutomatically = false
     }
 
     private func requestLocationPermission() {
-        if locationManager.authorizationStatus == .notDetermined {
-            locationManager.requestWhenInUseAuthorization()
-        }
+        if locationManager.authorizationStatus == .notDetermined { locationManager.requestWhenInUseAuthorization() }
     }
 
     private func startClock() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             DispatchQueue.main.async {
                 self?.refreshElapsed()
-                self?.sendState()
+                self?.sendAuthority()
             }
         }
     }
 
     private func refreshElapsed() {
-        guard let startedAt else {
-            elapsedSeconds = 0
-            return
-        }
+        guard let startedAt else { elapsedSeconds = 0; return }
         let end = pausedAt ?? Date()
         elapsedSeconds = max(0, end.timeIntervalSince(startedAt) - pausedDuration)
+    }
+
+    private func startAutomaticClassifierIfNeeded() {
+        guard selectedActivity.isAutomatic, CMMotionActivityManager.isActivityAvailable() else { return }
+        activityManager.startActivityUpdates(to: .main) { [weak self] activity in
+            guard let self, let activity, self.running, self.selectedActivity.isAutomatic else { return }
+            guard activity.confidence != .low else { return }
+            let candidate: ActivityKind?
+            if activity.running { candidate = .running }
+            else if activity.cycling { candidate = .cycling }
+            else if activity.walking { candidate = .walking }
+            else { candidate = nil }
+            guard let candidate else { return }
+            self.stageAutomaticCandidate(candidate)
+        }
+    }
+
+    private func stageAutomaticCandidate(_ candidate: ActivityKind) {
+        guard candidate != effectiveActivity else {
+            autoCandidate = nil
+            return
+        }
+        if autoCandidate != candidate {
+            autoCandidate = candidate
+            autoCandidateToken = UUID()
+            let token = autoCandidateToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                guard let self, self.running, self.phase == .active, self.selectedActivity.isAutomatic,
+                      self.autoCandidate == candidate, self.autoCandidateToken == token else { return }
+                self.effectiveActivity = candidate
+                self.autoCandidate = nil
+                self.authorityRevision += 1
+                self.sessionStatus = "Auto · \(candidate.label) détectée"
+                self.sendAuthority(force: true)
+            }
+        }
+    }
+
+    private func stopAutomaticClassifier() {
+        activityManager.stopActivityUpdates()
+        autoCandidate = nil
+        autoCandidateToken = UUID()
     }
 
     private func startMotion() {
         let interval = 1.0 / 20.0
         motion.accelerometerUpdateInterval = interval
         motion.gyroUpdateInterval = interval
-
         if motion.isAccelerometerAvailable {
             motion.startAccelerometerUpdates(to: .main) { [weak self] sample, _ in
                 guard let self, let sample else { return }
@@ -454,7 +437,6 @@ final class SensorModel: NSObject, ObservableObject {
                 self.sendMotionIfNeeded()
             }
         }
-
         if motion.isGyroAvailable {
             motion.startGyroUpdates(to: .main) { [weak self] sample, _ in
                 guard let self, let sample else { return }
@@ -474,7 +456,6 @@ final class SensorModel: NSObject, ObservableObject {
         guard phase == .active else { return }
         guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 50 else { return }
         guard abs(location.timestamp.timeIntervalSinceNow) < 10 else { return }
-
         horizontalAccuracy = location.horizontalAccuracy
         currentCoordinate = location.coordinate
         altitudeMeters = location.altitude
@@ -486,9 +467,7 @@ final class SensorModel: NSObject, ObservableObject {
                 distanceMeters += delta
                 let rawSpeed = location.speed >= 0 ? location.speed : delta / dt
                 if rawSpeed >= 0, rawSpeed < 80 {
-                    currentSpeedMps = currentSpeedMps == 0
-                        ? rawSpeed
-                        : (currentSpeedMps * 0.7 + rawSpeed * 0.3)
+                    currentSpeedMps = currentSpeedMps == 0 ? rawSpeed : currentSpeedMps * 0.7 + rawSpeed * 0.3
                 }
             }
         }
@@ -496,26 +475,18 @@ final class SensorModel: NSObject, ObservableObject {
         if location.verticalAccuracy >= 0, location.verticalAccuracy <= 25, let previousAltitudeLocation {
             let delta = location.altitude - previousAltitudeLocation.altitude
             if abs(delta) >= 1.5 {
-                if delta > 0 {
-                    elevationGainMeters += delta
-                } else {
-                    elevationLossMeters += abs(delta)
-                }
+                if delta > 0 { elevationGainMeters += delta } else { elevationLossMeters += abs(delta) }
                 self.previousAltitudeLocation = location
             }
         } else if previousAltitudeLocation == nil {
             previousAltitudeLocation = location
         }
 
-        if route.isEmpty || location.distance(from: CLLocation(
-            latitude: route.last!.latitude,
-            longitude: route.last!.longitude
-        )) >= 1.5 {
+        if route.isEmpty || location.distance(from: CLLocation(latitude: route.last!.latitude, longitude: route.last!.longitude)) >= 1.5 {
             route.append(location.coordinate)
         }
-
         previousLocation = location
-        sendState()
+        sendAuthority()
     }
 
     private func sendMotionIfNeeded() {
@@ -524,228 +495,161 @@ final class SensorModel: NSObject, ObservableObject {
         lastMotionSend = now
         let payload: [String: Any] = [
             "type": "sensor_sample",
-            "schema": 2,
             "source": "watch",
             "kind": "motion",
             "timestamp": now.timeIntervalSince1970,
             "payload": [
                 "accel": [accelX, accelY, accelZ],
                 "gyro": [gyroX, gyroY, gyroZ],
-                "activity": selectedActivity.rawValue,
+                "selected_activity": selectedActivity.rawValue,
+                "effective_activity": effectiveActivity.rawValue,
             ],
         ]
-        sendLive(payload)
+        guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isReachable else { return }
+        WCSession.default.sendMessage(payload, replyHandler: nil, errorHandler: nil)
     }
 
-    private func sendControl(command: String) {
-        let payload: [String: Any] = [
-            "type": "tracker_control",
-            "command": command,
-            "session_id": sessionID,
-            "activity": selectedActivity.rawValue,
-            "control_revision": controlRevision,
-            "timestamp": Date().timeIntervalSince1970,
-        ]
-        sendContextAndLive(payload)
+    private func makeMessage(kind: TrackerWireMessage.Kind) -> TrackerWireMessage {
+        TrackerWireMessage(
+            kind: kind,
+            command: nil,
+            sessionID: sessionID,
+            revision: authorityRevision,
+            selectionRevision: selectionRevision,
+            selectedActivity: selectedActivity.rawValue,
+            effectiveActivity: effectiveActivity.rawValue,
+            phase: running ? phase.rawValue : "ready",
+            purgeID: lastPurgeID,
+            timestamp: Date().timeIntervalSince1970,
+            startedAt: startedAt?.timeIntervalSince1970,
+            elapsedSeconds: elapsedSeconds,
+            distanceMeters: distanceMeters,
+            speedMps: currentSpeedMps,
+            altitudeMeters: altitudeMeters,
+            elevationGainMeters: elevationGainMeters,
+            elevationLossMeters: elevationLossMeters,
+            heartRateBPM: heartRate,
+            averageHeartRateBPM: averageHeartRate,
+            activeEnergyKcal: activeEnergyKcal
+        )
     }
 
-    private func sendDevAction(action: String) {
-        let payload: [String: Any] = [
-            "type": "tracker_dev",
-            "action": action,
-            "timestamp": Date().timeIntervalSince1970,
-        ]
-        sendContextAndLive(payload)
-    }
-
-    private func sendState(force: Bool = false, phaseOverride: String? = nil) {
-        guard WCSession.isSupported() else { return }
+    private func sendAuthority(force: Bool = false, phaseOverride: String? = nil) {
         let now = Date()
         if !force, now.timeIntervalSince(lastStateSend) < 0.75 { return }
         lastStateSend = now
-
-        var payload: [String: Any] = [
-            "type": "tracker_state",
-            "phase": phaseOverride ?? phase.rawValue,
-            "session_id": sessionID,
-            "origin": "watch",
-            "activity": selectedActivity.rawValue,
-            "control_revision": controlRevision,
-            "elapsed_s": elapsedSeconds,
-            "distance_m": distanceMeters,
-            "speed_mps": currentSpeedMps,
-            "altitude_m": altitudeMeters,
-            "elevation_gain_m": elevationGainMeters,
-            "elevation_loss_m": elevationLossMeters,
-            "heart_rate_bpm": heartRate,
-            "average_heart_rate_bpm": averageHeartRate,
-            "active_energy_kcal": activeEnergyKcal,
-            "timestamp": now.timeIntervalSince1970,
-        ]
-        if let startedAt {
-            payload["started_at"] = startedAt.timeIntervalSince1970
+        var message = makeMessage(kind: .authority)
+        if let phaseOverride { message.phase = phaseOverride }
+        if let data = TrackerWireCodec.encode(message), let workoutSession {
+            workoutSession.sendToRemoteWorkoutSession(data: data) { _, _ in }
         }
-
-        sendContextAndLive(payload)
+        sendWC(message)
     }
 
-    private func sendContextAndLive(_ payload: [String: Any]) {
-        guard WCSession.isSupported() else { return }
+    private func sendWC(_ message: TrackerWireMessage) {
+        guard WCSession.isSupported(), let data = TrackerWireCodec.encode(message) else { return }
+        let payload: [String: Any] = ["type": "tracker_wire_v3", "data": data]
         let session = WCSession.default
         try? session.updateApplicationContext(payload)
-        sendLive(payload)
+        if session.activationState == .activated, session.isReachable {
+            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        }
     }
 
-    private func sendLive(_ payload: [String: Any]) {
-        guard WCSession.isSupported() else { return }
-        let session = WCSession.default
-        guard session.activationState == .activated, session.isReachable else { return }
-        session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
-    }
-
-    private func handlePhonePayload(_ payload: [String: Any]) {
-        guard let type = payload["type"] as? String else { return }
-
-        if type == "tracker_dev" {
-            if payload["action"] as? String == "clear_test_data", !running {
-                resetPresentationData()
-                sessionID = ""
-                lastEndedSessionID = ""
-                controlRevision = 0
-                sessionStatus = "Données de test effacées"
-            }
-            return
-        }
-
-        guard type == "tracker_state" || type == "tracker_control" else { return }
-
-        let remoteID = payload["session_id"] as? String ?? ""
-        let remoteRevision = Self.int64Value(payload["control_revision"]) ?? 0
-
-        if type == "tracker_control", let command = payload["command"] as? String {
-            guard acceptRemoteTransition(
-                sessionID: remoteID,
-                revision: remoteRevision,
-                allowNewSession: command == "start"
-            ) else { return }
-            applyRemoteActivity(payload)
-            applyRemotePhase(command, payload: payload)
-            return
-        }
-
-        guard let remotePhase = payload["phase"] as? String else { return }
-        guard acceptRemoteTransition(
-            sessionID: remoteID,
-            revision: remoteRevision,
-            allowNewSession: remotePhase == "active"
-        ) else { return }
-
-        applyRemoteActivity(payload)
-
-        switch remotePhase {
-        case "active":
-            if !running {
-                pendingRemoteSessionID = remoteID
-                if let pendingPhoneConfiguration {
-                    start(configuration: pendingPhoneConfiguration, origin: "iphone", sessionID: remoteID)
-                } else {
-                    start(configuration: nil, origin: "iphone", sessionID: remoteID)
-                }
-            } else if phase == .paused {
-                resumeCore()
-            }
-        case "paused":
-            if phase == .active { pauseCore() }
-        case "ended":
-            if running { stopCore(status: "Session terminée depuis l’iPhone") }
-        default:
+    private func handleWire(_ message: TrackerWireMessage) {
+        applyPurgeIfNeeded(message.purgeID)
+        switch message.kind {
+        case .request:
+            handleRequest(message)
+        case .selection:
+            guard !running, message.selectionRevision >= selectionRevision else { return }
+            selectionRevision = message.selectionRevision
+            if let value = ActivityKind(rawValue: message.selectedActivity) { selectedActivity = value }
+            effectiveActivity = selectedActivity.isAutomatic ? .walking : selectedActivity
+            sessionStatus = selectedActivity.isAutomatic ? "Auto synchronisé" : "\(selectedActivity.label) synchronisée"
+            sendWC(makeMessage(kind: .selection))
+        case .purge:
+            applyPurgeIfNeeded(message.purgeID)
+        case .authority:
             break
         }
     }
 
-    private func acceptRemoteTransition(
-        sessionID remoteSessionID: String,
-        revision: Int64,
-        allowNewSession: Bool
-    ) -> Bool {
-        guard !remoteSessionID.isEmpty else { return false }
-        if remoteSessionID == lastEndedSessionID { return false }
-
-        if remoteSessionID != sessionID {
-            guard !running, allowNewSession else { return false }
-            controlRevision = revision
-            return true
+    private func handleRequest(_ message: TrackerWireMessage) {
+        guard let command = message.command else { return }
+        if command == "start" {
+            guard !running else { sendAuthority(force: true); return }
+            selectionRevision = max(selectionRevision, message.selectionRevision)
+            if let value = ActivityKind(rawValue: message.selectedActivity) { selectedActivity = value }
+            effectiveActivity = selectedActivity.isAutomatic ? .walking : selectedActivity
+            pendingRemoteSessionID = message.sessionID
+            authorityRevision = max(1, authorityRevision + 1)
+            if let config = pendingPhoneConfiguration {
+                pendingPhoneConfiguration = nil
+                start(configuration: config, origin: "iphone", sessionID: message.sessionID)
+            } else {
+                start(configuration: nil, origin: "iphone", sessionID: message.sessionID)
+            }
+            return
         }
 
-        guard revision >= controlRevision else { return false }
-        controlRevision = revision
-        return true
-    }
-
-    private func applyRemoteActivity(_ payload: [String: Any]) {
-        guard let raw = payload["activity"] as? String,
-              let activity = ActivityKind(rawValue: raw) else { return }
-        selectedActivity = activity
-    }
-
-    private func applyRemotePhase(_ command: String, payload: [String: Any]) {
-        let remoteID = payload["session_id"] as? String
+        guard running, message.sessionID == sessionID else { return }
         switch command {
-        case "start":
-            pendingRemoteSessionID = remoteID
-            if !running {
-                if let pendingPhoneConfiguration {
-                    start(configuration: pendingPhoneConfiguration, origin: "iphone", sessionID: remoteID)
-                } else {
-                    start(configuration: nil, origin: "iphone", sessionID: remoteID)
-                }
-            }
         case "pause":
-            if phase == .active { pauseCore() }
+            if phase == .active { pause() } else { sendAuthority(force: true) }
         case "resume":
-            if phase == .paused { resumeCore() }
+            if phase == .paused { resume() } else { sendAuthority(force: true) }
         case "stop":
-            if running { stopCore(status: "Session terminée depuis l’iPhone") }
+            if running { stop() }
         default:
             break
         }
     }
 
-    private static func int64Value(_ value: Any?) -> Int64? {
-        if let value = value as? Int64 { return value }
-        if let value = value as? Int { return Int64(value) }
-        if let value = value as? NSNumber { return value.int64Value }
-        if let value = value as? String { return Int64(value) }
-        return nil
+    private func applyPurgeIfNeeded(_ purgeID: String) {
+        guard !purgeID.isEmpty, purgeID != lastPurgeID, !running else { return }
+        applyPurge(purgeID)
     }
 
-    private static func makeSessionID() -> String {
-        String(Int(Date().timeIntervalSince1970 * 1000))
+    private func applyPurge(_ purgeID: String) {
+        guard !purgeID.isEmpty, purgeID != lastPurgeID else { return }
+        lastPurgeID = purgeID
+        defaults.set(purgeID, forKey: "tracker.lastPurgeID")
+        resetPresentationData(keepActivity: true)
+        sessionID = ""
+        lastEndedSessionID = ""
+        authorityRevision = 0
+        sessionStatus = "Données de test effacées sur les deux appareils"
     }
+
+    private static func makeSessionID() -> String { String(Int(Date().timeIntervalSince1970 * 1000)) }
+    private static func revisionNow() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 }
 
 extension SensorModel: HKWorkoutSessionDelegate {
-    func workoutSession(
-        _ workoutSession: HKWorkoutSession,
-        didChangeTo toState: HKWorkoutSessionState,
-        from fromState: HKWorkoutSessionState,
-        date: Date
-    ) {
+    func workoutSession(_ workoutSession: HKWorkoutSession, didChangeTo toState: HKWorkoutSessionState, from fromState: HKWorkoutSessionState, date: Date) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if toState == .paused, self.phase != .ready {
+            if toState == .paused, self.phase == .active {
                 self.phase = .paused
-            }
-            // Ignore a late running callback after a user-commanded pause.
-            if toState == .running, self.phase != .paused, self.phase != .ready {
+                self.authorityRevision += 1
+                self.sendAuthority(force: true)
+            } else if toState == .running, self.phase == .paused {
                 self.phase = .active
+                self.authorityRevision += 1
+                self.sendAuthority(force: true)
             }
         }
     }
 
     func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in
-            self?.sessionStatus = "Santé: \(error.localizedDescription)"
+        DispatchQueue.main.async { [weak self] in self?.sessionStatus = "Santé: \(error.localizedDescription)" }
+    }
+
+    func workoutSession(_ workoutSession: HKWorkoutSession, didReceiveDataFromRemoteWorkoutSession data: [Data]) {
+        for packet in data {
+            guard let message = TrackerWireCodec.decode(packet) else { continue }
+            DispatchQueue.main.async { [weak self] in self?.handleWire(message) }
         }
     }
 }
@@ -753,14 +657,10 @@ extension SensorModel: HKWorkoutSessionDelegate {
 extension SensorModel: HKLiveWorkoutBuilderDelegate {
     func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {}
 
-    func workoutBuilder(
-        _ workoutBuilder: HKLiveWorkoutBuilder,
-        didCollectDataOf collectedTypes: Set<HKSampleType>
-    ) {
+    func workoutBuilder(_ workoutBuilder: HKLiveWorkoutBuilder, didCollectDataOf collectedTypes: Set<HKSampleType>) {
         for type in collectedTypes {
             guard let quantityType = type as? HKQuantityType,
                   let statistics = workoutBuilder.statistics(for: quantityType) else { continue }
-
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 switch quantityType.identifier {
@@ -770,13 +670,15 @@ extension SensorModel: HKLiveWorkoutBuilderDelegate {
                     self.averageHeartRate = statistics.averageQuantity()?.doubleValue(for: unit) ?? self.averageHeartRate
                 case HKQuantityTypeIdentifier.activeEnergyBurned.rawValue:
                     self.activeEnergyKcal = statistics.sumQuantity()?.doubleValue(for: HKUnit.kilocalorie()) ?? self.activeEnergyKcal
-                case HKQuantityTypeIdentifier.distanceWalkingRunning.rawValue:
+                case HKQuantityTypeIdentifier.distanceWalkingRunning.rawValue,
+                     HKQuantityTypeIdentifier.distanceCycling.rawValue,
+                     HKQuantityTypeIdentifier.distanceSwimming.rawValue:
                     let healthDistance = statistics.sumQuantity()?.doubleValue(for: HKUnit.meter()) ?? 0
                     self.distanceMeters = max(self.distanceMeters, healthDistance)
                 default:
                     break
                 }
-                self.sendState(force: true)
+                self.sendAuthority(force: true)
             }
         }
     }
@@ -784,55 +686,40 @@ extension SensorModel: HKLiveWorkoutBuilderDelegate {
 
 extension SensorModel: CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        if manager.authorizationStatus == .authorizedAlways ||
-            manager.authorizationStatus == .authorizedWhenInUse {
+        if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
             if phase == .active { manager.startUpdatingLocation() }
         }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
-        DispatchQueue.main.async { [weak self] in
-            self?.accept(location: location)
-        }
+        DispatchQueue.main.async { [weak self] in self?.accept(location: location) }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in
-            self?.sessionStatus = "GPS: \(error.localizedDescription)"
-        }
+        DispatchQueue.main.async { [weak self] in self?.sessionStatus = "GPS: \(error.localizedDescription)" }
     }
 }
 
 extension SensorModel: WCSessionDelegate {
-    func session(
-        _ session: WCSession,
-        activationDidCompleteWith activationState: WCSessionActivationState,
-        error: Error?
-    ) {
+    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         DispatchQueue.main.async { [weak self] in
             self?.phoneReachable = session.isReachable
-            if let error {
-                self?.sessionStatus = "iPhone: \(error.localizedDescription)"
-            }
+            if let error { self?.sessionStatus = "iPhone: \(error.localizedDescription)" }
         }
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
-        DispatchQueue.main.async { [weak self] in
-            self?.phoneReachable = session.isReachable
-        }
+        DispatchQueue.main.async { [weak self] in self?.phoneReachable = session.isReachable }
     }
 
-    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handlePhonePayload(message)
-        }
-    }
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }
+    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }
 
-    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        DispatchQueue.main.async { [weak self] in
-            self?.handlePhonePayload(applicationContext)
-        }
+    private func receiveWC(_ payload: [String: Any]) {
+        guard payload["type"] as? String == "tracker_wire_v3",
+              let data = payload["data"] as? Data,
+              let message = TrackerWireCodec.decode(data) else { return }
+        DispatchQueue.main.async { [weak self] in self?.handleWire(message) }
     }
 }

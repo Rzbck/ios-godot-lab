@@ -18,12 +18,19 @@ private struct TrackerRootView: View {
     @State private var completedSummary: TrackerSummary?
 
     private let store = NativeSessionStore()
+    private let recentHistoryBridge = PhoneRecentHistoryBridge()
 
     var body: some View {
         LiveTrackerView()
+            .task {
+                try? await Task.sleep(for: .seconds(1))
+                recentHistoryBridge.publish(summaries: store.listSummaries())
+            }
             .onChange(of: tracker.lastSummary) { previous, current in
                 guard let current, previous?.sessionID != current.sessionID else { return }
-                completedSummary = store.listSummaries().first(where: { $0.sessionID == current.sessionID }) ?? current
+                let summaries = store.listSummaries()
+                completedSummary = summaries.first(where: { $0.sessionID == current.sessionID }) ?? current
+                recentHistoryBridge.publish(summaries: summaries)
             }
             .sheet(item: $completedSummary) { summary in
                 PostActivitySummaryView(summary: summary)

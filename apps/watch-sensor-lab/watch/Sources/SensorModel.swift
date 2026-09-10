@@ -47,11 +47,14 @@ final class SensorModel: NSObject, ObservableObject {
     private let activityManager = CMMotionActivityManager()
     private let defaults = UserDefaults.standard
 
-    // Development builds deliberately discard the Health workout when finished.
-    private let saveWorkoutToHealth = false
+    private let saveWorkoutToHealth = true
+    private static let managedWorkoutMetadataKey = "com.rzbck.watchsensorlab.managed"
+    private static let sessionMetadataKey = "com.rzbck.watchsensorlab.session_id"
 
     private var workoutSession: HKWorkoutSession?
     private var workoutBuilder: HKLiveWorkoutBuilder?
+    private var workoutRouteBuilder: HKWorkoutRouteBuilder?
+    private var healthRouteLocations: [CLLocation] = []
     private var startedAt: Date?
     private var pausedAt: Date?
     private var pausedDuration: TimeInterval = 0
@@ -109,7 +112,7 @@ final class SensorModel: NSObject, ObservableObject {
         ] {
             if let type = HKQuantityType.quantityType(forIdentifier: identifier) { readTypes.insert(type) }
         }
-        let shareTypes: Set<HKSampleType> = [HKObjectType.workoutType()]
+        let shareTypes: Set<HKSampleType> = [HKObjectType.workoutType(), HKSeriesType.workoutRoute()]
 
         healthStore.requestAuthorization(toShare: shareTypes, read: readTypes) { [weak self] success, error in
             DispatchQueue.main.async {
@@ -178,7 +181,7 @@ final class SensorModel: NSObject, ObservableObject {
         ] {
             if let type = HKQuantityType.quantityType(forIdentifier: identifier) { readTypes.insert(type) }
         }
-        let shareTypes: Set<HKSampleType> = [HKObjectType.workoutType()]
+        let shareTypes: Set<HKSampleType> = [HKObjectType.workoutType(), HKSeriesType.workoutRoute()]
 
         healthStore.requestAuthorization(toShare: shareTypes, read: readTypes) { [weak self] success, error in
             DispatchQueue.main.async {
@@ -198,12 +201,25 @@ final class SensorModel: NSObject, ObservableObject {
             let session = try HKWorkoutSession(healthStore: healthStore, configuration: configuration)
             let builder = session.associatedWorkoutBuilder()
             builder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: configuration)
+            let routeBuilder = builder.seriesBuilder(for: HKSeriesType.workoutRoute()) as? HKWorkoutRouteBuilder
             session.delegate = self
             builder.delegate = self
             workoutSession = session
             workoutBuilder = builder
+            workoutRouteBuilder = routeBuilder
 
             self.sessionID = sessionID
+            builder.addMetadata([
+                Self.managedWorkoutMetadataKey: true,
+                Self.sessionMetadataKey: sessionID,
+                "com.rzbck.watchsensorlab.selected_activity": selectedActivity.rawValue,
+            ]) { [weak self] success, error in
+                guard !success, let error else { return }
+                DispatchQueue.main.async {
+                    self?.sessionStatus = "Métadonnées Santé: \(error.localizedDescription)"
+                }
+            }
+
             startedAt = Date()
             pausedAt = nil
             pausedDuration = 0
@@ -312,18 +328,101 @@ final class SensorModel: NSObject, ObservableObject {
         sendAuthority(force: true, phaseOverride: "ended")
 
         let builder = workoutBuilder
+        let routeBuilder = workoutRouteBuilder
+        let routeLocations = healthRouteLocations
+        let completedSessionID = sessionID
         workoutSession?.end()
-        if saveWorkoutToHealth {
-            builder?.endCollection(withEnd: end) { _, _ in builder?.finishWorkout { _, _ in } }
+
+        if saveWorkoutToHealth, let builder {
+            sessionStatus = "\(status) · sauvegarde Santé…"
+            finishAndSaveWorkout(
+                builder: builder,
+                routeBuilder: routeBuilder,
+                locations: routeLocations,
+                end: end,
+                sessionID: completedSessionID,
+                status: status
+            )
         } else {
             builder?.discardWorkout()
+            sessionStatus = "\(status) · Santé non modifiée"
         }
+
         workoutSession = nil
         workoutBuilder = nil
+        workoutRouteBuilder = nil
+        healthRouteLocations = []
         startedAt = nil
         pausedAt = nil
         phase = .ready
-        sessionStatus = saveWorkoutToHealth ? status : "\(status) · Santé non modifiée"
+    }
+
+    private func finishAndSaveWorkout(
+        builder: HKLiveWorkoutBuilder,
+        routeBuilder: HKWorkoutRouteBuilder?,
+        locations: [CLLocation],
+        end: Date,
+        sessionID: String,
+        status: String
+    ) {
+        let finishCollection: (Bool, Error?) -> Void = { [weak self] routeReady, routeError in
+            builder.endCollection(withEnd: end) { [weak self] success, error in
+                guard let self else { return }
+                guard success else {
+                    DispatchQueue.main.async {
+                        self.sessionStatus = "Santé: \(error?.localizedDescription ?? "fin de collecte impossible")"
+                    }
+                    return
+                }
+
+                builder.finishWorkout { [weak self] workout, error in
+                    guard let self else { return }
+                    guard let workout else {
+                        DispatchQueue.main.async {
+                            self.sessionStatus = "Santé: \(error?.localizedDescription ?? "sauvegarde impossible")"
+                        }
+                        return
+                    }
+
+                    guard routeReady, let routeBuilder, !locations.isEmpty else {
+                        DispatchQueue.main.async {
+                            if let routeError {
+                                self.sessionStatus = "\(status) · Santé sauvegardée · parcours: \(routeError.localizedDescription)"
+                            } else {
+                                self.sessionStatus = "\(status) · Santé sauvegardée (sans parcours)"
+                            }
+                        }
+                        return
+                    }
+
+                    routeBuilder.finishRoute(
+                        with: workout,
+                        metadata: [
+                            Self.managedWorkoutMetadataKey: true,
+                            Self.sessionMetadataKey: sessionID,
+                        ]
+                    ) { [weak self] _, routeError in
+                        DispatchQueue.main.async {
+                            guard let self else { return }
+                            if let routeError {
+                                self.sessionStatus = "\(status) · Santé sauvegardée · parcours: \(routeError.localizedDescription)"
+                            } else {
+                                self.sessionStatus = "\(status) · Santé + parcours sauvegardés"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        guard let routeBuilder, !locations.isEmpty else {
+            finishCollection(false, nil)
+            return
+        }
+
+        routeBuilder.insertRouteData(locations) { success, error in
+            finishCollection(success, error)
+        }
     }
 
     private func resetPresentationData(keepActivity: Bool) {
@@ -337,6 +436,7 @@ final class SensorModel: NSObject, ObservableObject {
         averageHeartRate = 0
         activeEnergyKcal = 0
         route = []
+        healthRouteLocations = []
         currentCoordinate = nil
         horizontalAccuracy = -1
         previousLocation = nil
@@ -359,6 +459,7 @@ final class SensorModel: NSObject, ObservableObject {
         locationManager.activityType = .fitness
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.distanceFilter = 1.0
+        locationManager.allowsBackgroundLocationUpdates = true
     }
 
     private func requestLocationPermission() {
@@ -484,6 +585,7 @@ final class SensorModel: NSObject, ObservableObject {
         if route.isEmpty || location.distance(from: CLLocation(latitude: route.last!.latitude, longitude: route.last!.longitude)) >= 1.5 {
             route.append(location.coordinate)
         }
+        healthRouteLocations.append(location)
         previousLocation = location
         sendAuthority()
     }
@@ -618,7 +720,29 @@ final class SensorModel: NSObject, ObservableObject {
         sessionID = ""
         lastEndedSessionID = ""
         authorityRevision = 0
-        sessionStatus = "Données de test effacées sur les deux appareils"
+        sessionStatus = "Données locales effacées · suppression Santé…"
+        deleteManagedHealthData()
+    }
+
+    private func deleteManagedHealthData() {
+        let predicate = HKQuery.predicateForObjects(withMetadataKey: Self.managedWorkoutMetadataKey)
+
+        healthStore.deleteObjects(of: HKSeriesType.workoutRoute(), predicate: predicate) { [weak self] routeSuccess, routeCount, routeError in
+            guard let self else { return }
+            self.healthStore.deleteObjects(of: HKObjectType.workoutType(), predicate: predicate) { [weak self] workoutSuccess, workoutCount, workoutError in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if routeSuccess && workoutSuccess {
+                        self.sessionStatus = "Données locales + Santé effacées · \(workoutCount) séance(s), \(routeCount) parcours"
+                    } else {
+                        let detail = workoutError?.localizedDescription
+                            ?? routeError?.localizedDescription
+                            ?? "suppression HealthKit incomplète"
+                        self.sessionStatus = "Données locales effacées · Santé: \(detail)"
+                    }
+                }
+            }
+        }
     }
 
     private static func makeSessionID() -> String { String(Int(Date().timeIntervalSince1970 * 1000)) }

@@ -24,15 +24,19 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Watch Tracker
-        CFBundleShortVersionString: "0.3.0"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "0.3.1"
+        CFBundleVersion: "4"
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.rzbck.watchsensorlab
         WKRunsIndependentlyOfCompanionApp: false
+        WKBackgroundModes:
+          - workout-processing
+        UIBackgroundModes:
+          - location
         NSLocationWhenInUseUsageDescription: Watch Tracker utilise le GPS de l’Apple Watch pendant la session pour la vitesse, l’altitude et le tracé.
         NSMotionUsageDescription: Watch Tracker utilise les mouvements de l’Apple Watch pour détecter automatiquement marche, course ou vélo lorsque le mode Auto est sélectionné.
         NSHealthShareUsageDescription: Watch Tracker lit votre fréquence cardiaque et les métriques d’entraînement pendant une session.
-        NSHealthUpdateUsageDescription: Watch Tracker utilise HealthKit pour la session en direct. Les sessions de test ne sont pas sauvegardées dans Santé.
+        NSHealthUpdateUsageDescription: Watch Tracker enregistre dans Santé les entraînements terminés et leur parcours GPS, et peut supprimer les données qu’il a lui-même créées sur demande.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watchkitapp

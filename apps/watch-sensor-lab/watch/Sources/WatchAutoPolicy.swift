@@ -53,7 +53,7 @@ enum WatchAutoPolicy {
         speedMps: Double,
         cadenceSPM: Double
     ) -> Bool {
-        guard stationary else { return false }
+        guard WatchAutoPauseSettings.isEnabled(for: activity), stationary else { return false }
         switch activity {
         case .walking, .hiking:
             return speedMps <= 1.2 && cadenceSPM < 30
@@ -67,12 +67,7 @@ enum WatchAutoPolicy {
     }
 
     static func pauseDwell(for activity: ActivityKind) -> TimeInterval {
-        switch activity {
-        case .cycling, .handCycling: return 7
-        case .running, .trackAndField: return 9
-        case .walking, .hiking: return 11
-        default: return 12
-        }
+        WatchAutoPauseSettings.pauseDwell(for: activity)
     }
 
     static func shouldStageResume(
@@ -82,7 +77,7 @@ enum WatchAutoPolicy {
         cadenceSPM: Double,
         motionCandidate: ActivityKind?
     ) -> Bool {
-        guard !stationary else { return false }
+        guard WatchAutoPauseSettings.isEnabled(for: activity), !stationary else { return false }
         switch activity {
         case .walking, .hiking:
             return speedMps >= 0.7 || cadenceSPM >= 35 || motionCandidate == .walking || motionCandidate == .hiking
@@ -96,12 +91,7 @@ enum WatchAutoPolicy {
     }
 
     static func resumeDwell(for activity: ActivityKind) -> TimeInterval {
-        switch activity {
-        case .cycling, .handCycling: return 3
-        case .running, .trackAndField: return 3
-        case .walking, .hiking: return 4
-        default: return 4
-        }
+        WatchAutoPauseSettings.resumeDwell(for: activity)
     }
 
     static func confidenceLabel(_ confidence: CMMotionActivityConfidence) -> String {

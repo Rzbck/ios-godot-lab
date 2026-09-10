@@ -8,6 +8,19 @@ Turn the current feature-rich tracker into one coherent iPhone + Apple Watch pro
 
 This redesign must not remove diagnostics or provenance. It moves them deeper in the information hierarchy so normal users see useful activity/health information first.
 
+## Branch / checkpoints
+
+- repository: `Rzbck/ios-godot-lab`
+- branch: `feat/watch-sensor-product-ux-20260910`
+- branch base: `ab77fe270838fca2793b77dcff6f84c4e46cad4f`
+- first UX implementation checkpoint: `41cfe677c695ce697903b5d81cb905b91f3dd4d1`
+- exact CI run for that checkpoint: `34503568827` — **SUCCESS**
+- validated by that run: retained Godot prototype, unsigned iPhone build, unsigned watchOS build, HealthKit declarations, embedded companion assembly and exact-SHA IPA artifact.
+- second UX code checkpoint: `9d754c39535e675e82bdf7398cc2f7d1bac6b9e2`
+- second checkpoint adds the HealthKit progression dashboard plus the redesigned iPhone live Activity experience; **CI validation pending** at the time of this documentation update.
+- this documentation commit is expected to be ahead of the code checkpoint; always validate/install the final current branch HEAD with its own exact-SHA workflow run.
+- no physical UX validation yet for this redesign.
+
 ## Product roles
 
 ### Apple Watch
@@ -40,7 +53,7 @@ Primary navigation:
 
 1. **Aujourd’hui** — default entry point.
 2. **Activité** — start/supervise current workout; map belongs here.
-3. **Progression** — 7/28-day trends, later enriched from HealthKit.
+3. **Progression** — 7/28-day trends enriched from user-authorized HealthKit data.
 4. **Historique** — durable session timeline, filters and detailed sessions.
 
 Profile/settings belong in the top-right profile affordance, not History.
@@ -56,7 +69,7 @@ Priority order:
 3. strong CTA to Activity;
 4. recent weekly activity summary;
 5. last activity;
-6. later: HealthKit-informed sleep/recovery/cardio insights when data and permission are actually available.
+6. later: compact HealthKit-informed sleep/recovery/cardio insights when data and permission are actually available.
 
 Never fabricate missing HealthKit values. Missing/unauthorized data is shown as unavailable/insufficient, never zero.
 
@@ -72,7 +85,7 @@ Never fabricate missing HealthKit values. Missing/unauthorized data is shown as 
 
 ### Live
 
-Information hierarchy:
+Implemented direction:
 
 - activity + state + elapsed time;
 - 3–4 primary metrics;
@@ -85,6 +98,7 @@ Map rules:
 - not the app home screen;
 - location control always has deterministic behavior;
 - first location action recenters/follows the current user position;
+- current implementation explicitly frames `TrackerModel.currentCoordinate` at about 600 m and falls back to MapKit user-location mode until a coordinate is available;
 - user map interaction exits follow mode;
 - current route framing and history route framing are separate concepts.
 
@@ -94,14 +108,22 @@ History is a first-class destination, not a modal shortcut.
 
 ### List
 
-- weekly/monthly summary header;
+Implemented first pass:
+
+- period summary for 7 days / 30 days / all history;
 - chronological activity list;
-- activity type + date + distance + duration + energy where available;
-- later: search, period filter, sport filter, Auto/manual filter.
+- activity type + date + distance + duration + energy where available.
+
+Remaining:
+
+- search;
+- sport filter;
+- Auto/manual filter;
+- richer calendar presentation if it improves real-device usability.
 
 ### Activity detail
 
-Order:
+Current hierarchy:
 
 1. activity/date header;
 2. hero metrics;
@@ -110,55 +132,58 @@ Order:
 5. elevation;
 6. segments and pauses;
 7. environment/weather;
-8. comparisons with similar personal sessions;
+8. later: comparisons with similar personal sessions;
 9. data quality/provenance;
-10. technical trace/build metadata at the bottom.
+10. technical trace/build metadata collapsed/de-emphasized at the bottom.
 
 ## Progression / health dashboard
 
-The dashboard should combine Watch Tracker history with user-authorized HealthKit history, while keeping provenance explicit.
+The dashboard combines Watch Tracker history with user-authorized HealthKit history while keeping provenance explicit.
 
-Target groups:
+Second checkpoint implements:
 
-- activity volume: workouts, active time, distance, elevation, sport mix;
-- cardio: resting HR, workout HR, HRV where readable, recovery metrics where available;
-- sleep/recovery context where HealthKit provides data;
+- Watch Tracker activity load: recent duration, distance and count, compared with the previous three-week personal reference when available;
+- today HealthKit totals for steps, Apple Exercise Time and active energy;
+- latest resting heart rate with 28-day personal mean;
+- latest HRV SDNN with 28-day personal mean;
+- recent sleep duration from asleep-stage samples, merging overlaps rather than double-counting them;
+- latest VO2 max when available;
+- 14-day resting-HR and HRV trend charts;
+- source name for latest quantity samples when HealthKit exposes it;
+- explicit missing-data behavior: absent/non-shared values render unavailable, never zero;
+- no opaque health/readiness score and no diagnostic claim.
+
+Later target groups:
+
+- workout HR / recovery metrics;
 - mobility: walking pace, step length, asymmetry, double support and related available metrics;
 - personal performance: comparable pace/speed/HR/cadence/elevation trends;
-- environment-vs-effort insights from Watch Tracker weather context.
-
-Potential product concepts:
-
-- **Charge** — recent training/activity volume and intensity relative to personal baseline;
-- **Récupération** — transparent contextual indicator using available personal baseline data, never medical diagnosis;
-- **Équilibre** — recent load vs personal normal range.
-
-No opaque score should ship until its inputs, missing-data behavior and explanation are defined and validated.
+- environment-vs-effort insights from Watch Tracker weather context;
+- optional explainable Charge / Recovery / Balance concepts only after inputs and missing-data behavior are validated.
 
 ## Apple Watch redesign
 
 ### Ready screen
 
-Keep only:
+Implemented first pass:
 
 - selected activity / Auto;
 - compact readiness;
 - large Start;
-- optional quick activity selector;
-- recent history shortcut only if space remains useful.
-
-Move advanced auto-pause settings and explanatory paragraphs to iPhone.
+- quick activity selector;
+- recent-history shortcut only where space remains useful;
+- advanced auto-pause settings and long explanatory copy removed from Watch ready UI.
 
 ### Active pages
 
-Target maximum four top-level pages:
+Target/implemented hierarchy is kept to four top-level concepts:
 
 1. **Principal** — elapsed, distance, HR, current pace/speed + state.
 2. **Effort** — HR/zone, calories, cadence/steps.
 3. **Terrain / route** — route, altitude, ascent/descent, GPS quality where relevant.
 4. **Controls** — pause/resume, transition when relevant, finish.
 
-Auto classification confidence/provenance remains available but should not compete with the primary workout metrics. Prefer a compact Auto state and expose deeper provenance on iPhone/post-session.
+Auto classification confidence/provenance remains available but must not compete with primary workout metrics. Deeper provenance belongs on iPhone/post-session.
 
 ## Shared interaction contract
 
@@ -172,41 +197,54 @@ Auto classification confidence/provenance remains available but should not compe
 
 ### UX-1 — navigation foundation
 
+Implemented and CI-validated at `41cfe677...`:
+
 - Today becomes iPhone entry point;
 - Activity, Progression and History become first-class destinations;
-- map no longer owns the root screen;
-- deterministic map recenter/follow behavior.
+- map no longer owns the root screen.
 
 ### UX-2 — Activity live hierarchy
 
+Implemented in second checkpoint, CI pending:
+
 - Summary / Map / Details presentation;
-- reduce horizontal metric-card overload;
-- promote sport-relevant metrics;
-- preserve controls and acquisition state.
+- horizontal metric-card overload removed from the new live surface;
+- sport-relevant pace/speed selection;
+- controls always available;
+- deterministic explicit map recenter behavior.
 
 ### UX-3 — Watch simplification
+
+Implemented and CI-validated at `41cfe677...`:
 
 - remove advanced auto-pause settings from Ready screen;
 - remove long instructional copy from Watch;
 - increase primary metric sizing;
-- compact Auto confidence/provenance;
+- compact Auto presentation;
 - simplify page hierarchy.
 
 ### UX-4 — History redesign
 
+First pass implemented and CI-validated at `41cfe677...`:
+
 - summary header + richer list;
 - detail information hierarchy;
-- technical trace collapsed/de-emphasized;
-- filters/search and comparison entry points.
+- technical trace collapsed/de-emphasized.
+
+Search/filters and comparison entry points remain.
 
 ### UX-5 — HealthKit trends
 
-- explicit read types and permission UX;
-- historical queries with provenance/missing-data states;
-- Today health cards;
-- Progression cardio/sleep/mobility sections;
-- baseline calculations and explainable insights.
+First functional pass implemented in second checkpoint, CI pending:
+
+- additional read types requested only when Progression becomes relevant;
+- historical queries with source/missing-data states;
+- activity-load context;
+- resting HR, HRV, sleep, VO2 max, steps, active energy, exercise time;
+- 14-day trend charts and 28-day personal baselines.
+
+Today health cards and deeper mobility/performance insights remain.
 
 ## Validation
 
-UI builds and CI are not physical UX validation. After each substantial slice, validate on real iPhone/Watch for tap targets, text sizing, safe areas, Digital Crown/page behavior, map recenter, state synchronization and legibility during motion.
+UI builds and CI are not physical UX validation. After each substantial slice, validate on real iPhone/Watch for tap targets, text sizing, safe areas, Digital Crown/page behavior, HealthKit permission behavior, map recenter, state synchronization and legibility during motion.

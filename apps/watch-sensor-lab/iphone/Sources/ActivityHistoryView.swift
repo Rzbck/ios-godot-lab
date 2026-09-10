@@ -33,10 +33,7 @@ struct ActivityHistoryView: View {
                     Button("Fermer") { dismiss() }
                 }
             }
-            .onAppear {
-                WatchReliableRecovery.refreshAllAvailableSummaries()
-                summaries = store.listSummaries()
-            }
+            .onAppear { summaries = store.listSummaries() }
         }
         .preferredColorScheme(.dark)
     }
@@ -125,8 +122,8 @@ private struct ActivityDetailView: View {
                     DetailMetric(title: "CADENCE", value: summary.averageCadenceSPM.map { String(format: "%.0f pas/min", $0) } ?? "—", symbol: "metronome.fill")
                 }
 
+                SessionPauseSummaryView(summary: summary)
                 SessionTimelineView(points: timeline)
-                HealthEnergyTimelineView(summary: summary)
 
                 if let weather = summary.weatherSnapshots, !weather.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -165,7 +162,6 @@ private struct ActivityDetailView: View {
 
     private func loadSessionData() {
         let sessionID = summary.sessionID
-        WatchReliableRecovery.refreshSummaryIfNeeded(sessionID: sessionID)
         review = ActivityReviewStore().load(sessionID: sessionID)
         DispatchQueue.global(qos: .userInitiated).async {
             let loadedRoute = store.loadRoute(sessionID: sessionID)

@@ -2,7 +2,7 @@ import Charts
 import Foundation
 import SwiftUI
 
-enum ProgressionRange: String, CaseIterable, Identifiable {
+private enum ProgressionRange: String, CaseIterable, Identifiable {
     case week
     case month
     case sixMonths
@@ -37,7 +37,7 @@ enum ProgressionRange: String, CaseIterable, Identifiable {
         }
     }
 
-    func previousStart(now: Date, records: [HealthWorkoutRecord]) -> Date? {
+    func previousStart(now: Date) -> Date? {
         let calendar = Calendar.autoupdatingCurrent
         switch self {
         case .week:
@@ -53,19 +53,13 @@ enum ProgressionRange: String, CaseIterable, Identifiable {
         }
     }
 
-    var bucketStyle: ProgressionBucketStyle {
+    var bucketComponent: Calendar.Component {
         switch self {
         case .week, .month: return .day
-        case .sixMonths, .year: return .week
+        case .sixMonths, .year: return .weekOfYear
         case .all: return .month
         }
     }
-}
-
-private enum ProgressionBucketStyle {
-    case day
-    case week
-    case month
 }
 
 private enum ProgressionMetric: String, CaseIterable, Identifiable {
@@ -86,7 +80,7 @@ private enum ProgressionMetric: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .duration: return "clock.fill"
-        case .distance: return "point.topleft.down.to.point.bottomright.curvepath"
+        case .distance: return "location.fill"
         case .sessions: return "figure.run"
         }
     }
@@ -97,8 +91,6 @@ private struct ProgressionAggregate {
     let duration: TimeInterval
     let distanceMeters: Double
     let energyKcal: Double
-
-    static let empty = ProgressionAggregate(count: 0, duration: 0, distanceMeters: 0, energyKcal: 0)
 }
 
 private struct ProgressionBucket: Identifiable {
@@ -111,12 +103,10 @@ private struct ProgressionBucket: Identifiable {
 }
 
 private struct SportSlice: Identifiable {
-    let rawActivity: String
-    let label: String
-    let symbol: String
+    let activity: ActivityKind
     let duration: TimeInterval
 
-    var id: String { rawActivity }
+    var id: String { activity.rawValue }
 }
 
 struct PerformanceProgressionView: View {
@@ -135,19 +125,19 @@ struct PerformanceProgressionView: View {
             ScrollView {
                 LazyVStack(spacing: 14) {
                     hero
-                    periodSelector
-                    activitySummary
-                    trendChart
-                    sportComposition
-                    healthSignals
-                    sourceNote
+                    rangePicker
+                    overviewCard
+                    trendCard
+                    sportCard
+                    healthCard
+                    provenance
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 28)
             }
             .background(
                 LinearGradient(
-                    colors: [Color.indigo.opacity(0.16), Color.black, Color.black],
+                    colors: [Color.indigo.opacity(0.18), Color.black, Color.black],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -166,13 +156,15 @@ struct PerformanceProgressionView: View {
     }
 
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let aggregate = aggregate(currentRecords)
+
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("VUE PERFORMANCE")
+                    Text("PERFORMANCE")
                         .font(.caption.weight(.black))
                         .foregroundStyle(.cyan)
-                    Text(heroTitle)
+                    Text(loading ? "Analyse de ton historique" : heroTitle(aggregate))
                         .font(.title2.weight(.bold))
                 }
                 Spacer()
@@ -183,7 +175,9 @@ struct PerformanceProgressionView: View {
                     .background(.cyan.opacity(0.14), in: Circle())
             }
 
-            Text(heroSubtitle)
+            Text(selectedSportRaw == "all"
+                 ? "Toutes tes activités Santé accessibles · \(range.label)."
+                 : "\(selectedActivity.label) · \(range.label).")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -191,7 +185,7 @@ struct PerformanceProgressionView: View {
         .padding(18)
         .background(
             LinearGradient(
-                colors: [Color.indigo.opacity(0.38), Color.cyan.opacity(0.12), Color.white.opacity(0.05)],
+                colors: [Color.indigo.opacity(0.38), Color.cyan.opacity(0.13), Color.white.opacity(0.05)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
@@ -199,20 +193,20 @@ struct PerformanceProgressionView: View {
         )
     }
 
-    private var periodSelector: some View {
+    private var rangePicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(ProgressionRange.allCases) { item in
+                ForEach(ProgressionRange.allCases) { option in
                     Button {
-                        withAnimation(.snappy) { range = item }
+                        withAnimation(.snappy) { range = option }
                     } label: {
-                        Text(item.label)
+                        Text(option.label)
                             .font(.subheadline.weight(.bold))
-                            .foregroundStyle(range == item ? Color.black : Color.primary)
+                            .foregroundStyle(range == option ? Color.black : Color.primary)
                             .padding(.horizontal, 14)
                             .frame(height: 36)
                             .background(
-                                range == item ? Color.cyan : Color.white.opacity(0.08),
+                                range == option ? Color.cyan : Color.white.opacity(0.08),
                                 in: Capsule()
                             )
                     }
@@ -222,18 +216,17 @@ struct PerformanceProgressionView: View {
         }
     }
 
-    private var activitySummary: some View {
+    private var overviewCard: some View {
         let current = aggregate(currentRecords)
         let previous = aggregate(previousRecords)
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label(rangeSummaryTitle, systemImage: "bolt.heart.fill")
+                Label(range == .all ? "DEPUIS LE DÉBUT" : "PÉRIODE · \(range.label.uppercased())", systemImage: "bolt.heart.fill")
                     .font(.headline.weight(.bold))
                 Spacer()
                 if selectedSportRaw != "all" {
-                    Text(activityLabel(selectedSportRaw))
-                        .font(.caption.weight(.bold))
+                    Image(systemName: selectedActivity.symbol)
                         .foregroundStyle(.cyan)
                 }
             }
@@ -241,44 +234,48 @@ struct PerformanceProgressionView: View {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 ProgressionMetricCard(
                     title: "TEMPS ACTIF",
-                    value: progressionDuration(current.duration),
-                    delta: deltaText(current.duration, previous.duration),
+                    value: formatDuration(current.duration),
+                    delta: comparison(current.duration, previous.duration),
                     symbol: "clock.fill",
                     accent: .cyan
                 )
                 ProgressionMetricCard(
                     title: "DISTANCE",
-                    value: progressionDistance(current.distanceMeters),
-                    delta: deltaText(current.distanceMeters, previous.distanceMeters),
+                    value: formatDistance(current.distanceMeters),
+                    delta: comparison(current.distanceMeters, previous.distanceMeters),
                     symbol: "location.fill",
                     accent: .mint
                 )
                 ProgressionMetricCard(
                     title: "SÉANCES",
                     value: "\(current.count)",
-                    delta: deltaText(Double(current.count), Double(previous.count)),
+                    delta: comparison(Double(current.count), Double(previous.count)),
                     symbol: "figure.run",
                     accent: .orange
                 )
                 ProgressionMetricCard(
                     title: "ÉNERGIE",
                     value: current.energyKcal > 0 ? "\(Int(current.energyKcal.rounded())) kcal" : "—",
-                    delta: current.energyKcal > 0 ? deltaText(current.energyKcal, previous.energyKcal) : nil,
+                    delta: current.energyKcal > 0 ? comparison(current.energyKcal, previous.energyKcal) : nil,
                     symbol: "flame.fill",
                     accent: .pink
                 )
             }
 
-            if let comparison = comparisonSentence(current: current, previous: previous) {
-                Label(comparison, systemImage: comparisonSymbol(current: current, previous: previous))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            if range != .all, previous.duration > 0 {
+                let delta = (current.duration - previous.duration) / previous.duration
+                Label(
+                    activityVolumeText(delta),
+                    systemImage: abs(delta) < 0.05 ? "equal.circle.fill" : (delta > 0 ? "arrow.up.right.circle.fill" : "arrow.down.right.circle.fill")
+                )
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
             }
         }
         .progressionCard()
     }
 
-    private var trendChart: some View {
+    private var trendCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -317,7 +314,7 @@ struct PerformanceProgressionView: View {
             } else {
                 Chart(buckets) { bucket in
                     BarMark(
-                        x: .value("Période", bucket.start, unit: chartCalendarUnit),
+                        x: .value("Date", bucket.start),
                         y: .value(metric.label, chartValue(bucket))
                     )
                     .foregroundStyle(
@@ -331,10 +328,10 @@ struct PerformanceProgressionView: View {
                 }
                 .frame(height: 220)
                 .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                    AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                         AxisGridLine().foregroundStyle(.white.opacity(0.05))
                         AxisTick().foregroundStyle(.secondary)
-                        AxisValueLabel(format: chartDateFormat)
+                        AxisValueLabel()
                     }
                 }
                 .chartYAxis {
@@ -349,36 +346,35 @@ struct PerformanceProgressionView: View {
     }
 
     @ViewBuilder
-    private var sportComposition: some View {
-        let slices = sportSlices
-        if !slices.isEmpty {
+    private var sportCard: some View {
+        if !sportSlices.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 Text("RÉPARTITION DES SPORTS")
                     .font(.caption.weight(.black))
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 16) {
-                    Chart(slices) { slice in
+                    Chart(sportSlices) { slice in
                         SectorMark(
                             angle: .value("Temps", max(1, slice.duration)),
                             innerRadius: .ratio(0.62),
                             angularInset: 2
                         )
-                        .foregroundStyle(by: .value("Sport", slice.label))
+                        .foregroundStyle(by: .value("Sport", slice.activity.label))
                     }
                     .chartLegend(.hidden)
                     .frame(width: 128, height: 128)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(slices.prefix(4))) { slice in
+                        ForEach(Array(sportSlices.prefix(4))) { slice in
                             HStack(spacing: 7) {
-                                Image(systemName: slice.symbol)
+                                Image(systemName: slice.activity.symbol)
                                     .frame(width: 18)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(slice.label)
+                                    Text(slice.activity.label)
                                         .font(.caption.weight(.bold))
                                         .lineLimit(1)
-                                    Text(progressionDuration(slice.duration))
+                                    Text(formatDuration(slice.duration))
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                 }
@@ -392,7 +388,7 @@ struct PerformanceProgressionView: View {
         }
     }
 
-    private var healthSignals: some View {
+    private var healthCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -419,14 +415,14 @@ struct PerformanceProgressionView: View {
                     HealthSignalTile(
                         label: "FC repos",
                         value: health.restingHeartRate.map { String(format: "%.0f bpm", $0.value) } ?? "—",
-                        detail: baselineDetail(latest: health.restingHeartRate?.value, baseline: health.restingHeartRateBaseline),
+                        detail: baselineText(latest: health.restingHeartRate?.value, baseline: health.restingHeartRateBaseline),
                         symbol: "heart.fill",
                         accent: .red
                     )
                     HealthSignalTile(
                         label: "VFC",
                         value: health.hrvSDNN.map { String(format: "%.0f ms", $0.value) } ?? "—",
-                        detail: baselineDetail(latest: health.hrvSDNN?.value, baseline: health.hrvBaseline),
+                        detail: baselineText(latest: health.hrvSDNN?.value, baseline: health.hrvBaseline),
                         symbol: "waveform.path.ecg",
                         accent: .purple
                     )
@@ -440,7 +436,7 @@ struct PerformanceProgressionView: View {
                     HealthSignalTile(
                         label: "VO₂ max",
                         value: health.vo2Max.map { String(format: "%.1f", $0.value) } ?? "—",
-                        detail: health.vo2Max.map { $0.source } ?? "non disponible",
+                        detail: health.vo2Max?.source ?? "non disponible",
                         symbol: "lungs.fill",
                         accent: .mint
                     )
@@ -450,12 +446,12 @@ struct PerformanceProgressionView: View {
         .progressionCard()
     }
 
-    private var sourceNote: some View {
+    private var provenance: some View {
         VStack(alignment: .leading, spacing: 5) {
             Label("Source : Apple Health", systemImage: "checkmark.seal.fill")
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.secondary)
-            Text("Les graphiques d’activité utilisent tous les entraînements que Santé autorise Watch Tracker à lire, quelle que soit l’app qui les a enregistrés. Les comparaisons sont personnelles et ne constituent pas un diagnostic médical.")
+            Text("Les graphiques utilisent tous les entraînements que Santé autorise Watch Tracker à lire, quelle que soit l’app qui les a enregistrés. Les comparaisons sont personnelles et ne constituent pas un diagnostic médical.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -470,17 +466,21 @@ struct PerformanceProgressionView: View {
                 Label("Tous les sports", systemImage: "figure.mixed.cardio")
             }
 
-            ForEach(availableSportRaws, id: \.self) { raw in
+            ForEach(availableActivities, id: \.rawValue) { activity in
                 Button {
-                    selectedSportRaw = raw
+                    selectedSportRaw = activity.rawValue
                 } label: {
-                    Label(activityLabel(raw), systemImage: activitySymbol(raw))
+                    Label(activity.label, systemImage: activity.symbol)
                 }
             }
         } label: {
             Image(systemName: selectedSportRaw == "all" ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
         }
         .accessibilityLabel("Filtrer le sport")
+    }
+
+    private var selectedActivity: ActivityKind {
+        ActivityKind(rawValue: selectedSportRaw) ?? .other
     }
 
     private var filteredWorkouts: [HealthWorkoutRecord] {
@@ -494,73 +494,33 @@ struct PerformanceProgressionView: View {
     }
 
     private var previousRecords: [HealthWorkoutRecord] {
-        guard let previousStart = range.previousStart(now: Date(), records: filteredWorkouts) else { return [] }
+        guard let previousStart = range.previousStart(now: Date()) else { return [] }
         let currentStart = range.startDate(now: Date(), records: filteredWorkouts)
         return filteredWorkouts.filter { $0.startedAt >= previousStart && $0.startedAt < currentStart }
     }
 
-    private var availableSportRaws: [String] {
-        Array(Set(workouts.map { $0.activity.rawValue }))
-            .sorted { activityLabel($0) < activityLabel($1) }
+    private var availableActivities: [ActivityKind] {
+        let raws = Set(workouts.map { $0.activity.rawValue })
+        return ActivityKind.allCases
+            .filter { raws.contains($0.rawValue) }
+            .sorted { $0.label < $1.label }
     }
 
     private var buckets: [ProgressionBucket] {
-        makeBuckets(records: currentRecords, style: range.bucketStyle)
+        makeBuckets(currentRecords)
     }
 
     private var sportSlices: [SportSlice] {
-        let grouped = Dictionary(grouping: currentRecords, by: { $0.activity.rawValue })
-        return grouped.map { raw, values in
-            SportSlice(
-                rawActivity: raw,
-                label: activityLabel(raw),
-                symbol: activitySymbol(raw),
-                duration: values.reduce(0) { $0 + $1.duration }
-            )
-        }
-        .sorted { $0.duration > $1.duration }
+        Dictionary(grouping: currentRecords, by: { $0.activity })
+            .map { activity, records in
+                SportSlice(activity: activity, duration: records.reduce(0) { $0 + $1.duration })
+            }
+            .sorted { $0.duration > $1.duration }
     }
 
-    private var heroTitle: String {
-        let current = aggregate(currentRecords)
-        if loading { return "Analyse de ton historique" }
-        if current.count == 0 { return "Aucune séance sur cette période" }
-        return "\(current.count) séance\(current.count > 1 ? "s" : "") · \(progressionDuration(current.duration))"
-    }
-
-    private var heroSubtitle: String {
-        if selectedSportRaw == "all" {
-            return "Toutes tes activités Santé accessibles, sur \(range.label)."
-        }
-        return "\(activityLabel(selectedSportRaw)) · vue \(range.label)."
-    }
-
-    private var rangeSummaryTitle: String {
-        range == .all ? "DEPUIS LE DÉBUT" : "PÉRIODE · \(range.label.uppercased())"
-    }
-
-    private var chartCalendarUnit: Calendar.Component {
-        switch range.bucketStyle {
-        case .day: return .day
-        case .week: return .weekOfYear
-        case .month: return .month
-        }
-    }
-
-    private var chartDateFormat: Date.FormatStyle {
-        switch range.bucketStyle {
-        case .day: return .dateTime.day().month(.abbreviated)
-        case .week: return .dateTime.day().month(.abbreviated)
-        case .month: return .dateTime.month(.abbreviated).year(.twoDigits)
-        }
-    }
-
-    private func chartValue(_ bucket: ProgressionBucket) -> Double {
-        switch metric {
-        case .duration: return bucket.duration / 3600
-        case .distance: return bucket.distanceMeters / 1000
-        case .sessions: return Double(bucket.count)
-        }
+    private func heroTitle(_ aggregate: ProgressionAggregate) -> String {
+        guard aggregate.count > 0 else { return "Aucune séance sur cette période" }
+        return "\(aggregate.count) séance\(aggregate.count > 1 ? "s" : "") · \(formatDuration(aggregate.duration))"
     }
 
     private func aggregate(_ records: [HealthWorkoutRecord]) -> ProgressionAggregate {
@@ -572,16 +532,18 @@ struct PerformanceProgressionView: View {
         )
     }
 
-    private func makeBuckets(records: [HealthWorkoutRecord], style: ProgressionBucketStyle) -> [ProgressionBucket] {
+    private func makeBuckets(_ records: [HealthWorkoutRecord]) -> [ProgressionBucket] {
         let calendar = Calendar.autoupdatingCurrent
         let grouped = Dictionary(grouping: records) { record -> Date in
-            switch style {
+            switch range.bucketComponent {
             case .day:
                 return calendar.startOfDay(for: record.startedAt)
-            case .week:
+            case .weekOfYear:
                 return calendar.dateInterval(of: .weekOfYear, for: record.startedAt)?.start ?? calendar.startOfDay(for: record.startedAt)
             case .month:
                 return calendar.dateInterval(of: .month, for: record.startedAt)?.start ?? calendar.startOfDay(for: record.startedAt)
+            default:
+                return calendar.startOfDay(for: record.startedAt)
             }
         }
 
@@ -596,29 +558,28 @@ struct PerformanceProgressionView: View {
         .sorted { $0.start < $1.start }
     }
 
-    private func deltaText(_ current: Double, _ previous: Double) -> String? {
+    private func chartValue(_ bucket: ProgressionBucket) -> Double {
+        switch metric {
+        case .duration: return bucket.duration / 3600
+        case .distance: return bucket.distanceMeters / 1000
+        case .sessions: return Double(bucket.count)
+        }
+    }
+
+    private func comparison(_ current: Double, _ previous: Double) -> String? {
         guard range != .all, previous > 0 else { return nil }
         let delta = (current - previous) / previous
-        if abs(delta) < 0.005 { return "≈ période précédente" }
+        if abs(delta) < 0.005 { return "≈ vs avant" }
         return String(format: "%+.0f%% vs avant", delta * 100)
     }
 
-    private func comparisonSentence(current: ProgressionAggregate, previous: ProgressionAggregate) -> String? {
-        guard range != .all, previous.duration > 0 else { return nil }
-        let delta = (current.duration - previous.duration) / previous.duration
-        if abs(delta) < 0.05 { return "Volume d’activité proche de la période précédente." }
-        if delta > 0 { return String(format: "Volume d’activité en hausse de %.0f%% par rapport à la période précédente.", delta * 100) }
-        return String(format: "Volume d’activité en baisse de %.0f%% par rapport à la période précédente.", abs(delta) * 100)
+    private func activityVolumeText(_ delta: Double) -> String {
+        if abs(delta) < 0.05 { return "Volume proche de la période précédente." }
+        if delta > 0 { return String(format: "Volume en hausse de %.0f%%.", delta * 100) }
+        return String(format: "Volume en baisse de %.0f%%.", abs(delta) * 100)
     }
 
-    private func comparisonSymbol(current: ProgressionAggregate, previous: ProgressionAggregate) -> String {
-        guard previous.duration > 0 else { return "equal.circle.fill" }
-        let delta = current.duration - previous.duration
-        if abs(delta) < previous.duration * 0.05 { return "equal.circle.fill" }
-        return delta > 0 ? "arrow.up.right.circle.fill" : "arrow.down.right.circle.fill"
-    }
-
-    private func baselineDetail(latest: Double?, baseline: Double?) -> String {
+    private func baselineText(latest: Double?, baseline: Double?) -> String {
         guard let latest, let baseline, baseline > 0 else { return "repère indisponible" }
         let delta = (latest - baseline) / baseline
         if abs(delta) < 0.03 { return "proche du repère 28 j" }
@@ -646,7 +607,7 @@ struct PerformanceProgressionView: View {
         group.notify(queue: .main) {
             workouts = loadedWorkouts
             health = loadedHealth
-            if selectedSportRaw != "all" && !availableSportRaws.contains(selectedSportRaw) {
+            if selectedSportRaw != "all" && !Set(loadedWorkouts.map { $0.activity.rawValue }).contains(selectedSportRaw) {
                 selectedSportRaw = "all"
             }
             loading = false
@@ -664,8 +625,7 @@ private struct ProgressionMetricCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Image(systemName: symbol)
-                    .foregroundStyle(accent)
+                Image(systemName: symbol).foregroundStyle(accent)
                 Text(title)
                     .font(.caption2.weight(.black))
                     .foregroundStyle(.secondary)
@@ -739,7 +699,7 @@ private extension View {
     }
 }
 
-private func progressionDuration(_ seconds: TimeInterval) -> String {
+private func formatDuration(_ seconds: TimeInterval) -> String {
     let totalMinutes = max(0, Int(seconds / 60))
     if totalMinutes >= 60 {
         return String(format: "%dh%02d", totalMinutes / 60, totalMinutes % 60)
@@ -747,7 +707,7 @@ private func progressionDuration(_ seconds: TimeInterval) -> String {
     return "\(totalMinutes) min"
 }
 
-private func progressionDistance(_ meters: Double) -> String {
+private func formatDistance(_ meters: Double) -> String {
     if meters >= 100_000 { return String(format: "%.0f km", meters / 1000) }
     if meters >= 1000 { return String(format: "%.1f km", meters / 1000) }
     return String(format: "%.0f m", meters)

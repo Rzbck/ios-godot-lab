@@ -4,7 +4,7 @@ struct ProgressionEntryView: View {
     @AppStorage("tracker.healthInsightsEnabled") private var healthInsightsEnabled = false
 
     var body: some View {
-        HealthProgressionDashboardView()
+        PerformanceProgressionView()
             .onAppear {
                 healthInsightsEnabled = true
             }

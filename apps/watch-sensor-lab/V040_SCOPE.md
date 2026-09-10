@@ -52,6 +52,7 @@ Status vocabulary:
 - downloaded IPA SHA-256: `07b8aa7bec9e0716b569f6f5ec925c8299d4d3056405acd10a5451f8f1dc798f`
 - first hardware checkpoint: iPhone launches, Apple Watch launches, existing baseline history remains visible on iPhone after upgrade.
 - field validation of new v0.4 metrics is deferred until the user next goes outside.
+- generic iLoader/watchOS-publication work is a separate chantier and must not contaminate this tracker scope/repo.
 
 ## Mandatory requirements from field analysis + user feedback
 

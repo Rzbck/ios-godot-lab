@@ -94,6 +94,7 @@ final class StartupPermissionCoordinator: NSObject, ObservableObject, CLLocation
             .runningVerticalOscillation,
             .heartRateRecoveryOneMinute,
             .respiratoryRate,
+            .oxygenSaturation,
             .bodyMass,
             .height,
             .appleSleepingWristTemperature,

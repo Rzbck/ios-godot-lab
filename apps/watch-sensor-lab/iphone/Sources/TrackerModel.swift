@@ -49,6 +49,8 @@ final class TrackerModel: NSObject, ObservableObject {
     private var previousAltitudeLocation: CLLocation?
     private var lastStatePush = Date.distantPast
     private var lastHeartRateSample = 0.0
+    private var controlRevision: Int64 = 0
+    private var lastEndedSessionID = ""
 
     override init() {
         super.init()
@@ -74,6 +76,8 @@ final class TrackerModel: NSObject, ObservableObject {
     func startFromPhone() {
         guard !isActive else { return }
         let identifier = Self.makeSessionID()
+        controlRevision = 1
+        lastEndedSessionID = ""
         beginLocalSession(sessionID: identifier, origin: "iphone")
         sendControl(command: "start")
         launchWatchWorkout()
@@ -81,18 +85,21 @@ final class TrackerModel: NSObject, ObservableObject {
 
     func pauseFromPhone() {
         guard phase == .active else { return }
+        controlRevision += 1
         pauseLocalSession()
         sendControl(command: "pause")
     }
 
     func resumeFromPhone() {
         guard phase == .paused else { return }
+        controlRevision += 1
         resumeLocalSession()
         sendControl(command: "resume")
     }
 
     func stopFromPhone() {
         guard isActive else { return }
+        controlRevision += 1
         sendControl(command: "stop")
         finishLocalSession(reason: "iphone")
     }
@@ -273,6 +280,7 @@ final class TrackerModel: NSObject, ObservableObject {
             averageHeartRate: averageHeartRate
         )
 
+        lastEndedSessionID = sessionID
         store.finish(summary: summary)
         lastSummary = summary
         locationManager.stopUpdatingLocation()
@@ -378,6 +386,7 @@ final class TrackerModel: NSObject, ObservableObject {
             "type": "tracker_control",
             "command": command,
             "session_id": sessionID,
+            "control_revision": controlRevision,
             "timestamp": Date().timeIntervalSince1970,
         ]
         let session = WCSession.default
@@ -398,6 +407,7 @@ final class TrackerModel: NSObject, ObservableObject {
             "phase": phaseOverride ?? phase.rawValue,
             "session_id": sessionID,
             "origin": origin,
+            "control_revision": controlRevision,
             "elapsed_s": elapsedSeconds,
             "distance_m": distanceMeters,
             "speed_mps": currentSpeedMps,
@@ -437,14 +447,25 @@ final class TrackerModel: NSObject, ObservableObject {
         }
 
         guard type == "tracker_state" || type == "tracker_control" else { return }
+        let remoteSessionID = (payload["session_id"] as? String) ?? ""
+        let remoteRevision = Self.int64Value(payload["control_revision"]) ?? 0
 
         if type == "tracker_control", let command = payload["command"] as? String {
+            guard acceptRemoteTransition(
+                sessionID: remoteSessionID,
+                revision: remoteRevision,
+                allowNewSession: command == "start"
+            ) else { return }
             applyRemoteCommand(command, payload: payload)
             return
         }
 
         guard let remotePhase = payload["phase"] as? String else { return }
-        let remoteSessionID = (payload["session_id"] as? String) ?? Self.makeSessionID()
+        guard acceptRemoteTransition(
+            sessionID: remoteSessionID,
+            revision: remoteRevision,
+            allowNewSession: remotePhase == "active"
+        ) else { return }
 
         if remotePhase == "active", !isActive {
             beginLocalSession(sessionID: remoteSessionID, origin: "watch")
@@ -465,6 +486,25 @@ final class TrackerModel: NSObject, ObservableObject {
         }
         if let value = Self.doubleValue(payload["average_heart_rate_bpm"]) { averageHeartRate = value }
         if let value = Self.doubleValue(payload["active_energy_kcal"]) { activeEnergyKcal = value }
+    }
+
+    private func acceptRemoteTransition(
+        sessionID remoteSessionID: String,
+        revision: Int64,
+        allowNewSession: Bool
+    ) -> Bool {
+        guard !remoteSessionID.isEmpty else { return false }
+        if remoteSessionID == lastEndedSessionID { return false }
+
+        if remoteSessionID != sessionID {
+            guard !isActive, allowNewSession else { return false }
+            controlRevision = revision
+            return true
+        }
+
+        guard revision >= controlRevision else { return false }
+        controlRevision = revision
+        return true
     }
 
     private func applyRemoteCommand(_ command: String, payload: [String: Any]) {
@@ -490,6 +530,14 @@ final class TrackerModel: NSObject, ObservableObject {
     private static func doubleValue(_ value: Any?) -> Double? {
         if let value = value as? Double { return value }
         if let value = value as? NSNumber { return value.doubleValue }
+        return nil
+    }
+
+    private static func int64Value(_ value: Any?) -> Int64? {
+        if let value = value as? Int64 { return value }
+        if let value = value as? Int { return Int64(value) }
+        if let value = value as? NSNumber { return value.int64Value }
+        if let value = value as? String { return Int64(value) }
         return nil
     }
 

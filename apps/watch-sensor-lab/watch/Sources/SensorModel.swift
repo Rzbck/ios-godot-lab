@@ -59,6 +59,8 @@ final class SensorModel: NSObject, ObservableObject {
     private var lastMotionSend = Date.distantPast
     private var pendingRemoteSessionID: String?
     private var pendingPhoneConfiguration: HKWorkoutConfiguration?
+    private var controlRevision: Int64 = 0
+    private var lastEndedSessionID = ""
 
     private override init() {
         super.init()
@@ -100,6 +102,9 @@ final class SensorModel: NSObject, ObservableObject {
     }
 
     func start() {
+        guard !running else { return }
+        controlRevision = 1
+        lastEndedSessionID = ""
         start(configuration: nil, origin: "watch", sessionID: nil)
     }
 
@@ -238,18 +243,21 @@ final class SensorModel: NSObject, ObservableObject {
 
     func pause() {
         guard phase == .active else { return }
+        controlRevision += 1
         pauseCore()
         sendControl(command: "pause")
     }
 
     func resume() {
         guard phase == .paused else { return }
+        controlRevision += 1
         resumeCore()
         sendControl(command: "resume")
     }
 
     func stop() {
         guard running else { return }
+        controlRevision += 1
         sendControl(command: "stop")
         stopCore(status: "Session terminée")
     }
@@ -293,6 +301,7 @@ final class SensorModel: NSObject, ObservableObject {
         timer?.invalidate()
         timer = nil
         currentSpeedMps = 0
+        lastEndedSessionID = sessionID
         sendState(force: true, phaseOverride: "ended")
 
         let builder = workoutBuilder
@@ -443,6 +452,7 @@ final class SensorModel: NSObject, ObservableObject {
             "type": "tracker_control",
             "command": command,
             "session_id": sessionID,
+            "control_revision": controlRevision,
             "timestamp": Date().timeIntervalSince1970,
         ]
         sendLive(payload)
@@ -459,6 +469,7 @@ final class SensorModel: NSObject, ObservableObject {
             "phase": phaseOverride ?? phase.rawValue,
             "session_id": sessionID,
             "origin": "watch",
+            "control_revision": controlRevision,
             "elapsed_s": elapsedSeconds,
             "distance_m": distanceMeters,
             "speed_mps": currentSpeedMps,
@@ -488,22 +499,36 @@ final class SensorModel: NSObject, ObservableObject {
 
     private func handlePhonePayload(_ payload: [String: Any]) {
         guard let type = payload["type"] as? String else { return }
+        guard type == "tracker_state" || type == "tracker_control" else { return }
+
+        let remoteSessionID = (payload["session_id"] as? String) ?? ""
+        let remoteRevision = Self.int64Value(payload["control_revision"]) ?? 0
 
         if type == "tracker_control", let command = payload["command"] as? String {
+            guard acceptRemoteTransition(
+                sessionID: remoteSessionID,
+                revision: remoteRevision,
+                allowNewSession: command == "start"
+            ) else { return }
             applyRemotePhase(command, payload: payload)
             return
         }
 
-        guard type == "tracker_state", let remotePhase = payload["phase"] as? String else { return }
+        guard let remotePhase = payload["phase"] as? String else { return }
+        guard acceptRemoteTransition(
+            sessionID: remoteSessionID,
+            revision: remoteRevision,
+            allowNewSession: remotePhase == "active"
+        ) else { return }
+
         switch remotePhase {
         case "active":
             if !running {
-                let remoteID = payload["session_id"] as? String
-                pendingRemoteSessionID = remoteID
+                pendingRemoteSessionID = remoteSessionID
                 if let pendingPhoneConfiguration {
-                    start(configuration: pendingPhoneConfiguration, origin: "iphone", sessionID: remoteID)
+                    start(configuration: pendingPhoneConfiguration, origin: "iphone", sessionID: remoteSessionID)
                 } else {
-                    start(configuration: nil, origin: "iphone", sessionID: remoteID)
+                    start(configuration: nil, origin: "iphone", sessionID: remoteSessionID)
                 }
             } else if phase == .paused {
                 resumeCore()
@@ -515,6 +540,25 @@ final class SensorModel: NSObject, ObservableObject {
         default:
             break
         }
+    }
+
+    private func acceptRemoteTransition(
+        sessionID remoteSessionID: String,
+        revision: Int64,
+        allowNewSession: Bool
+    ) -> Bool {
+        guard !remoteSessionID.isEmpty else { return false }
+        if remoteSessionID == lastEndedSessionID { return false }
+
+        if remoteSessionID != sessionID {
+            guard !running, allowNewSession else { return false }
+            controlRevision = revision
+            return true
+        }
+
+        guard revision >= controlRevision else { return false }
+        controlRevision = revision
+        return true
     }
 
     private func applyRemotePhase(_ command: String, payload: [String: Any]) {
@@ -540,6 +584,14 @@ final class SensorModel: NSObject, ObservableObject {
         }
     }
 
+    private static func int64Value(_ value: Any?) -> Int64? {
+        if let value = value as? Int64 { return value }
+        if let value = value as? Int { return Int64(value) }
+        if let value = value as? NSNumber { return value.int64Value }
+        if let value = value as? String { return Int64(value) }
+        return nil
+    }
+
     private static func makeSessionID() -> String {
         String(Int(Date().timeIntervalSince1970 * 1000))
     }
@@ -554,8 +606,11 @@ extension SensorModel: HKWorkoutSessionDelegate {
     ) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if toState == .paused { self.phase = .paused }
-            if toState == .running { self.phase = .active }
+            // App/WatchConnectivity control state is authoritative. HealthKit delegate
+            // callbacks can arrive after the corresponding command and must not roll the UI
+            // back to an older phase.
+            if toState == .paused, self.phase == .paused { return }
+            if toState == .running, self.phase == .active { return }
         }
     }
 

@@ -23,12 +23,17 @@ final class SensorModel: NSObject, ObservableObject {
     @Published private(set) var heartRate = 0.0
     @Published private(set) var averageHeartRate = 0.0
     @Published private(set) var activeEnergyKcal = 0.0
+    @Published private(set) var cadenceSPM = 0.0
+    @Published private(set) var steps = 0
     @Published private(set) var route: [CLLocationCoordinate2D] = []
     @Published private(set) var currentCoordinate: CLLocationCoordinate2D?
     @Published private(set) var horizontalAccuracy = -1.0
     @Published private(set) var phoneReachable = false
     @Published private(set) var healthAuthorized = false
     @Published private(set) var sessionStatus = "Prêt"
+    @Published private(set) var autoPauseEnabled = false
+    @Published private(set) var autoPaused = false
+    @Published private(set) var multisportTransition = false
 
     @Published private(set) var accelX = 0.0
     @Published private(set) var accelY = 0.0
@@ -36,15 +41,19 @@ final class SensorModel: NSObject, ObservableObject {
     @Published private(set) var gyroX = 0.0
     @Published private(set) var gyroY = 0.0
     @Published private(set) var gyroZ = 0.0
+    @Published private(set) var gyroSource = "unavailable"
 
     var running: Bool { phase == .active || phase == .paused }
     var isPaused: Bool { phase == .paused }
     var displayActivity: ActivityKind { selectedActivity.isAutomatic ? effectiveActivity : selectedActivity }
+    var canAdvanceTriathlon: Bool { selectedActivity == .swimBikeRun && effectiveActivity != .running || multisportTransition }
 
     private let healthStore = HKHealthStore()
     private let locationManager = CLLocationManager()
-    private let motion = CMMotionManager()
     private let activityManager = CMMotionActivityManager()
+    private let pedometer = CMPedometer()
+    private let motionSampler = WatchMotionSampler()
+    private let altitudeSampler = WatchAltitudeSampler()
     private let defaults = UserDefaults.standard
 
     private let saveWorkoutToHealth = true
@@ -63,6 +72,8 @@ final class SensorModel: NSObject, ObservableObject {
     private var previousAltitudeLocation: CLLocation?
     private var lastStateSend = Date.distantPast
     private var lastMotionSend = Date.distantPast
+    private var lastWatchLocationSend = Date.distantPast
+    private var lastGPSRejectionEvent = Date.distantPast
     private var pendingRemoteSessionID: String?
     private var pendingPhoneConfiguration: HKWorkoutConfiguration?
     private var authorityRevision: Int64 = 0
@@ -71,11 +82,20 @@ final class SensorModel: NSObject, ObservableObject {
     private var lastPurgeID = ""
     private var autoCandidate: ActivityKind?
     private var autoCandidateToken = UUID()
+    private var autoPauseToken = UUID()
+    private var autoResumeToken = UUID()
+    private var lastMotionWasStationary = false
+    private var usingBarometricElevation = false
+    private var hasAbsoluteBarometricAltitude = false
+    private var pedometerBaseSteps = 0
+    private var nextTriathlonActivity: ActivityKind?
 
     private override init() {
         super.init()
         lastPurgeID = defaults.string(forKey: "tracker.lastPurgeID") ?? ""
+        autoPauseEnabled = defaults.bool(forKey: "tracker.autoPauseEnabled")
         configureLocation()
+        configureAltitudeSampler()
         activateSession()
         requestHealthAuthorization()
     }
@@ -94,10 +114,17 @@ final class SensorModel: NSObject, ObservableObject {
     func selectActivity(_ activity: ActivityKind) {
         guard !running else { return }
         selectedActivity = activity
-        effectiveActivity = activity.isAutomatic ? .walking : activity
+        effectiveActivity = initialEffectiveActivity(for: activity)
         selectionRevision = Self.revisionNow()
         sessionStatus = activity.isAutomatic ? "Auto · marche/course/vélo" : activity.label
         sendWC(makeMessage(kind: .selection))
+    }
+
+    func setAutoPauseEnabled(_ enabled: Bool) {
+        guard !running else { return }
+        autoPauseEnabled = enabled
+        defaults.set(enabled, forKey: "tracker.autoPauseEnabled")
+        sendEvent("auto_pause_preference", payload: ["enabled": enabled])
     }
 
     func requestHealthAuthorization() {
@@ -134,7 +161,7 @@ final class SensorModel: NSObject, ObservableObject {
         pendingPhoneConfiguration = configuration
         if selectedActivity != .automatic, let activity = ActivityKind(healthKitType: configuration.activityType) {
             selectedActivity = activity
-            effectiveActivity = activity
+            effectiveActivity = initialEffectiveActivity(for: activity)
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
@@ -153,14 +180,18 @@ final class SensorModel: NSObject, ObservableObject {
 
         let config = configuration ?? {
             let value = HKWorkoutConfiguration()
-            value.activityType = selectedActivity.healthKitType
+            if selectedActivity.isAutomatic {
+                value.activityType = effectiveActivity.healthKitType
+            } else {
+                value.activityType = selectedActivity.healthKitType
+            }
             value.locationType = .outdoor
             return value
         }()
 
         if selectedActivity != .automatic, let activity = ActivityKind(healthKitType: config.activityType) {
             selectedActivity = activity
-            effectiveActivity = activity
+            effectiveActivity = initialEffectiveActivity(for: activity)
         }
 
         guard healthAuthorized else {
@@ -213,6 +244,7 @@ final class SensorModel: NSObject, ObservableObject {
                 Self.managedWorkoutMetadataKey: true,
                 Self.sessionMetadataKey: sessionID,
                 "com.rzbck.watchsensorlab.selected_activity": selectedActivity.rawValue,
+                "com.rzbck.watchsensorlab.algorithm_version": "tracker-v4-20260910",
             ]) { [weak self] success, error in
                 guard !success, let error else { return }
                 DispatchQueue.main.async {
@@ -225,14 +257,16 @@ final class SensorModel: NSObject, ObservableObject {
             pausedDuration = 0
             resetPresentationData(keepActivity: true)
             phase = .active
-            if selectedActivity.isAutomatic { effectiveActivity = .walking }
+            effectiveActivity = initialEffectiveActivity(for: selectedActivity)
             authorityRevision = max(authorityRevision, 1)
             sessionStatus = selectedActivity.isAutomatic ? "Auto · analyse en cours" : "\(selectedActivity.label) en cours"
 
             requestLocationPermission()
             locationManager.startUpdatingLocation()
             startMotion()
-            startAutomaticClassifierIfNeeded()
+            startPedometer()
+            startAltitude()
+            startMotionClassifierIfNeeded()
             startClock()
 
             let date = startedAt ?? Date()
@@ -240,7 +274,12 @@ final class SensorModel: NSObject, ObservableObject {
             builder.beginCollection(withStart: date) { [weak self] success, error in
                 DispatchQueue.main.async {
                     guard let self else { return }
-                    if !success, let error { self.sessionStatus = "Entraînement: \(error.localizedDescription)" }
+                    if !success, let error {
+                        self.sessionStatus = "Entraînement: \(error.localizedDescription)"
+                        self.sendEvent("health_collection_error", payload: ["message": error.localizedDescription])
+                    } else if self.selectedActivity == .swimBikeRun {
+                        self.beginTriathlonActivity(.swimming, at: date)
+                    }
                 }
             }
 
@@ -248,12 +287,22 @@ final class SensorModel: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.sessionStatus = success ? "iPhone + Watch synchronisés" : "Miroir iPhone: \(error?.localizedDescription ?? "indisponible")"
+                    self.sendEvent(success ? "health_mirror_started" : "health_mirror_failed", payload: [
+                        "message": error?.localizedDescription ?? "",
+                    ])
                     self.sendAuthority(force: true)
                 }
             }
+            sendEvent("session_started", payload: [
+                "origin": origin,
+                "selected_activity": selectedActivity.rawValue,
+                "healthkit_activity_type": configuration.activityType.rawValue,
+                "authority_revision": authorityRevision,
+            ])
             sendAuthority(force: true)
         } catch {
             sessionStatus = "Impossible de démarrer: \(error.localizedDescription)"
+            sendEvent("session_start_error", payload: ["message": error.localizedDescription])
             phase = .ready
         }
     }
@@ -261,14 +310,16 @@ final class SensorModel: NSObject, ObservableObject {
     func pause() {
         guard phase == .active else { return }
         authorityRevision += 1
-        pauseCore()
+        autoPaused = false
+        pauseCore(reason: "manual")
         sendAuthority(force: true)
     }
 
     func resume() {
         guard phase == .paused else { return }
         authorityRevision += 1
-        resumeCore()
+        autoPaused = false
+        resumeCore(reason: "manual")
         sendAuthority(force: true)
     }
 
@@ -276,6 +327,44 @@ final class SensorModel: NSObject, ObservableObject {
         guard running else { return }
         authorityRevision += 1
         stopCore(status: "Session terminée")
+    }
+
+    func advanceTriathlon() {
+        guard selectedActivity == .swimBikeRun, phase == .active, let session = workoutSession else { return }
+        let now = Date()
+
+        if multisportTransition, let next = nextTriathlonActivity {
+            session.endCurrentActivity(on: now)
+            beginTriathlonActivity(next, at: now)
+            effectiveActivity = next
+            multisportTransition = false
+            nextTriathlonActivity = nil
+            authorityRevision += 1
+            sessionStatus = "Triathlon · \(next.label)"
+            sendEvent("multisport_segment_started", payload: ["activity": next.rawValue])
+            sendAuthority(force: true)
+            return
+        }
+
+        let next: ActivityKind?
+        switch effectiveActivity {
+        case .swimming: next = .cycling
+        case .cycling: next = .running
+        default: next = nil
+        }
+        guard let next else { return }
+
+        session.endCurrentActivity(on: now)
+        let transition = HKWorkoutConfiguration()
+        transition.activityType = .transition
+        transition.locationType = .outdoor
+        session.beginNewActivity(configuration: transition, date: now, metadata: nil)
+        multisportTransition = true
+        nextTriathlonActivity = next
+        authorityRevision += 1
+        sessionStatus = "Transition → \(next.label)"
+        sendEvent("multisport_transition_started", payload: ["next_activity": next.rawValue])
+        sendAuthority(force: true)
     }
 
     func deleteAllTestData() {
@@ -290,17 +379,36 @@ final class SensorModel: NSObject, ObservableObject {
         sendWC(message)
     }
 
-    private func pauseCore() {
+    private func initialEffectiveActivity(for activity: ActivityKind) -> ActivityKind {
+        if activity == .swimBikeRun { return .swimming }
+        return activity.isAutomatic ? .walking : activity
+    }
+
+    private func beginTriathlonActivity(_ activity: ActivityKind, at date: Date) {
+        guard let session = workoutSession else { return }
+        let configuration = HKWorkoutConfiguration()
+        configuration.activityType = activity.healthKitType
+        configuration.locationType = .outdoor
+        session.beginNewActivity(configuration: configuration, date: date, metadata: [
+            "com.rzbck.watchsensorlab.segment_activity": activity.rawValue,
+        ])
+        effectiveActivity = activity
+    }
+
+    private func pauseCore(reason: String) {
         guard phase == .active else { return }
         phase = .paused
         pausedAt = Date()
         currentSpeedMps = 0
         locationManager.stopUpdatingLocation()
+        stopPedometer()
+        stopAltitude()
         workoutSession?.pause()
-        sessionStatus = "En pause · Watch autoritaire"
+        sessionStatus = reason == "auto" ? "Pause auto" : "En pause · Watch autoritaire"
+        sendEvent(reason == "auto" ? "auto_pause" : "manual_pause", payload: ["authority_revision": authorityRevision])
     }
 
-    private func resumeCore() {
+    private func resumeCore(reason: String) {
         guard phase == .paused else { return }
         if let pausedAt { pausedDuration += Date().timeIntervalSince(pausedAt) }
         self.pausedAt = nil
@@ -309,7 +417,10 @@ final class SensorModel: NSObject, ObservableObject {
         phase = .active
         workoutSession?.resume()
         locationManager.startUpdatingLocation()
+        startPedometer()
+        startAltitude()
         sessionStatus = selectedActivity.isAutomatic ? "Auto · \(effectiveActivity.label)" : "\(selectedActivity.label) en cours"
+        sendEvent(reason == "auto" ? "auto_resume" : "manual_resume", payload: ["authority_revision": authorityRevision])
     }
 
     private func stopCore(status: String) {
@@ -319,12 +430,20 @@ final class SensorModel: NSObject, ObservableObject {
         refreshElapsed()
         locationManager.stopUpdatingLocation()
         stopMotion()
-        stopAutomaticClassifier()
+        stopPedometer()
+        stopAltitude()
+        stopMotionClassifier()
         timer?.invalidate()
         timer = nil
         currentSpeedMps = 0
         lastEndedSessionID = sessionID
 
+        sendEvent("session_stopping", payload: [
+            "authority_revision": authorityRevision,
+            "effective_activity": effectiveActivity.rawValue,
+            "distance_m": distanceMeters,
+            "active_energy_kcal": activeEnergyKcal,
+        ])
         sendAuthority(force: true, phaseOverride: "ended")
 
         let builder = workoutBuilder
@@ -355,6 +474,9 @@ final class SensorModel: NSObject, ObservableObject {
         startedAt = nil
         pausedAt = nil
         phase = .ready
+        autoPaused = false
+        multisportTransition = false
+        nextTriathlonActivity = nil
     }
 
     private func finishAndSaveWorkout(
@@ -435,6 +557,8 @@ final class SensorModel: NSObject, ObservableObject {
         heartRate = 0
         averageHeartRate = 0
         activeEnergyKcal = 0
+        cadenceSPM = 0
+        steps = 0
         route = []
         healthRouteLocations = []
         currentCoordinate = nil
@@ -447,10 +571,20 @@ final class SensorModel: NSObject, ObservableObject {
         gyroX = 0
         gyroY = 0
         gyroZ = 0
+        gyroSource = "unavailable"
         autoCandidate = nil
+        autoPaused = false
+        lastMotionWasStationary = false
+        usingBarometricElevation = false
+        hasAbsoluteBarometricAltitude = false
+        pedometerBaseSteps = 0
+        multisportTransition = false
+        nextTriathlonActivity = nil
         if !keepActivity {
             selectedActivity = .automatic
             effectiveActivity = .walking
+        } else {
+            effectiveActivity = initialEffectiveActivity(for: selectedActivity)
         }
     }
 
@@ -460,6 +594,20 @@ final class SensorModel: NSObject, ObservableObject {
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.distanceFilter = 1.0
         locationManager.allowsBackgroundLocationUpdates = true
+    }
+
+    private func configureAltitudeSampler() {
+        altitudeSampler.onRelativeDelta = { [weak self] delta in
+            guard let self, self.phase == .active else { return }
+            if delta > 0 { self.elevationGainMeters += delta }
+            else { self.elevationLossMeters += abs(delta) }
+            self.sendAuthority()
+        }
+        altitudeSampler.onAbsoluteAltitude = { [weak self] altitude, accuracy in
+            guard let self, self.phase == .active, accuracy >= 0, accuracy <= 20 else { return }
+            self.hasAbsoluteBarometricAltitude = true
+            self.altitudeMeters = altitude
+        }
     }
 
     private func requestLocationPermission() {
@@ -482,18 +630,33 @@ final class SensorModel: NSObject, ObservableObject {
         elapsedSeconds = max(0, end.timeIntervalSince(startedAt) - pausedDuration)
     }
 
-    private func startAutomaticClassifierIfNeeded() {
-        guard selectedActivity.isAutomatic, CMMotionActivityManager.isActivityAvailable() else { return }
+    private func startMotionClassifierIfNeeded() {
+        guard CMMotionActivityManager.isActivityAvailable(), selectedActivity.isAutomatic || autoPauseEnabled else { return }
         activityManager.startActivityUpdates(to: .main) { [weak self] activity in
-            guard let self, let activity, self.running, self.selectedActivity.isAutomatic else { return }
+            guard let self, let activity, self.running else { return }
             guard activity.confidence != .low else { return }
+
+            if activity.stationary {
+                self.lastMotionWasStationary = true
+                self.stageAutoPauseIfNeeded()
+                return
+            }
+
             let candidate: ActivityKind?
             if activity.running { candidate = .running }
             else if activity.cycling { candidate = .cycling }
             else if activity.walking { candidate = .walking }
             else { candidate = nil }
-            guard let candidate else { return }
-            self.stageAutomaticCandidate(candidate)
+
+            if candidate != nil {
+                self.lastMotionWasStationary = false
+                self.cancelPendingAutoPause()
+                self.stageAutoResumeIfNeeded()
+            }
+
+            if self.selectedActivity.isAutomatic, let candidate {
+                self.stageAutomaticCandidate(candidate)
+            }
         }
     }
 
@@ -506,80 +669,182 @@ final class SensorModel: NSObject, ObservableObject {
             autoCandidate = candidate
             autoCandidateToken = UUID()
             let token = autoCandidateToken
+            sendEvent("auto_candidate", payload: ["activity": candidate.rawValue])
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
                 guard let self, self.running, self.phase == .active, self.selectedActivity.isAutomatic,
                       self.autoCandidate == candidate, self.autoCandidateToken == token else { return }
+                let previous = self.effectiveActivity
                 self.effectiveActivity = candidate
                 self.autoCandidate = nil
                 self.authorityRevision += 1
                 self.sessionStatus = "Auto · \(candidate.label) détectée"
+                self.sendEvent("auto_activity_changed", payload: [
+                    "from": previous.rawValue,
+                    "to": candidate.rawValue,
+                    "healthkit_container_type": self.workoutSession?.workoutConfiguration.activityType.rawValue ?? -1,
+                ])
                 self.sendAuthority(force: true)
             }
         }
     }
 
-    private func stopAutomaticClassifier() {
+    private func stageAutoPauseIfNeeded() {
+        guard autoPauseEnabled, phase == .active else { return }
+        autoPauseToken = UUID()
+        let token = autoPauseToken
+        let delay = displayActivity.autoPauseDelay
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.phase == .active, self.autoPauseEnabled,
+                  self.lastMotionWasStationary, self.autoPauseToken == token else { return }
+            self.autoPaused = true
+            self.authorityRevision += 1
+            self.pauseCore(reason: "auto")
+            self.sendAuthority(force: true)
+        }
+    }
+
+    private func cancelPendingAutoPause() {
+        autoPauseToken = UUID()
+    }
+
+    private func stageAutoResumeIfNeeded() {
+        guard autoPauseEnabled, phase == .paused, autoPaused else { return }
+        autoResumeToken = UUID()
+        let token = autoResumeToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.phase == .paused, self.autoPaused, self.autoPauseEnabled,
+                  !self.lastMotionWasStationary, self.autoResumeToken == token else { return }
+            self.authorityRevision += 1
+            self.resumeCore(reason: "auto")
+            self.autoPaused = false
+            self.sendAuthority(force: true)
+        }
+    }
+
+    private func stopMotionClassifier() {
         activityManager.stopActivityUpdates()
         autoCandidate = nil
         autoCandidateToken = UUID()
+        autoPauseToken = UUID()
+        autoResumeToken = UUID()
     }
 
     private func startMotion() {
-        let interval = 1.0 / 20.0
-        motion.accelerometerUpdateInterval = interval
-        motion.gyroUpdateInterval = interval
-        if motion.isAccelerometerAvailable {
-            motion.startAccelerometerUpdates(to: .main) { [weak self] sample, _ in
-                guard let self, let sample else { return }
-                self.accelX = sample.acceleration.x
-                self.accelY = sample.acceleration.y
-                self.accelZ = sample.acceleration.z
-                self.sendMotionIfNeeded()
-            }
+        motionSampler.start { [weak self] frame in
+            guard let self else { return }
+            self.accelX = frame.accelX
+            self.accelY = frame.accelY
+            self.accelZ = frame.accelZ
+            self.gyroX = frame.gyroX
+            self.gyroY = frame.gyroY
+            self.gyroZ = frame.gyroZ
+            self.gyroSource = frame.gyroSource
+            self.sendMotionIfNeeded()
         }
-        if motion.isGyroAvailable {
-            motion.startGyroUpdates(to: .main) { [weak self] sample, _ in
-                guard let self, let sample else { return }
-                self.gyroX = sample.rotationRate.x
-                self.gyroY = sample.rotationRate.y
-                self.gyroZ = sample.rotationRate.z
+        sendEvent("motion_started", payload: [
+            "gyro_available": motionSampler.isGyroAvailable,
+        ])
+    }
+
+    private func stopMotion() {
+        motionSampler.stop()
+    }
+
+    private func startAltitude() {
+        usingBarometricElevation = CMAltimeter.isRelativeAltitudeAvailable()
+        altitudeSampler.start()
+        sendEvent("altimeter_started", payload: [
+            "relative_available": CMAltimeter.isRelativeAltitudeAvailable(),
+            "absolute_available": CMAltimeter.isAbsoluteAltitudeAvailable(),
+        ])
+    }
+
+    private func stopAltitude() {
+        altitudeSampler.stop()
+    }
+
+    private func startPedometer() {
+        guard CMPedometer.isStepCountingAvailable() || CMPedometer.isCadenceAvailable() else { return }
+        let base = steps
+        pedometerBaseSteps = base
+        pedometer.startUpdates(from: Date()) { [weak self] data, error in
+            DispatchQueue.main.async {
+                guard let self, self.running else { return }
+                if let error {
+                    self.sendEvent("pedometer_error", payload: ["message": error.localizedDescription])
+                    return
+                }
+                guard let data else { return }
+                self.steps = self.pedometerBaseSteps + data.numberOfSteps.intValue
+                if let cadence = data.currentCadence?.doubleValue, cadence > 0 {
+                    self.cadenceSPM = cadence * 60
+                }
+                var payload: [String: Any] = ["steps": self.steps]
+                if self.cadenceSPM > 0 { payload["cadence_spm"] = self.cadenceSPM }
+                if let pace = data.currentPace?.doubleValue { payload["pace_s_per_m"] = pace }
+                self.sendSensorSample(kind: "pedometer", payload: payload, reliable: false)
             }
         }
     }
 
-    private func stopMotion() {
-        motion.stopAccelerometerUpdates()
-        motion.stopGyroUpdates()
+    private func stopPedometer() {
+        pedometer.stopUpdates()
+        pedometerBaseSteps = steps
     }
 
     private func accept(location: CLLocation) {
         guard phase == .active else { return }
-        guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 50 else { return }
+        guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 35 else { return }
         guard abs(location.timestamp.timeIntervalSinceNow) < 10 else { return }
         horizontalAccuracy = location.horizontalAccuracy
         currentCoordinate = location.coordinate
-        altitudeMeters = location.altitude
+        if !hasAbsoluteBarometricAltitude { altitudeMeters = location.altitude }
+
+        var acceptedForDistance = false
+        var deltaMeters = 0.0
+        var impliedSpeed = 0.0
 
         if let previous = previousLocation {
             let delta = location.distance(from: previous)
             let dt = location.timestamp.timeIntervalSince(previous.timestamp)
-            if delta >= 0.6, delta < 250, dt > 0 {
+            let implied = dt > 0 ? delta / dt : .infinity
+            let nativeSpeed = location.speed >= 0 ? location.speed : implied
+            let limit = displayActivity.plausibleMaxSpeedMps
+            let accuracyOK = max(previous.horizontalAccuracy, location.horizontalAccuracy) <= 25
+            let plausible = dt > 0.15 && dt < 12 && delta >= 0.6 && delta < 150 && implied <= limit * 1.35 && nativeSpeed <= limit * 1.35
+
+            deltaMeters = delta
+            impliedSpeed = implied.isFinite ? implied : 0
+
+            if accuracyOK, plausible {
+                acceptedForDistance = true
                 distanceMeters += delta
-                let rawSpeed = location.speed >= 0 ? location.speed : delta / dt
-                if rawSpeed >= 0, rawSpeed < 80 {
-                    currentSpeedMps = currentSpeedMps == 0 ? rawSpeed : currentSpeedMps * 0.7 + rawSpeed * 0.3
-                }
+                let clipped = min(nativeSpeed, limit)
+                currentSpeedMps = currentSpeedMps == 0 ? clipped : currentSpeedMps * 0.80 + clipped * 0.20
+            } else if Date().timeIntervalSince(lastGPSRejectionEvent) > 5, delta > 3 {
+                lastGPSRejectionEvent = Date()
+                sendEvent("watch_gps_delta_rejected", payload: [
+                    "delta_m": delta,
+                    "dt_s": dt,
+                    "implied_speed_mps": implied.isFinite ? implied : -1,
+                    "native_speed_mps": nativeSpeed,
+                    "horizontal_accuracy_m": location.horizontalAccuracy,
+                    "limit_mps": limit,
+                    "activity": displayActivity.rawValue,
+                ])
             }
         }
 
-        if location.verticalAccuracy >= 0, location.verticalAccuracy <= 25, let previousAltitudeLocation {
-            let delta = location.altitude - previousAltitudeLocation.altitude
-            if abs(delta) >= 1.5 {
-                if delta > 0 { elevationGainMeters += delta } else { elevationLossMeters += abs(delta) }
-                self.previousAltitudeLocation = location
+        if !usingBarometricElevation {
+            if location.verticalAccuracy >= 0, location.verticalAccuracy <= 12, let previousAltitudeLocation {
+                let delta = location.altitude - previousAltitudeLocation.altitude
+                if abs(delta) >= 3.0 {
+                    if delta > 0 { elevationGainMeters += delta } else { elevationLossMeters += abs(delta) }
+                    self.previousAltitudeLocation = location
+                }
+            } else if previousAltitudeLocation == nil, location.verticalAccuracy >= 0, location.verticalAccuracy <= 12 {
+                previousAltitudeLocation = location
             }
-        } else if previousAltitudeLocation == nil {
-            previousAltitudeLocation = location
         }
 
         if route.isEmpty || location.distance(from: CLLocation(latitude: route.last!.latitude, longitude: route.last!.longitude)) >= 1.5 {
@@ -587,6 +852,7 @@ final class SensorModel: NSObject, ObservableObject {
         }
         healthRouteLocations.append(location)
         previousLocation = location
+        sendWatchLocationIfNeeded(location, acceptedForDistance: acceptedForDistance, deltaMeters: deltaMeters, impliedSpeed: impliedSpeed)
         sendAuthority()
     }
 
@@ -594,20 +860,62 @@ final class SensorModel: NSObject, ObservableObject {
         let now = Date()
         guard running, now.timeIntervalSince(lastMotionSend) >= 0.2 else { return }
         lastMotionSend = now
-        let payload: [String: Any] = [
+        sendSensorSample(kind: "motion", payload: [
+            "accel": [accelX, accelY, accelZ],
+            "gyro": [gyroX, gyroY, gyroZ],
+            "gyro_source": gyroSource,
+            "selected_activity": selectedActivity.rawValue,
+            "effective_activity": effectiveActivity.rawValue,
+        ], reliable: false)
+    }
+
+    private func sendWatchLocationIfNeeded(_ location: CLLocation, acceptedForDistance: Bool, deltaMeters: Double, impliedSpeed: Double) {
+        let now = Date()
+        guard now.timeIntervalSince(lastWatchLocationSend) >= 0.9 else { return }
+        lastWatchLocationSend = now
+        sendSensorSample(kind: "watch_location", payload: [
+            "latitude": location.coordinate.latitude,
+            "longitude": location.coordinate.longitude,
+            "altitude_m": location.altitude,
+            "display_altitude_m": altitudeMeters,
+            "distance_m": distanceMeters,
+            "speed_mps": currentSpeedMps,
+            "native_speed_mps": location.speed,
+            "horizontal_accuracy_m": location.horizontalAccuracy,
+            "vertical_accuracy_m": location.verticalAccuracy,
+            "delta_m": deltaMeters,
+            "implied_speed_mps": impliedSpeed,
+            "accepted_for_distance": acceptedForDistance,
+            "barometric_elevation": usingBarometricElevation,
+            "selected_activity": selectedActivity.rawValue,
+            "effective_activity": effectiveActivity.rawValue,
+        ], reliable: false)
+    }
+
+    private func sendEvent(_ name: String, payload: [String: Any] = [:]) {
+        var eventPayload = payload
+        eventPayload["name"] = name
+        eventPayload["session_id"] = sessionID
+        eventPayload["authority_revision"] = authorityRevision
+        eventPayload["timestamp"] = Date().timeIntervalSince1970
+        sendSensorSample(kind: "event", payload: eventPayload, reliable: true)
+    }
+
+    private func sendSensorSample(kind: String, payload: [String: Any], reliable: Bool) {
+        guard WCSession.isSupported() else { return }
+        let packet: [String: Any] = [
             "type": "sensor_sample",
             "source": "watch",
-            "kind": "motion",
-            "timestamp": now.timeIntervalSince1970,
-            "payload": [
-                "accel": [accelX, accelY, accelZ],
-                "gyro": [gyroX, gyroY, gyroZ],
-                "selected_activity": selectedActivity.rawValue,
-                "effective_activity": effectiveActivity.rawValue,
-            ],
+            "kind": kind,
+            "timestamp": Date().timeIntervalSince1970,
+            "payload": payload,
         ]
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated, WCSession.default.isReachable else { return }
-        WCSession.default.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        let session = WCSession.default
+        if session.activationState == .activated, session.isReachable {
+            session.sendMessage(packet, replyHandler: nil, errorHandler: nil)
+        } else if reliable, session.activationState == .activated {
+            session.transferUserInfo(packet)
+        }
     }
 
     private func makeMessage(kind: TrackerWireMessage.Kind) -> TrackerWireMessage {
@@ -666,7 +974,7 @@ final class SensorModel: NSObject, ObservableObject {
             guard !running, message.selectionRevision >= selectionRevision else { return }
             selectionRevision = message.selectionRevision
             if let value = ActivityKind(rawValue: message.selectedActivity) { selectedActivity = value }
-            effectiveActivity = selectedActivity.isAutomatic ? .walking : selectedActivity
+            effectiveActivity = initialEffectiveActivity(for: selectedActivity)
             sessionStatus = selectedActivity.isAutomatic ? "Auto synchronisé" : "\(selectedActivity.label) synchronisée"
             sendWC(makeMessage(kind: .selection))
         case .purge:
@@ -682,7 +990,7 @@ final class SensorModel: NSObject, ObservableObject {
             guard !running else { sendAuthority(force: true); return }
             selectionRevision = max(selectionRevision, message.selectionRevision)
             if let value = ActivityKind(rawValue: message.selectedActivity) { selectedActivity = value }
-            effectiveActivity = selectedActivity.isAutomatic ? .walking : selectedActivity
+            effectiveActivity = initialEffectiveActivity(for: selectedActivity)
             pendingRemoteSessionID = message.sessionID
             authorityRevision = max(1, authorityRevision + 1)
             if let config = pendingPhoneConfiguration {
@@ -705,6 +1013,12 @@ final class SensorModel: NSObject, ObservableObject {
         default:
             break
         }
+    }
+
+    private func handlePreferences(_ payload: [String: Any]) {
+        guard !running, let enabled = payload["auto_pause_enabled"] as? Bool else { return }
+        autoPauseEnabled = enabled
+        defaults.set(enabled, forKey: "tracker.autoPauseEnabled")
     }
 
     private func applyPurgeIfNeeded(_ purgeID: String) {
@@ -753,11 +1067,15 @@ extension SensorModel: HKWorkoutSessionDelegate {
     func workoutSession(_ workoutSession: HKWorkoutSession, didChangeTo toState: HKWorkoutSessionState, from fromState: HKWorkoutSessionState, date: Date) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            self.sendEvent("health_session_state", payload: [
+                "from": fromState.rawValue,
+                "to": toState.rawValue,
+            ])
             if toState == .paused, self.phase == .active {
                 self.phase = .paused
                 self.authorityRevision += 1
                 self.sendAuthority(force: true)
-            } else if toState == .running, self.phase == .paused {
+            } else if toState == .running, self.phase == .paused, !self.autoPaused {
                 self.phase = .active
                 self.authorityRevision += 1
                 self.sendAuthority(force: true)
@@ -766,7 +1084,10 @@ extension SensorModel: HKWorkoutSessionDelegate {
     }
 
     func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in self?.sessionStatus = "Santé: \(error.localizedDescription)" }
+        DispatchQueue.main.async { [weak self] in
+            self?.sessionStatus = "Santé: \(error.localizedDescription)"
+            self?.sendEvent("health_session_error", payload: ["message": error.localizedDescription])
+        }
     }
 
     func workoutSession(_ workoutSession: HKWorkoutSession, didReceiveDataFromRemoteWorkoutSession data: [Data]) {
@@ -797,7 +1118,9 @@ extension SensorModel: HKLiveWorkoutBuilderDelegate {
                      HKQuantityTypeIdentifier.distanceCycling.rawValue,
                      HKQuantityTypeIdentifier.distanceSwimming.rawValue:
                     let healthDistance = statistics.sumQuantity()?.doubleValue(for: HKUnit.meter()) ?? 0
-                    self.distanceMeters = max(self.distanceMeters, healthDistance)
+                    if healthDistance >= self.distanceMeters * 0.8, healthDistance <= self.distanceMeters * 1.25 + 100 {
+                        self.distanceMeters = max(self.distanceMeters, healthDistance)
+                    }
                 default:
                     break
                 }
@@ -820,7 +1143,10 @@ extension SensorModel: CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in self?.sessionStatus = "GPS: \(error.localizedDescription)" }
+        DispatchQueue.main.async { [weak self] in
+            self?.sessionStatus = "GPS: \(error.localizedDescription)"
+            self?.sendEvent("location_error", payload: ["message": error.localizedDescription])
+        }
     }
 }
 
@@ -833,13 +1159,25 @@ extension SensorModel: WCSessionDelegate {
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
-        DispatchQueue.main.async { [weak self] in self?.phoneReachable = session.isReachable }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let changed = self.phoneReachable != session.isReachable
+            self.phoneReachable = session.isReachable
+            if changed, self.running {
+                self.sendEvent("iphone_reachability_changed", payload: ["reachable": session.isReachable])
+            }
+        }
     }
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }
 
     private func receiveWC(_ payload: [String: Any]) {
+        if payload["type"] as? String == "tracker_preferences_v4" {
+            DispatchQueue.main.async { [weak self] in self?.handlePreferences(payload) }
+            return
+        }
+
         guard payload["type"] as? String == "tracker_wire_v3",
               let data = payload["data"] as? Data,
               let message = TrackerWireCodec.decode(data) else { return }

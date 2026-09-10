@@ -42,9 +42,13 @@ private struct ReadyWorkoutView: View {
         Binding(get: { model.selectedActivity }, set: { model.selectActivity($0) })
     }
 
+    private var autoPauseBinding: Binding<Bool> {
+        Binding(get: { model.autoPauseEnabled }, set: { model.setAutoPauseEnabled($0) })
+    }
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 9) {
+            VStack(spacing: 8) {
                 HStack {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("WATCH TRACKER").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
@@ -64,26 +68,44 @@ private struct ReadyWorkoutView: View {
 
                 if model.selectedActivity.isAutomatic {
                     Text("Auto détecte marche, course ou vélo après quelques secondes stables.")
-                        .font(.system(size: 9)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                } else if model.selectedActivity == .swimBikeRun {
+                    Text("Triathlon : natation → vélo → course, avec transitions mesurées.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
 
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     WatchStatusChip(symbol: "iphone", ready: model.phoneReachable)
                     WatchStatusChip(symbol: "heart.fill", ready: model.healthAuthorized)
                     WatchStatusChip(symbol: "location.fill", ready: model.horizontalAccuracy >= 0)
                 }
 
+                Toggle(isOn: autoPauseBinding) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Pause auto").font(.caption.weight(.semibold))
+                        Text("adaptée au sport").font(.system(size: 8)).foregroundStyle(.secondary)
+                    }
+                }
+                .tint(.mint)
+
                 Button { model.start() } label: {
-                    Label("Démarrer", systemImage: "play.fill").font(.headline.weight(.bold)).frame(maxWidth: .infinity)
+                    Label("Démarrer", systemImage: "play.fill")
+                        .font(.headline.weight(.bold))
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent).tint(.green).controlSize(.large)
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .controlSize(.large)
 
-                Button(role: .destructive) { model.deleteAllTestData() } label: {
-                    Label("Effacer test", systemImage: "trash").font(.caption.weight(.bold)).frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
-                Text(model.sessionStatus).font(.caption2).foregroundStyle(.secondary).lineLimit(3).multilineTextAlignment(.center)
+                Text(model.sessionStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.center)
             }
             .padding(.horizontal, 4)
         }
@@ -93,7 +115,7 @@ private struct ReadyWorkoutView: View {
 private struct ActiveWorkoutView: View {
     var body: some View {
         TabView {
-            WatchPrimaryMetricsPage()
+            WatchMetricsCarouselPage()
             WatchRoutePage()
             WatchClimbPage()
             WatchControlsPage()
@@ -102,15 +124,25 @@ private struct ActiveWorkoutView: View {
     }
 }
 
+private struct WatchMetricsCarouselPage: View {
+    var body: some View {
+        TabView {
+            WatchPrimaryMetricsPage()
+            WatchEffortMetricsPage()
+        }
+        .tabViewStyle(.page(indexDisplayMode: .automatic))
+    }
+}
+
 private struct WatchPrimaryMetricsPage: View {
     @EnvironmentObject private var model: SensorModel
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 7) {
             HStack {
                 HStack(spacing: 5) {
                     Circle().fill(model.isPaused ? Color.orange : Color.green).frame(width: 7, height: 7)
-                    Text(model.isPaused ? "PAUSE" : model.displayActivity.label.uppercased())
+                    Text(model.isPaused ? (model.autoPaused ? "PAUSE AUTO" : "PAUSE") : model.displayActivity.label.uppercased())
                         .font(.caption2.weight(.black)).lineLimit(1).minimumScaleFactor(0.65)
                 }
                 Spacer()
@@ -123,23 +155,103 @@ private struct WatchPrimaryMetricsPage: View {
                     Image(systemName: "wand.and.stars")
                     Text("AUTO → \(model.effectiveActivity.label.uppercased())")
                 }
-                .font(.system(size: 9, weight: .bold)).foregroundStyle(.mint)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.mint)
+            } else if model.selectedActivity == .swimBikeRun {
+                HStack(spacing: 4) {
+                    Image(systemName: "figure.run.square.stack")
+                    Text(model.multisportTransition ? "TRANSITION" : model.effectiveActivity.label.uppercased())
+                }
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.mint)
             }
 
             Text(formatDuration(model.elapsedSeconds))
-                .font(.system(size: 33, weight: .black, design: .rounded)).monospacedDigit().minimumScaleFactor(0.75)
+                .font(.system(size: 32, weight: .black, design: .rounded))
+                .monospacedDigit()
+                .minimumScaleFactor(0.75)
 
             HStack(spacing: 7) {
-                WatchMetricCard(title: "DISTANCE", value: formatDistance(model.distanceMeters), unit: model.distanceMeters >= 1000 ? "km" : "m", symbol: model.displayActivity.symbol)
-                WatchMetricCard(title: "CŒUR", value: model.heartRate > 0 ? String(format: "%.0f", model.heartRate) : "—", unit: "bpm", symbol: "heart.fill", accent: .red)
+                WatchMetricCard(
+                    title: "DISTANCE",
+                    value: model.elapsedSeconds > 4 ? formatDistance(model.distanceMeters) : "—",
+                    unit: model.distanceMeters >= 1000 ? "km" : "m",
+                    symbol: model.displayActivity.symbol
+                )
+                WatchMetricCard(
+                    title: "CŒUR",
+                    value: model.heartRate > 0 ? String(format: "%.0f", model.heartRate) : "—",
+                    unit: "bpm",
+                    symbol: "heart.fill",
+                    accent: .red
+                )
             }
 
             HStack {
-                Label(String(format: "%.1f km/h", model.currentSpeedMps * 3.6), systemImage: "speedometer")
+                Label(
+                    model.horizontalAccuracy >= 0 && model.elapsedSeconds > 4
+                        ? String(format: "%.1f km/h", model.currentSpeedMps * 3.6)
+                        : "GPS…",
+                    systemImage: "speedometer"
+                )
                 Spacer()
-                Text("+\(Int(model.elevationGainMeters)) m")
+                Text(model.elapsedSeconds > 4 ? "+\(Int(model.elevationGainMeters)) m" : "D+ …")
             }
-            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 2)
+    }
+}
+
+private struct WatchEffortMetricsPage: View {
+    @EnvironmentObject private var model: SensorModel
+
+    var body: some View {
+        VStack(spacing: 7) {
+            HStack {
+                Text("EFFORT").font(.caption2.weight(.black)).foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: "waveform.path.ecg").foregroundStyle(.mint)
+            }
+
+            HStack(spacing: 7) {
+                WatchMetricCard(
+                    title: "CALORIES",
+                    value: model.activeEnergyKcal > 0 ? String(format: "%.0f", model.activeEnergyKcal) : "—",
+                    unit: "kcal",
+                    symbol: "flame.fill",
+                    accent: .orange
+                )
+                WatchMetricCard(
+                    title: "CADENCE",
+                    value: model.cadenceSPM > 0 ? String(format: "%.0f", model.cadenceSPM) : "—",
+                    unit: "pas/min",
+                    symbol: "metronome.fill",
+                    accent: .cyan
+                )
+            }
+
+            HStack(spacing: 7) {
+                WatchMetricCard(
+                    title: "PAS",
+                    value: model.steps > 0 ? "\(model.steps)" : "—",
+                    unit: "pas",
+                    symbol: "shoeprints.fill"
+                )
+                WatchMetricCard(
+                    title: "FC MOY.",
+                    value: model.averageHeartRate > 0 ? String(format: "%.0f", model.averageHeartRate) : "—",
+                    unit: "bpm",
+                    symbol: "heart.text.square.fill",
+                    accent: .red
+                )
+            }
+
+            Text(model.gyroSource == "unavailable" ? "Mouvement : acquisition…" : "Mouvement : \(model.gyroSource == "device_motion" ? "fusion capteurs" : "gyro brut")")
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
         }
         .padding(.horizontal, 2)
     }
@@ -160,13 +272,23 @@ private struct WatchRoutePage: View {
             }
             .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
 
-            Text("PARCOURS").font(.caption2.weight(.black)).padding(.horizontal, 8).padding(.vertical, 5)
-                .background(.ultraThinMaterial, in: Capsule()).padding(6)
+            Text("PARCOURS")
+                .font(.caption2.weight(.black))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(.ultraThinMaterial, in: Capsule())
+                .padding(6)
         }
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .onChange(of: model.route.count) { _, _ in
             guard let coordinate = model.currentCoordinate else { return }
-            position = .region(MKCoordinateRegion(center: coordinate, latitudinalMeters: 500, longitudinalMeters: 500))
+            position = .region(
+                MKCoordinateRegion(
+                    center: coordinate,
+                    latitudinalMeters: 500,
+                    longitudinalMeters: 500
+                )
+            )
         }
     }
 }
@@ -181,17 +303,22 @@ private struct WatchClimbPage: View {
                 Spacer()
                 Image(systemName: "mountain.2.fill").foregroundStyle(.orange)
             }
-            WatchWideMetric(title: "Altitude", value: String(format: "%.0f m", model.altitudeMeters), symbol: "mountain.2")
+            WatchWideMetric(
+                title: "Altitude",
+                value: model.elapsedSeconds > 4 ? String(format: "%.0f m", model.altitudeMeters) : "Acquisition…",
+                symbol: "mountain.2"
+            )
             HStack(spacing: 7) {
-                WatchMetricCard(title: "MONTÉE", value: String(format: "%.0f", model.elevationGainMeters), unit: "m", symbol: "arrow.up.right", accent: .orange)
-                WatchMetricCard(title: "DESCENTE", value: String(format: "%.0f", model.elevationLossMeters), unit: "m", symbol: "arrow.down.right", accent: .cyan)
+                WatchMetricCard(title: "MONTÉE", value: model.elapsedSeconds > 4 ? String(format: "%.0f", model.elevationGainMeters) : "—", unit: "m", symbol: "arrow.up.right", accent: .orange)
+                WatchMetricCard(title: "DESCENTE", value: model.elapsedSeconds > 4 ? String(format: "%.0f", model.elevationLossMeters) : "—", unit: "m", symbol: "arrow.down.right", accent: .cyan)
             }
             HStack {
-                Text("FC moy.")
+                Text("GPS")
                 Spacer()
-                Text(model.averageHeartRate > 0 ? String(format: "%.0f bpm", model.averageHeartRate) : "—")
+                Text(model.horizontalAccuracy >= 0 ? String(format: "±%.0f m", model.horizontalAccuracy) : "acquisition…")
             }
-            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 2)
     }
@@ -201,31 +328,62 @@ private struct WatchControlsPage: View {
     @EnvironmentObject private var model: SensorModel
 
     var body: some View {
-        VStack(spacing: 9) {
-            Text("WATCH = ÉTAT MAÎTRE").font(.system(size: 9, weight: .black)).foregroundStyle(.secondary)
+        ScrollView {
+            VStack(spacing: 8) {
+                Text("WATCH = ÉTAT MAÎTRE")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(.secondary)
 
-            Button { model.isPaused ? model.resume() : model.pause() } label: {
-                Label(model.isPaused ? "Reprendre" : "Pause", systemImage: model.isPaused ? "play.fill" : "pause.fill").frame(maxWidth: .infinity)
+                if model.selectedActivity == .swimBikeRun, model.canAdvanceTriathlon {
+                    Button { model.advanceTriathlon() } label: {
+                        Label(
+                            model.multisportTransition ? "Démarrer suivant" : "Transition",
+                            systemImage: model.multisportTransition ? "forward.fill" : "arrow.triangle.2.circlepath"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                }
+
+                Button { model.isPaused ? model.resume() : model.pause() } label: {
+                    Label(
+                        model.isPaused ? "Reprendre" : "Pause",
+                        systemImage: model.isPaused ? "play.fill" : "pause.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(model.isPaused ? .green : .orange)
+                .controlSize(.large)
+
+                Button(role: .destructive) { model.stop() } label: {
+                    Label("Terminer", systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                Text("SHA \(BuildInfo.gitSHA)")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.borderedProminent).tint(model.isPaused ? .green : .orange).controlSize(.large)
-
-            Button(role: .destructive) { model.stop() } label: {
-                Label("Terminer", systemImage: "stop.fill").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent).controlSize(.large)
-
-            Text("SHA \(BuildInfo.gitSHA)").font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
+            .padding(.horizontal, 2)
         }
-        .padding(.horizontal, 2)
     }
 }
 
 private struct WatchStatusChip: View {
     let symbol: String
     let ready: Bool
+
     var body: some View {
-        Image(systemName: symbol).font(.caption.weight(.bold)).foregroundStyle(ready ? Color.green : Color.secondary)
-            .frame(maxWidth: .infinity).frame(height: 34).background(.white.opacity(0.07), in: Capsule())
+        Image(systemName: symbol)
+            .font(.caption.weight(.bold))
+            .foregroundStyle(ready ? Color.green : Color.secondary)
+            .frame(maxWidth: .infinity)
+            .frame(height: 30)
+            .background(.white.opacity(0.07), in: Capsule())
     }
 }
 
@@ -238,13 +396,22 @@ private struct WatchMetricCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 3) { Image(systemName: symbol).foregroundStyle(accent); Text(title) }
-                .font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 23, weight: .heavy, design: .rounded)).monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
+            HStack(spacing: 3) {
+                Image(systemName: symbol).foregroundStyle(accent)
+                Text(title)
+            }
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 22, weight: .heavy, design: .rounded))
+                .monospacedDigit()
+                .minimumScaleFactor(0.65)
+                .lineLimit(1)
             Text(unit).font(.system(size: 9)).foregroundStyle(.tertiary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading).padding(8)
-        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(7)
+        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
     }
 }
 
@@ -252,13 +419,17 @@ private struct WatchWideMetric: View {
     let title: String
     let value: String
     let symbol: String
+
     var body: some View {
         HStack {
-            Label(title, systemImage: symbol).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
             Spacer()
             Text(value).font(.title3.weight(.bold)).monospacedDigit()
         }
-        .padding(9).background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(9)
+        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 

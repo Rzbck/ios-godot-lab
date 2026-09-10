@@ -5,31 +5,44 @@ struct LiveTrackerView: View {
     @EnvironmentObject private var tracker: TrackerModel
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var followUser = true
-
-    private let metricColumns = [
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10),
-        GridItem(.flexible(), spacing: 10),
-    ]
+    @State private var showHistory = false
 
     var body: some View {
         ZStack {
             liveMap.ignoresSafeArea()
-            LinearGradient(colors: [.black.opacity(0.52), .clear, .black.opacity(0.28)], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
+            LinearGradient(
+                colors: [.black.opacity(0.40), .clear, .black.opacity(0.22)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            header.padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
+            header
+                .padding(.horizontal, 14)
+                .padding(.top, 2)
+                .padding(.bottom, 7)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            sessionPanel.padding(.horizontal, 12).padding(.bottom, 8)
+            sessionPanel
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+        }
+        .sheet(isPresented: $showHistory) {
+            ActivityHistoryView()
         }
         .onAppear { tracker.requestLocationPermission() }
         .onChange(of: tracker.route.count) { _, _ in
             guard followUser, let coordinate = tracker.currentCoordinate else { return }
-            withAnimation(.easeOut(duration: 0.35)) {
-                cameraPosition = .region(MKCoordinateRegion(center: coordinate, latitudinalMeters: tracker.isActive ? 650 : 1_400, longitudinalMeters: tracker.isActive ? 650 : 1_400))
+            withAnimation(.easeOut(duration: 0.30)) {
+                cameraPosition = .region(
+                    MKCoordinateRegion(
+                        center: coordinate,
+                        latitudinalMeters: tracker.isActive ? 700 : 1_400,
+                        longitudinalMeters: tracker.isActive ? 700 : 1_400
+                    )
+                )
             }
         }
     }
@@ -56,36 +69,45 @@ struct LiveTrackerView: View {
             Button {
                 followUser = true
                 if let coordinate = tracker.currentCoordinate {
-                    cameraPosition = .region(MKCoordinateRegion(center: coordinate, latitudinalMeters: 650, longitudinalMeters: 650))
+                    cameraPosition = .region(
+                        MKCoordinateRegion(
+                            center: coordinate,
+                            latitudinalMeters: 700,
+                            longitudinalMeters: 700
+                        )
+                    )
                 }
             } label: {
                 Image(systemName: followUser ? "location.fill" : "location")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 46, height: 46)
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 42, height: 42)
                     .background(.ultraThinMaterial, in: Circle())
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 14)
+            .padding(.trailing, 12)
         }
         .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { _ in followUser = false })
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("WATCH TRACKER").font(.caption.weight(.bold)).tracking(1.4)
-                Text(tracker.isActive ? tracker.displayActivity.label.uppercased() : "PRÊT À PARTIR")
-                    .font(.title3.weight(.heavy))
+            VStack(alignment: .leading, spacing: 0) {
+                Text("WATCH TRACKER")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.2)
+                Text(tracker.isActive ? tracker.displayActivity.label.uppercased() : "PRÊT")
+                    .font(.headline.weight(.heavy))
             }
-            Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                Circle().fill(tracker.watchReachable ? Color.green : Color.orange).frame(width: 8, height: 8)
-                Image(systemName: "applewatch")
-                Text(tracker.watchReachable ? "SYNC" : "WATCH").font(.caption2.weight(.bold))
+            Spacer(minLength: 6)
+
+            Button { showHistory = true } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 38, height: 38)
+                    .background(.ultraThinMaterial, in: Circle())
             }
-            .padding(.horizontal, 11)
-            .frame(height: 36)
-            .background(.ultraThinMaterial, in: Capsule())
+            .buttonStyle(.plain)
+            .accessibilityLabel("Historique des activités")
         }
         .foregroundStyle(.white)
     }
@@ -94,45 +116,116 @@ struct LiveTrackerView: View {
         Group {
             if tracker.isActive { activePanel } else { readyPanel }
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(.white.opacity(0.10), lineWidth: 1) }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(.white.opacity(0.10), lineWidth: 1)
+        }
     }
 
     private var activePanel: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 9) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 5) {
                         Text(tracker.selectedActivity.isAutomatic ? "AUTO" : tracker.displayActivity.label.uppercased())
-                            .font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
                         if tracker.selectedActivity.isAutomatic {
                             Text("· \(tracker.effectiveActivity.label.uppercased())")
-                                .font(.caption2.weight(.black)).foregroundStyle(.mint)
+                                .font(.caption2.weight(.black))
+                                .foregroundStyle(.mint)
                         }
                     }
                     Text(formatDuration(tracker.elapsedSeconds))
-                        .font(.system(size: 34, weight: .black, design: .rounded)).monospacedDigit()
+                        .font(.system(size: 32, weight: .black, design: .rounded))
+                        .monospacedDigit()
                 }
                 Spacer()
-                statusPill
+                activityStatePill
             }
 
-            LazyVGrid(columns: metricColumns, spacing: 10) {
-                MetricTile(title: "DISTANCE", value: formatDistance(tracker.distanceMeters), unit: tracker.distanceMeters >= 1000 ? "km" : "m", symbol: "point.topleft.down.to.point.bottomright.curvepath")
-                MetricTile(title: "VITESSE", value: String(format: "%.1f", tracker.currentSpeedMps * 3.6), unit: "km/h", symbol: "speedometer")
-                MetricTile(title: "ALLURE", value: formatPace(tracker.currentSpeedMps), unit: "/km", symbol: tracker.displayActivity.symbol)
-                MetricTile(title: "CŒUR", value: tracker.heartRate > 0 ? String(format: "%.0f", tracker.heartRate) : "—", unit: "bpm", symbol: "heart.fill", emphasized: tracker.heartRate > 0)
-                MetricTile(title: "ALTITUDE", value: String(format: "%.0f", tracker.altitudeMeters), unit: "m", symbol: "mountain.2.fill")
-                MetricTile(title: "DÉNIVELÉ", value: String(format: "+%.0f", tracker.elevationGainMeters), unit: "m", symbol: "arrow.up.right")
+            compactReadiness
+
+            if tracker.elapsedSeconds < 6 || !tracker.gpsSettled || tracker.heartRate <= 0 {
+                acquisitionLine
             }
 
-            HStack(spacing: 10) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    CompactMetricCard(
+                        title: "DISTANCE",
+                        value: tracker.elapsedSeconds >= 5 ? formatDistance(tracker.distanceMeters) : "—",
+                        unit: tracker.distanceMeters >= 1000 ? "km" : "m",
+                        symbol: "point.topleft.down.to.point.bottomright.curvepath"
+                    )
+                    CompactMetricCard(
+                        title: "VITESSE",
+                        value: tracker.gpsSettled ? String(format: "%.1f", tracker.currentSpeedMps * 3.6) : "—",
+                        unit: "km/h",
+                        symbol: "speedometer"
+                    )
+                    CompactMetricCard(
+                        title: "ALLURE",
+                        value: tracker.gpsSettled ? formatPace(tracker.currentSpeedMps) : "—",
+                        unit: "/km",
+                        symbol: tracker.displayActivity.symbol
+                    )
+                    CompactMetricCard(
+                        title: "CŒUR",
+                        value: tracker.heartRate > 0 ? String(format: "%.0f", tracker.heartRate) : "—",
+                        unit: "bpm",
+                        symbol: "heart.fill",
+                        emphasized: tracker.heartRate > 0
+                    )
+                    CompactMetricCard(
+                        title: "CALORIES",
+                        value: tracker.activeEnergyKcal > 0 ? String(format: "%.0f", tracker.activeEnergyKcal) : "—",
+                        unit: "kcal",
+                        symbol: "flame.fill"
+                    )
+                    CompactMetricCard(
+                        title: "CADENCE",
+                        value: tracker.cadenceSPM > 0 ? String(format: "%.0f", tracker.cadenceSPM) : "—",
+                        unit: "pas/min",
+                        symbol: "metronome.fill"
+                    )
+                    CompactMetricCard(
+                        title: "ALTITUDE",
+                        value: tracker.elapsedSeconds >= 5 && abs(tracker.altitudeMeters) > 0.5 ? String(format: "%.0f", tracker.altitudeMeters) : "—",
+                        unit: "m",
+                        symbol: "mountain.2.fill"
+                    )
+                    CompactMetricCard(
+                        title: "DÉNIVELÉ",
+                        value: tracker.elapsedSeconds >= 5 ? String(format: "+%.0f", tracker.elevationGainMeters) : "—",
+                        unit: "m",
+                        symbol: "arrow.up.right"
+                    )
+                    CompactMetricCard(
+                        title: "PAS",
+                        value: tracker.steps > 0 ? "\(tracker.steps)" : "—",
+                        unit: "pas",
+                        symbol: "shoeprints.fill"
+                    )
+                }
+                .padding(.horizontal, 1)
+            }
+
+            weatherLine
+
+            HStack(spacing: 9) {
                 Button {
                     tracker.isPaused ? tracker.resumeFromPhone() : tracker.pauseFromPhone()
                 } label: {
-                    Label(tracker.isPaused ? "Reprendre" : "Pause", systemImage: tracker.isPaused ? "play.fill" : "pause.fill")
-                        .font(.headline).frame(maxWidth: .infinity).frame(height: 54)
+                    Label(
+                        tracker.isPaused ? "Reprendre" : "Pause",
+                        systemImage: tracker.isPaused ? "play.fill" : "pause.fill"
+                    )
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(tracker.isPaused ? .green : .orange)
@@ -142,40 +235,60 @@ struct LiveTrackerView: View {
                     tracker.stopFromPhone()
                 } label: {
                     Label("Terminer", systemImage: "stop.fill")
-                        .font(.headline).frame(maxWidth: .infinity).frame(height: 54)
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(tracker.pendingCommand != nil)
             }
 
             Text(tracker.pendingCommand == nil ? tracker.statusMessage : "En attente de confirmation de la Watch…")
-                .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(2)
         }
     }
 
     private var readyPanel: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("ACTIVITÉ").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("ACTIVITÉ")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
                     Text(tracker.selectedActivity.isAutomatic ? "Auto · marche / course / vélo" : tracker.selectedActivity.label)
-                        .font(.headline.weight(.heavy)).lineLimit(2)
+                        .font(.headline.weight(.heavy))
+                        .lineLimit(2)
                 }
                 Spacer(minLength: 8)
-                Image(systemName: tracker.selectedActivity.symbol).font(.system(size: 34, weight: .semibold)).foregroundStyle(.mint)
+                Image(systemName: tracker.selectedActivity.symbol)
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(.mint)
             }
 
             Menu {
                 Section("Automatique") {
                     activityButton(.automatic)
                 }
+                Section("Multisport") {
+                    activityButton(.swimBikeRun)
+                }
                 Section("Déplacement") {
-                    ForEach([ActivityKind.walking, .running, .hiking, .cycling, .swimming, .rowing, .paddleSports, .crossCountrySkiing, .downhillSkiing, .snowboarding], id: \.self) { activity in
+                    ForEach(
+                        [ActivityKind.walking, .running, .hiking, .cycling, .swimming, .rowing, .paddleSports, .crossCountrySkiing, .downhillSkiing, .snowboarding],
+                        id: \.self
+                    ) { activity in
                         activityButton(activity)
                     }
                 }
-                Section("Fitness et sports Apple") {
-                    ForEach(ActivityKind.allCases.filter { ![.automatic, .walking, .running, .hiking, .cycling, .swimming, .rowing, .paddleSports, .crossCountrySkiing, .downhillSkiing, .snowboarding].contains($0) }) { activity in
+                Section("Autres sports Apple") {
+                    ForEach(
+                        ActivityKind.allCases.filter {
+                            ![.automatic, .swimBikeRun, .walking, .running, .hiking, .cycling, .swimming, .rowing, .paddleSports, .crossCountrySkiing, .downhillSkiing, .snowboarding].contains($0)
+                        }
+                    ) { activity in
                         activityButton(activity)
                     }
                 }
@@ -186,61 +299,139 @@ struct LiveTrackerView: View {
                     Image(systemName: "chevron.up.chevron.down")
                 }
                 .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity).frame(height: 46)
-                .padding(.horizontal, 12)
-                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(maxWidth: .infinity)
+                .frame(height: 42)
+                .padding(.horizontal, 11)
+                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
             }
             .buttonStyle(.plain)
 
-            HStack(spacing: 8) {
-                ReadinessChip(title: "GPS", ready: tracker.horizontalAccuracy >= 0, symbol: "location.fill")
-                ReadinessChip(title: "WATCH", ready: tracker.watchReachable, symbol: "applewatch")
-                ReadinessChip(title: "SANTÉ", ready: tracker.healthAuthorized, symbol: "heart.text.square.fill")
+            compactReadiness
+
+            Toggle(
+                isOn: Binding(
+                    get: { tracker.autoPauseEnabled },
+                    set: { tracker.setAutoPauseEnabled($0) }
+                )
+            ) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Pause automatique").font(.subheadline.weight(.semibold))
+                    Text("Détection adaptée au sport · pause manuelle prioritaire")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .tint(.mint)
 
             Button { tracker.startFromPhone() } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "play.fill")
                     Text("DÉMARRER · \(tracker.selectedActivity.label.uppercased())")
                 }
-                .font(.headline.weight(.bold)).frame(maxWidth: .infinity).frame(height: 58)
+                .font(.headline.weight(.bold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 54)
             }
-            .buttonStyle(.borderedProminent).tint(.green)
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
 
             if let summary = tracker.lastSummary {
-                HStack {
-                    Label(ActivityKind(rawValue: summary.activity)?.label ?? summary.activity, systemImage: "checkmark.circle.fill")
-                    Spacer()
-                    Text("\(formatDistance(summary.distanceMeters)) · \(formatDuration(summary.duration))").monospacedDigit()
+                Button { showHistory = true } label: {
+                    HStack {
+                        Label(ActivityKind(rawValue: summary.activity)?.label ?? summary.activity, systemImage: "checkmark.circle.fill")
+                        Spacer()
+                        Text("\(formatDistance(summary.distanceMeters)) · \(formatDuration(summary.duration))")
+                            .monospacedDigit()
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 3)
                 }
-                .font(.caption).foregroundStyle(.secondary)
+                .buttonStyle(.plain)
             } else {
-                Text(tracker.statusMessage).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                Text(tracker.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Button(role: .destructive) { tracker.deleteAllTestData() } label: {
-                Label("EFFACER LES DONNÉES DE TEST", systemImage: "trash.fill")
-                    .font(.caption.weight(.bold)).frame(maxWidth: .infinity).frame(height: 38)
+            Text("Les activités terminées sont conservées dans Historique après les mises à jour de l’app.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var compactReadiness: some View {
+        HStack(spacing: 5) {
+            CompactReadinessChip(title: "GPS", ready: tracker.horizontalAccuracy >= 0, symbol: "location.fill")
+            CompactReadinessChip(title: "WATCH", ready: tracker.watchReachable, symbol: "applewatch")
+            CompactReadinessChip(title: "SANTÉ", ready: tracker.healthAuthorized, symbol: "heart.text.square.fill")
+        }
+    }
+
+    private var acquisitionLine: some View {
+        HStack(spacing: 10) {
+            if !tracker.gpsSettled {
+                Label("GPS en acquisition", systemImage: "location.magnifyingglass")
             }
-            .buttonStyle(.bordered)
+            if tracker.heartRate <= 0 {
+                Label("Cardio en acquisition", systemImage: "heart")
+            }
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var weatherLine: some View {
+        if let weather = tracker.currentWeather {
+            HStack(spacing: 10) {
+                Image(systemName: "cloud.sun.fill").foregroundStyle(.cyan)
+                if let temperature = weather.temperatureC {
+                    Text(String(format: "%.1f °C", temperature)).fontWeight(.bold)
+                }
+                if let apparent = weather.apparentTemperatureC {
+                    Text("ress. \(String(format: "%.1f°", apparent))")
+                }
+                if let wind = weather.windSpeedKPH {
+                    Text("vent \(String(format: "%.0f", wind)) km/h")
+                }
+                if let gust = weather.windGustKPH {
+                    Text("raf. \(String(format: "%.0f", gust))")
+                }
+                Spacer(minLength: 0)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        } else if tracker.elapsedSeconds > 5 {
+            HStack(spacing: 6) {
+                Image(systemName: "cloud")
+                Text("Contexte météo en acquisition…")
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     @ViewBuilder
     private func activityButton(_ activity: ActivityKind) -> some View {
-        Button {
-            tracker.selectActivity(activity)
-        } label: {
+        Button { tracker.selectActivity(activity) } label: {
             Label(activity.label, systemImage: activity.symbol)
         }
     }
 
-    private var statusPill: some View {
-        HStack(spacing: 6) {
-            Circle().fill(tracker.isPaused ? Color.orange : Color.green).frame(width: 8, height: 8)
-            Text(tracker.isPaused ? "PAUSE" : "WATCH").font(.caption2.weight(.black))
+    private var activityStatePill: some View {
+        HStack(spacing: 5) {
+            Circle().fill(tracker.isPaused ? Color.orange : Color.green).frame(width: 7, height: 7)
+            Text(tracker.isPaused ? "PAUSE" : "ACTIF")
+                .font(.caption2.weight(.black))
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
         .background(.white.opacity(0.10), in: Capsule())
     }
 
@@ -263,7 +454,7 @@ struct LiveTrackerView: View {
     }
 }
 
-private struct MetricTile: View {
+private struct CompactMetricCard: View {
     let title: String
     let value: String
     let unit: String
@@ -271,27 +462,43 @@ private struct MetricTile: View {
     var emphasized = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 4) { Image(systemName: symbol); Text(title) }
-                .font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary).lineLimit(1)
-            Text(value).font(.system(size: 21, weight: .bold, design: .rounded)).monospacedDigit()
-                .foregroundStyle(emphasized ? Color.red : Color.primary).minimumScaleFactor(0.7).lineLimit(1)
-            Text(unit).font(.caption2).foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol)
+                Text(title)
+            }
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(emphasized ? Color.red : Color.primary)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+
+            Text(unit).font(.system(size: 9)).foregroundStyle(.tertiary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading).padding(10)
-        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .frame(width: 104, alignment: .leading)
+        .padding(9)
+        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
-private struct ReadinessChip: View {
+private struct CompactReadinessChip: View {
     let title: String
     let ready: Bool
     let symbol: String
 
     var body: some View {
-        HStack(spacing: 5) { Image(systemName: symbol); Text(title).font(.caption2.weight(.bold)) }
-            .foregroundStyle(ready ? Color.green : Color.secondary)
-            .frame(maxWidth: .infinity).frame(height: 34)
-            .background(.white.opacity(0.07), in: Capsule())
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+            Text(title).font(.system(size: 9, weight: .bold))
+        }
+        .foregroundStyle(ready ? Color.green : Color.secondary)
+        .frame(maxWidth: .infinity)
+        .frame(height: 26)
+        .background(.white.opacity(0.06), in: Capsule())
     }
 }

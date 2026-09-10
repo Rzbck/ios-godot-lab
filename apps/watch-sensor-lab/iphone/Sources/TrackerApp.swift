@@ -32,6 +32,7 @@ private struct TrackerRootView: View {
         TabView(selection: $selection) {
             TodayDashboardView(
                 openActivity: { selection = .activity },
+                openProgression: { selection = .progression },
                 openHistory: { selection = .history }
             )
             .tag(TrackerAppSection.today)
@@ -41,7 +42,7 @@ private struct TrackerRootView: View {
                 .tag(TrackerAppSection.activity)
                 .tabItem { Label("Activité", systemImage: "figure.run") }
 
-            HealthProgressionDashboardView()
+            ProgressionEntryView()
                 .tag(TrackerAppSection.progression)
                 .tabItem { Label("Progression", systemImage: "chart.xyaxis.line") }
 

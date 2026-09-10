@@ -53,6 +53,7 @@ struct PostActivitySummaryView: View {
                     metricsGrid
                     segmentsSection
                     SessionTimelineView(points: timeline)
+                    HealthEnergyTimelineView(summary: summary)
                     environmentSection
                     healthContextSection
                     technicalTrace
@@ -258,6 +259,7 @@ struct PostActivitySummaryView: View {
 
     private func loadContext() {
         let sessionID = summary.sessionID
+        WatchReliableRecovery.refreshSummaryIfNeeded(sessionID: sessionID)
         review = ActivityReviewStore().load(sessionID: sessionID)
         DispatchQueue.global(qos: .userInitiated).async {
             let loadedRoute = store.loadRoute(sessionID: sessionID)

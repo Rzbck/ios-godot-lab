@@ -65,7 +65,7 @@ private struct TrackerRootView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            TodayDashboardView(
+            TodayExperienceView(
                 openActivity: { selection = .activity },
                 openProgression: { selection = .progression },
                 openHistory: { selection = .history }

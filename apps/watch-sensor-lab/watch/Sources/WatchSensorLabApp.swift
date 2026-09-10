@@ -38,6 +38,7 @@ struct ContentView: View {
 private struct ReadyWorkoutView: View {
     @EnvironmentObject private var model: SensorModel
     @State private var showHistory = false
+    @State private var showAutoPauseSettings = false
 
     private var activityBinding: Binding<ActivityKind> {
         Binding(get: { model.selectedActivity }, set: { model.selectActivity($0) })
@@ -68,12 +69,12 @@ private struct ReadyWorkoutView: View {
                 .pickerStyle(.navigationLink)
 
                 if model.selectedActivity.isAutomatic {
-                    Text("Auto détecte marche, course ou vélo après quelques secondes stables.")
+                    Text("Auto détecte marche, course ou vélo via Core Motion et peut proposer Randonnée probable avec terrain/dénivelé.")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 } else if model.selectedActivity == .swimBikeRun {
-                    Text("Triathlon : natation → vélo → course, avec transitions mesurées.")
+                    Text("Triathlon : natation → vélo → course, avec transitions mesurées et détection conservatrice.")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -92,6 +93,13 @@ private struct ReadyWorkoutView: View {
                     }
                 }
                 .tint(.mint)
+
+                Button { showAutoPauseSettings = true } label: {
+                    Label("Réglages pause auto", systemImage: "slider.horizontal.3")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
 
                 Button { model.start() } label: {
                     Label("Démarrer", systemImage: "play.fill")
@@ -119,6 +127,9 @@ private struct ReadyWorkoutView: View {
         }
         .sheet(isPresented: $showHistory) {
             WatchRecentHistoryView()
+        }
+        .sheet(isPresented: $showAutoPauseSettings) {
+            WatchAutoPauseSettingsView()
         }
     }
 }
@@ -162,12 +173,20 @@ private struct WatchPrimaryMetricsPage: View {
             }
 
             if model.selectedActivity.isAutomatic {
-                HStack(spacing: 4) {
-                    Image(systemName: "wand.and.stars")
-                    Text("AUTO → \(model.effectiveActivity.label.uppercased())")
+                VStack(spacing: 2) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "wand.and.stars")
+                        Text("AUTO → \(model.effectiveActivity.label.uppercased())")
+                    }
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.mint)
+
+                    Text("Confiance \(model.autoConfidence) · \(model.autoProvenance)")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
                 }
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.mint)
             } else if model.selectedActivity == .swimBikeRun {
                 HStack(spacing: 4) {
                     Image(systemName: "figure.run.square.stack")

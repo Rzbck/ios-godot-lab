@@ -162,6 +162,142 @@ struct TodayDashboardView: View {
     }
 }
 
+struct ActivityHubView: View {
+    @EnvironmentObject private var tracker: TrackerModel
+
+    var body: some View {
+        Group {
+            if tracker.isActive {
+                LiveTrackerView()
+            } else {
+                NavigationStack {
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            activityHero
+                            readinessCard
+                            autoPauseCard
+                        }
+                        .padding(16)
+                    }
+                    .navigationTitle("Activité")
+                    .onAppear { tracker.requestLocationPermission() }
+                }
+            }
+        }
+    }
+
+    private var activityHero: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("NOUVELLE ACTIVITÉ")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(.secondary)
+                    Text(tracker.selectedActivity.label)
+                        .font(.title2.weight(.bold))
+                    if tracker.selectedActivity.isAutomatic {
+                        Text("La Watch adapte le type d’activité avec une détection conservatrice.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Image(systemName: tracker.selectedActivity.symbol)
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(.mint)
+            }
+
+            Menu {
+                Section("Recommandé") {
+                    activityMenuButton(.automatic)
+                    activityMenuButton(.walking)
+                    activityMenuButton(.running)
+                    activityMenuButton(.cycling)
+                    activityMenuButton(.hiking)
+                    activityMenuButton(.swimBikeRun)
+                }
+                Section("Tous les sports") {
+                    ForEach(ActivityKind.allCases.filter {
+                        ![.automatic, .walking, .running, .cycling, .hiking, .swimBikeRun].contains($0)
+                    }) { activity in
+                        activityMenuButton(activity)
+                    }
+                }
+            } label: {
+                HStack {
+                    Label(tracker.selectedActivity.label, systemImage: tracker.selectedActivity.symbol)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 14)
+                .frame(height: 48)
+                .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            Button { tracker.startFromPhone() } label: {
+                Label("Démarrer", systemImage: "play.fill")
+                    .font(.headline.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 54)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+            .disabled(tracker.pendingCommand != nil)
+        }
+        .padding(16)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private var readinessCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("PRÉPARATION")
+                .font(.caption.weight(.black))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                ReadinessPill(title: "Watch", ready: tracker.watchReachable, symbol: "applewatch")
+                ReadinessPill(title: "GPS", ready: tracker.horizontalAccuracy >= 0, symbol: "location.fill")
+                ReadinessPill(title: "Santé", ready: tracker.healthAuthorized, symbol: "heart.text.square.fill")
+            }
+            Text(tracker.pendingCommand == nil ? tracker.statusMessage : "En attente de confirmation de la Watch…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var autoPauseCard: some View {
+        Toggle(
+            isOn: Binding(
+                get: { tracker.autoPauseEnabled },
+                set: { tracker.setAutoPauseEnabled($0) }
+            )
+        ) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Pause automatique")
+                    .font(.headline)
+                Text("La Watch garde l’autorité. Les réglages détaillés seront centralisés sur l’iPhone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .tint(.mint)
+        .padding(16)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private func activityMenuButton(_ activity: ActivityKind) -> some View {
+        Button {
+            tracker.selectActivity(activity)
+        } label: {
+            Label(activity.label, systemImage: activity.symbol)
+        }
+    }
+}
+
 struct ProgressionDashboardView: View {
     @State private var summaries: [TrackerSummary] = []
     private let store = NativeSessionStore()

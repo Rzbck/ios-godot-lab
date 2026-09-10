@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 enum AutoPauseProfileKind: String, CaseIterable, Identifiable, Hashable {
@@ -148,15 +149,22 @@ struct TrackerSettingsView: View {
 
                 Section("Connexion") {
                     LabeledContent("Apple Watch") {
-                        Label(
-                            tracker.watchReachable ? "Connectée" : "Non joignable",
-                            systemImage: tracker.watchReachable ? "checkmark.circle.fill" : "exclamationmark.circle"
-                        )
-                        .foregroundStyle(tracker.watchReachable ? .green : .secondary)
+                        if tracker.watchReachable {
+                            Label("Connectée", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("Non joignable", systemImage: "exclamationmark.circle")
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     LabeledContent("Santé") {
-                        Text(tracker.healthAuthorized ? "Autorisée" : "À vérifier")
-                            .foregroundStyle(tracker.healthAuthorized ? .green : .secondary)
+                        if tracker.healthAuthorized {
+                            Label("Autorisée", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("À vérifier")
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 

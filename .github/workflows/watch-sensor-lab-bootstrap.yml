@@ -1,4 +1,5 @@
 name: Watch Sensor Lab bootstrap
+run-name: Watch Sensor Lab · ${{ github.ref_name }} · ${{ github.sha }}
 
 on:
   workflow_dispatch:
@@ -22,7 +23,9 @@ concurrency:
 
 env:
   GODOT_VERSION: '4.7.2'
+  GODOT_MACOS_SHA256: 'c58a24e31d720be9d62f60cb5627c4e695fb72f21b0cfe1bc9ccaa9a3b3ba63e'
   XCODEGEN_VERSION: '2.46.0'
+  XCODEGEN_SHA256: '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806'
   APP_DIR: apps/watch-sensor-lab
   IPHONE_BUNDLE_ID: com.rzbck.watchsensorlab
   WATCH_BUNDLE_ID: com.rzbck.watchsensorlab.watchkitapp
@@ -35,9 +38,10 @@ jobs:
 
     steps:
       - name: Checkout exact commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Toolchain identity
         shell: bash
@@ -80,6 +84,7 @@ jobs:
           GODOT_DIR="$RUNNER_TEMP/godot"
           GODOT_URL="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
           curl --fail --location --retry 3 --retry-delay 2 "$GODOT_URL" --output "$GODOT_ARCHIVE"
+          echo "${GODOT_MACOS_SHA256}  ${GODOT_ARCHIVE}" | shasum -a 256 -c -
           unzip -q "$GODOT_ARCHIVE" -d "$GODOT_DIR"
           GODOT_BIN="$GODOT_DIR/Godot.app/Contents/MacOS/Godot"
           chmod +x "$GODOT_BIN"
@@ -96,6 +101,7 @@ jobs:
           URL="https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
           mkdir -p "$DEST"
           curl --fail --location --retry 3 --retry-delay 2 "$URL" --output "$ARCHIVE"
+          echo "${XCODEGEN_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
           unzip -q "$ARCHIVE" -d "$DEST"
           XCODEGEN_BIN="$(find "$DEST" -type f -name xcodegen | head -n 1)"
           if [ -z "$XCODEGEN_BIN" ]; then
@@ -257,10 +263,12 @@ jobs:
             "repository": "${GITHUB_REPOSITORY}",
             "ref": "${GITHUB_REF}",
             "sha": "${GITHUB_SHA}",
+            "event": "${GITHUB_EVENT_NAME}",
             "product_shell": "native-swiftui",
             "xcode": "$(xcodebuild -version | tr '\n' ' ')",
             "iphoneos_sdk": "$(xcrun --sdk iphoneos --show-sdk-version)",
             "watchos_sdk": "$(xcrun --sdk watchos --show-sdk-version)",
+            "godot": "${GODOT_VERSION}",
             "xcodegen": "${XCODEGEN_VERSION}",
             "iphone_bundle_id": "${IPHONE_BUNDLE_ID}",
             "watch_bundle_id": "${WATCH_BUNDLE_ID}",
@@ -285,9 +293,35 @@ jobs:
           cat "$IPA_PATH.sha256"
 
       - name: Upload companion artifact
-        uses: actions/upload-artifact@v4
+        id: upload_companion
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: watch-sensor-lab-companion-${{ github.sha }}
           path: build/watch-sensor-lab-companion/
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
+
+      - name: Publish exact-SHA summary
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.upload_companion.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.upload_companion.outputs.artifact-digest }}
+          ARTIFACT_URL: ${{ steps.upload_companion.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:12}"
+          IPA_SHA_FILE="$GITHUB_WORKSPACE/build/watch-sensor-lab-companion/WatchSensorLab-companion-unsigned-${SHORT_SHA}.ipa.sha256"
+          IPA_SHA256="$(awk '{print $1}' "$IPA_SHA_FILE")"
+          {
+            echo '## Watch Sensor Lab exact-SHA build'
+            echo
+            echo "- SHA: \`${GITHUB_SHA}\`"
+            echo "- Event: \`${GITHUB_EVENT_NAME}\`"
+            echo "- Ref: \`${GITHUB_REF}\`"
+            echo "- IPA SHA-256: \`${IPA_SHA256}\`"
+            echo "- Artifact ID: \`${ARTIFACT_ID}\`"
+            echo "- Artifact digest: \`${ARTIFACT_DIGEST}\`"
+            echo "- Artifact: ${ARTIFACT_URL}"
+            echo '- Hardware validation: **NOT performed by CI**'
+          } >> "$GITHUB_STEP_SUMMARY"

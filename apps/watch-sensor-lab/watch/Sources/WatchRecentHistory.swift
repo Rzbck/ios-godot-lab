@@ -25,7 +25,25 @@ struct WatchHistoryWindowStats: Codable, Equatable {
     static let zero = WatchHistoryWindowStats(count: 0, duration: 0, distanceMeters: 0)
 }
 
-private struct WatchRecentHistoryEnvelope: Codable {
+struct WatchHistoryDayBucket: Codable, Equatable, Identifiable {
+    let dayStart: TimeInterval
+    let count: Int
+    let duration: TimeInterval
+    let distanceMeters: Double
+
+    var id: TimeInterval { dayStart }
+    var date: Date { Date(timeIntervalSince1970: dayStart) }
+}
+
+private struct WatchRecentHistoryEnvelopeV6: Codable {
+    let activities: [WatchRecentActivityDigest]
+    let today: WatchHistoryWindowStats
+    let sevenDays: WatchHistoryWindowStats
+    let twentyEightDays: WatchHistoryWindowStats
+    let daily28: [WatchHistoryDayBucket]
+}
+
+private struct WatchRecentHistoryEnvelopeV5: Codable {
     let activities: [WatchRecentActivityDigest]
     let sevenDays: WatchHistoryWindowStats
     let twentyEightDays: WatchHistoryWindowStats
@@ -35,15 +53,28 @@ final class WatchRecentHistoryStore: ObservableObject {
     static let shared = WatchRecentHistoryStore()
 
     @Published private(set) var activities: [WatchRecentActivityDigest] = []
+    @Published private(set) var today: WatchHistoryWindowStats = .zero
     @Published private(set) var sevenDays: WatchHistoryWindowStats = .zero
     @Published private(set) var twentyEightDays: WatchHistoryWindowStats = .zero
+    @Published private(set) var daily28: [WatchHistoryDayBucket] = []
 
-    private let defaultsKey = "tracker.recentHistoryV5"
+    private let defaultsKey = "tracker.recentHistoryV6"
+    private let v5DefaultsKey = "tracker.recentHistoryV5"
     private let legacyDefaultsKey = "tracker.recentHistoryV4"
 
     private init() {
         if let data = UserDefaults.standard.data(forKey: defaultsKey),
-           let decoded = try? JSONDecoder().decode(WatchRecentHistoryEnvelope.self, from: data) {
+           let decoded = try? JSONDecoder().decode(WatchRecentHistoryEnvelopeV6.self, from: data) {
+            activities = decoded.activities
+            today = decoded.today
+            sevenDays = decoded.sevenDays
+            twentyEightDays = decoded.twentyEightDays
+            daily28 = decoded.daily28
+            return
+        }
+
+        if let data = UserDefaults.standard.data(forKey: v5DefaultsKey),
+           let decoded = try? JSONDecoder().decode(WatchRecentHistoryEnvelopeV5.self, from: data) {
             activities = decoded.activities
             sevenDays = decoded.sevenDays
             twentyEightDays = decoded.twentyEightDays
@@ -61,19 +92,41 @@ final class WatchRecentHistoryStore: ObservableObject {
         guard let type = userInfo["type"] as? String,
               let data = userInfo["data"] as? Data else { return false }
 
+        if type == "tracker_recent_history_v6",
+           let decoded = try? JSONDecoder().decode(WatchRecentHistoryEnvelopeV6.self, from: data) {
+            DispatchQueue.main.async {
+                self.activities = Array(decoded.activities.prefix(16))
+                self.today = decoded.today
+                self.sevenDays = decoded.sevenDays
+                self.twentyEightDays = decoded.twentyEightDays
+                self.daily28 = Array(decoded.daily28.suffix(28))
+                let persisted = WatchRecentHistoryEnvelopeV6(
+                    activities: self.activities,
+                    today: self.today,
+                    sevenDays: self.sevenDays,
+                    twentyEightDays: self.twentyEightDays,
+                    daily28: self.daily28
+                )
+                if let encoded = try? JSONEncoder().encode(persisted) {
+                    UserDefaults.standard.set(encoded, forKey: self.defaultsKey)
+                }
+            }
+            return true
+        }
+
         if type == "tracker_recent_history_v5",
-           let decoded = try? JSONDecoder().decode(WatchRecentHistoryEnvelope.self, from: data) {
+           let decoded = try? JSONDecoder().decode(WatchRecentHistoryEnvelopeV5.self, from: data) {
             DispatchQueue.main.async {
                 self.activities = Array(decoded.activities.prefix(16))
                 self.sevenDays = decoded.sevenDays
                 self.twentyEightDays = decoded.twentyEightDays
-                let persisted = WatchRecentHistoryEnvelope(
+                let persisted = WatchRecentHistoryEnvelopeV5(
                     activities: self.activities,
                     sevenDays: self.sevenDays,
                     twentyEightDays: self.twentyEightDays
                 )
                 if let encoded = try? JSONEncoder().encode(persisted) {
-                    UserDefaults.standard.set(encoded, forKey: self.defaultsKey)
+                    UserDefaults.standard.set(encoded, forKey: self.v5DefaultsKey)
                 }
             }
             return true

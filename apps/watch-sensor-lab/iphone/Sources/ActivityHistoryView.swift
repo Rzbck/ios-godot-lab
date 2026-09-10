@@ -3,9 +3,13 @@ import SwiftUI
 
 struct ActivityHistoryView: View {
     @State private var summaries: [TrackerSummary] = []
+    @State private var effectiveActivities: [String: String] = [:]
     @State private var period: HistoryPeriod = .month
+    @State private var activityFilter: HistoryActivityFilter = .all
+    @State private var searchText = ""
 
     private let store = NativeSessionStore()
+    private let reviewStore = ActivityReviewStore()
 
     var body: some View {
         NavigationStack {
@@ -28,13 +32,32 @@ struct ActivityHistoryView: View {
                             }
                             .pickerStyle(.segmented)
 
-                            ForEach(filteredSummaries) { summary in
-                                NavigationLink {
-                                    ActivityDetailView(summary: summary)
-                                } label: {
-                                    ActivityHistoryRow(summary: summary)
+                            HStack {
+                                Label(activityFilter.label, systemImage: activityFilter.symbol)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("\(filteredSummaries.count) séance\(filteredSummaries.count > 1 ? "s" : "")")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+
+                            if filteredSummaries.isEmpty {
+                                ContentUnavailableView(
+                                    "Aucun résultat",
+                                    systemImage: "magnifyingglass",
+                                    description: Text("Modifie la période, le sport ou la recherche.")
+                                )
+                                .padding(.top, 24)
+                            } else {
+                                ForEach(filteredSummaries) { summary in
+                                    NavigationLink {
+                                        ActivityDetailView(summary: summary)
+                                    } label: {
+                                        ActivityHistoryRow(summary: summary)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
                         .padding(.horizontal, 16)
@@ -43,14 +66,52 @@ struct ActivityHistoryView: View {
                 }
             }
             .navigationTitle("Historique")
-            .onAppear { summaries = store.listSummaries() }
+            .searchable(text: $searchText, prompt: "Rechercher une activité")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Sport", selection: $activityFilter) {
+                            ForEach(HistoryActivityFilter.allCases) { filter in
+                                Label(filter.label, systemImage: filter.symbol).tag(filter)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: activityFilter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .accessibilityLabel("Filtrer l’historique")
+                }
+            }
+            .onAppear { refresh() }
         }
         .preferredColorScheme(.dark)
     }
 
     private var filteredSummaries: [TrackerSummary] {
-        guard let threshold = period.threshold else { return summaries }
-        return summaries.filter { $0.startedAt >= threshold }
+        let periodFiltered: [TrackerSummary]
+        if let threshold = period.threshold {
+            periodFiltered = summaries.filter { $0.startedAt >= threshold }
+        } else {
+            periodFiltered = summaries
+        }
+
+        return periodFiltered.filter { summary in
+            let rawActivity = effectiveActivities[summary.sessionID] ?? summary.activity
+            guard activityFilter.matches(rawActivity) else { return false }
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !query.isEmpty else { return true }
+            let dateText = summary.startedAt.formatted(date: .abbreviated, time: .shortened)
+            return activityLabel(rawActivity).localizedCaseInsensitiveContains(query)
+                || dateText.localizedCaseInsensitiveContains(query)
+                || summary.sessionID.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private func refresh() {
+        let loaded = store.listSummaries()
+        summaries = loaded
+        effectiveActivities = Dictionary(uniqueKeysWithValues: loaded.map { summary in
+            (summary.sessionID, reviewStore.effectiveActivity(for: summary))
+        })
     }
 }
 
@@ -76,6 +137,53 @@ private enum HistoryPeriod: String, CaseIterable, Identifiable {
         case .all: return nil
         }
         return Calendar.current.date(byAdding: .day, value: -days, to: Date())
+    }
+}
+
+private enum HistoryActivityFilter: String, CaseIterable, Identifiable {
+    case all
+    case walking
+    case running
+    case cycling
+    case hiking
+    case other
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "Tous les sports"
+        case .walking: return "Marche"
+        case .running: return "Course"
+        case .cycling: return "Vélo"
+        case .hiking: return "Randonnée"
+        case .other: return "Autres"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .all: return "figure.mixed.cardio"
+        case .walking: return "figure.walk"
+        case .running: return "figure.run"
+        case .cycling: return "bicycle"
+        case .hiking: return "figure.hiking"
+        case .other: return "ellipsis.circle"
+        }
+    }
+
+    func matches(_ rawActivity: String) -> Bool {
+        guard self != .all else { return true }
+        guard let activity = ActivityKind(rawValue: rawActivity) else { return self == .other }
+        switch self {
+        case .all: return true
+        case .walking: return activity == .walking
+        case .running: return activity == .running || activity == .trackAndField
+        case .cycling: return activity == .cycling || activity == .handCycling
+        case .hiking: return activity == .hiking
+        case .other:
+            return ![.walking, .running, .trackAndField, .cycling, .handCycling, .hiking].contains(activity)
+        }
     }
 }
 
@@ -183,10 +291,12 @@ private struct ActivityDetailView: View {
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var timeline: [SessionTimelinePoint] = []
     @State private var review: ActivityReviewRecord?
+    @State private var comparableSummaries: [TrackerSummary] = []
     @State private var technicalTraceExpanded = false
 
     private let store = NativeSessionStore()
     private let timelineLoader = SessionTimelineLoader()
+    private let reviewStore = ActivityReviewStore()
 
     private var displayedActivity: String { review?.confirmedActivity ?? summary.activity }
 
@@ -195,6 +305,7 @@ private struct ActivityDetailView: View {
             VStack(spacing: 14) {
                 detailHeader
                 heroMetrics
+                PersonalComparisonCard(summary: summary, peers: comparableSummaries)
 
                 if route.count > 1 {
                     routeCard
@@ -202,6 +313,7 @@ private struct ActivityDetailView: View {
 
                 ActivityReviewCard(summary: summary) { saved in
                     review = saved
+                    loadComparisons()
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
@@ -313,7 +425,8 @@ private struct ActivityDetailView: View {
 
     private func loadSessionData() {
         let sessionID = summary.sessionID
-        review = ActivityReviewStore().load(sessionID: sessionID)
+        review = reviewStore.load(sessionID: sessionID)
+        loadComparisons()
         DispatchQueue.global(qos: .userInitiated).async {
             let loadedRoute = store.loadRoute(sessionID: sessionID)
             let loadedTimeline = timelineLoader.load(sessionID: sessionID)
@@ -324,6 +437,19 @@ private struct ActivityDetailView: View {
                 cameraPosition = .region(region(for: loadedRoute))
             }
         }
+    }
+
+    private func loadComparisons() {
+        let activity = reviewStore.effectiveActivity(for: summary)
+        let all = store.listSummaries()
+        let peers = all.filter { candidate in
+            guard candidate.sessionID != summary.sessionID else { return false }
+            guard reviewStore.effectiveActivity(for: candidate) == activity else { return false }
+            guard summary.distanceMeters > 100 else { return true }
+            let ratio = candidate.distanceMeters / summary.distanceMeters
+            return ratio >= 0.60 && ratio <= 1.40
+        }
+        comparableSummaries = Array(peers.prefix(8))
     }
 
     private func region(for coordinates: [CLLocationCoordinate2D]) -> MKCoordinateRegion {
@@ -341,6 +467,123 @@ private struct ActivityDetailView: View {
                 longitudeDelta: max(0.006, (maxLon - minLon) * 1.25)
             )
         )
+    }
+}
+
+private struct PersonalComparisonCard: View {
+    let summary: TrackerSummary
+    let peers: [TrackerSummary]
+
+    var body: some View {
+        if !peers.isEmpty {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack {
+                    Label("COMPARAISON PERSONNELLE", systemImage: "chart.line.uptrend.xyaxis")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(peers.count) sortie\(peers.count > 1 ? "s" : "")")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if let pace = paceComparison {
+                    ComparisonRow(title: "Allure", current: pace.current, reference: pace.reference, insight: pace.insight)
+                }
+                if let heart = heartComparison {
+                    ComparisonRow(title: "FC moyenne", current: heart.current, reference: heart.reference, insight: heart.insight)
+                }
+                if let cadence = cadenceComparison {
+                    ComparisonRow(title: "Cadence", current: cadence.current, reference: cadence.reference, insight: cadence.insight)
+                }
+
+                Text("Repère = jusqu’aux 8 sorties les plus récentes du même sport, avec une distance comprise entre 60 % et 140 % de cette séance.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+    }
+
+    private var paceComparison: (current: String, reference: String, insight: String)? {
+        guard let current = paceSeconds(summary) else { return nil }
+        let values = peers.compactMap(paceSeconds)
+        guard !values.isEmpty else { return nil }
+        let reference = values.reduce(0, +) / Double(values.count)
+        let delta = (current - reference) / reference
+        let insight: String
+        if abs(delta) < 0.03 {
+            insight = "proche de ton repère"
+        } else if delta < 0 {
+            insight = String(format: "%.0f %% plus rapide", abs(delta) * 100)
+        } else {
+            insight = String(format: "%.0f %% plus lente", delta * 100)
+        }
+        return (paceText(current), paceText(reference), insight)
+    }
+
+    private var heartComparison: (current: String, reference: String, insight: String)? {
+        guard summary.averageHeartRate > 0 else { return nil }
+        let values = peers.map(\.averageHeartRate).filter { $0 > 0 }
+        guard !values.isEmpty else { return nil }
+        let reference = values.reduce(0, +) / Double(values.count)
+        let difference = summary.averageHeartRate - reference
+        let insight = abs(difference) < 2
+            ? "proche de ton repère"
+            : String(format: "%@%.0f bpm vs repère", difference > 0 ? "+" : "", difference)
+        return (
+            String(format: "%.0f bpm", summary.averageHeartRate),
+            String(format: "%.0f bpm", reference),
+            insight
+        )
+    }
+
+    private var cadenceComparison: (current: String, reference: String, insight: String)? {
+        guard let current = summary.averageCadenceSPM, current > 0 else { return nil }
+        let values = peers.compactMap(\.averageCadenceSPM).filter { $0 > 0 }
+        guard !values.isEmpty else { return nil }
+        let reference = values.reduce(0, +) / Double(values.count)
+        let difference = current - reference
+        let insight = abs(difference) < 2
+            ? "proche de ton repère"
+            : String(format: "%@%.0f pas/min", difference > 0 ? "+" : "", difference)
+        return (
+            String(format: "%.0f", current),
+            String(format: "%.0f", reference),
+            insight
+        )
+    }
+
+    private func paceSeconds(_ value: TrackerSummary) -> Double? {
+        guard value.distanceMeters > 100, value.duration > 0 else { return nil }
+        return value.duration / (value.distanceMeters / 1000)
+    }
+
+    private func paceText(_ seconds: Double) -> String {
+        let rounded = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d/km", rounded / 60, rounded % 60)
+    }
+}
+
+private struct ComparisonRow: View {
+    let title: String
+    let current: String
+    let reference: String
+    let insight: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(title).font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(current).font(.subheadline.weight(.bold)).monospacedDigit()
+            }
+            Text("Repère \(reference) · \(insight)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

@@ -12,22 +12,27 @@ Turn `watch-sensor-lab` into one coherent iPhone + Apple Watch product without c
 - app: `apps/watch-sensor-lab`
 - branch: `feat/watch-sensor-product-ux-20260910`
 - base v0.4 SHA: `ab77fe270838fca2793b77dcff6f84c4e46cad4f`
+- device-test checkpoint SHA: `fa28758bda549deaddbbc12c24eb869d0965af4b`
+- local Windows worktree: `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-product-ux`
 - verify current branch HEAD before any continuation.
 
-## Last CI-validated checkpoint
+## Current CI-validated checkpoint
 
-SHA `dd667266fcda113e3210f8966670c36e9f542217`
+SHA `fa28758bda549deaddbbc12c24eb869d0965af4b`
 
-- GitHub Actions run `34505299622` — SUCCESS.
+- GitHub Actions run `34507870711` — SUCCESS.
 - iPhone unsigned native build: SUCCESS.
 - watchOS unsigned companion build: SUCCESS.
 - HealthKit declarations: SUCCESS.
 - companion assembly: SUCCESS.
 - exact-SHA companion IPA packaging/upload: SUCCESS.
-- artifact: `watch-sensor-lab-companion-dd667266fcda113e3210f8966670c36e9f542217`.
-- this is CI validation only; the redesigned UX has not yet been physically validated on iPhone/Watch.
+- artifact: `watch-sensor-lab-companion-fa28758bda549deaddbbc12c24eb869d0965af4b`.
+- artifact ID: `10164656063`.
+- downloaded IPA: `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\fa28758bda54\WatchSensorLab-companion-unsigned-fa28758bda54.ipa`.
+- IPA SHA-256: `3f782f0a6c6845d6a28af65610116e0826c99c1408a7a1eca81d0da41e987e62`.
+- this is CI + exact artifact validation only; the redesigned UX/settings/history slice is NOT yet physically validated on iPhone/Watch.
 
-## UX already present at the green checkpoint
+## UX included in this checkpoint
 
 - iPhone opens on `Aujourd’hui`, not a full-screen map.
 - primary navigation: Aujourd’hui / Activité / Progression / Historique.
@@ -35,37 +40,22 @@ SHA `dd667266fcda113e3210f8966670c36e9f542217`
 - deterministic map recenter/follow implementation awaiting physical verification.
 - HealthKit Progression dashboard: resting HR, HRV SDNN, recent sleep, VO2 max, steps, active energy, exercise minutes, personal baselines and HR/HRV trends.
 - missing HealthKit data is shown as unavailable, never converted to zero.
-- History is a first-class destination with period overview and improved detail hierarchy.
+- Today contextual Health snapshot appears only after the user has explicitly visited Progression.
+- History is a first-class destination with period overview, search, sport filters and improved detail hierarchy.
+- activity detail can compare against up to 8 recent same-sport sessions of comparable distance for pace, average HR and cadence.
+- profile/settings button opens a real iPhone settings screen.
+- iPhone is the configuration surface for master auto-pause and per-sport Walk/Hike/Run/Cycle profiles.
+- safe migration: a phone profile is not sent until the user edits it, preserving existing Watch-local custom values.
+- preferences are re-sent before START and when Watch reachability returns.
+- Watch persists received phone profiles into its existing local auto-pause keys so later WatchConnectivity application-context replacements do not lose them.
 - Watch UI is simplified for glanceability and advanced auto-pause configuration was removed from the Ready screen.
-
-## Current post-checkpoint work
-
-Work after `dd667266...` adds:
-
-- Today contextual Health snapshot after the user has explicitly visited Progression;
-- profile/settings button opening a real iPhone settings screen;
-- iPhone master auto-pause setting plus per-sport Walk/Hike/Run/Cycle profiles;
-- pause and resume dwell settings per sport;
-- safe migration: a phone profile is not sent until the user edits it, preserving existing Watch-local custom values;
-- preferences are re-sent before START and when Watch reachability returns;
-- Watch persists received phone profiles into its existing local auto-pause keys so later WatchConnectivity application-context replacements do not lose them;
-- History search;
-- History sport filters: all / walk / run / cycle / hike / other;
-- filters use user-confirmed/corrected activity when available;
-- activity detail personal comparison against up to 8 recent same-sport sessions of comparable distance, for pace, average HR and cadence;
-- removed obsolete duplicate iPhone Activity/Progression prototype views.
-
-## Validation state of current post-checkpoint work
-
-- NOT YET CI VALIDATED at the time this handoff is written.
-- NOT physically validated.
-- Must run the existing `watch-sensor-lab-bootstrap.yml` manually on the exact final branch HEAD and record the result before device testing.
+- obsolete duplicate iPhone Activity/Progression prototype views were removed.
 
 ## Physical validation still required
 
-When the user has the iPhone and Watch available:
+Upgrade in place; do not purge or manually uninstall first.
 
-1. upgrade without purge and confirm existing history remains;
+1. confirm existing history remains after upgrade;
 2. inspect Today / Activity / Progression / History layouts on real iPhone;
 3. verify HealthKit permission UX and missing-data states;
 4. verify map location button actually recenters/zooms to the current user position;
@@ -83,7 +73,8 @@ When the user has the iPhone and Watch available:
 
 ## Next exact step
 
-1. verify branch HEAD after this documentation commit;
-2. trigger `watch-sensor-lab-bootstrap.yml` with `workflow_dispatch` against that exact SHA;
-3. if CI fails, fix the actual compile/test error only;
-4. if CI succeeds, mark this UX/settings/history slice CI_VALIDATED and continue polish or physical UX testing depending on device availability.
+1. install the exact IPA `WatchSensorLab-companion-unsigned-fa28758bda54.ipa` through the already validated auth-fixed iLoader path, as an upgrade over the existing app;
+2. confirm iPhone + Watch installation succeeds;
+3. verify preserved history before starting a new workout;
+4. perform visual/interaction checks first, then a short real workout for sync, map recenter and auto-pause-profile validation;
+5. record hardware observations before any additional UX code changes.

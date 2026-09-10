@@ -4,11 +4,13 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - feat/watch-sensor-lab-bootstrap-20260909
-      - feat/watch-sensor-tracker-recorder-20260909
-      - feat/watch-sensor-v040-20260910
+      - 'feat/watch-sensor-*'
     paths:
-      - 'apps/watch-sensor-lab/**'
+      - 'apps/watch-sensor-lab/iphone/**'
+      - 'apps/watch-sensor-lab/watch/**'
+      - 'apps/watch-sensor-lab/Shared/**'
+      - 'apps/watch-sensor-lab/godot/**'
+      - 'apps/watch-sensor-lab/GENERATE_APP_ICON.py'
       - '.github/workflows/watch-sensor-lab-bootstrap.yml'
 
 permissions:

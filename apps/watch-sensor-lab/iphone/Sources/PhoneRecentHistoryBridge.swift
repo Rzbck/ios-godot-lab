@@ -29,14 +29,12 @@ final class PhoneRecentHistoryBridge {
 
     func publish(summaries: [TrackerSummary]) {
         healthReader.loadAll { [weak self] healthRecords in
-            self?.publish(summaries: summaries, healthRecords: healthRecords)
+            self?.prepareAndDeliver(summaries: summaries, healthRecords: healthRecords)
         }
     }
 
-    private func publish(summaries: [TrackerSummary], healthRecords: [HealthWorkoutRecord]) {
+    private func prepareAndDeliver(summaries: [TrackerSummary], healthRecords: [HealthWorkoutRecord]) {
         guard WCSession.isSupported() else { return }
-        let session = WCSession.default
-        guard session.activationState == .activated else { return }
 
         let localIDs = Set(summaries.map(\.sessionID))
         var digests: [PhoneRecentActivityDigest] = summaries.map { summary in
@@ -75,6 +73,19 @@ final class PhoneRecentHistoryBridge {
         )
 
         guard let data = try? JSONEncoder().encode(envelope) else { return }
+        deliver(data: data, attempt: 0)
+    }
+
+    private func deliver(data: Data, attempt: Int) {
+        let session = WCSession.default
+        guard session.activationState == .activated else {
+            guard attempt < 5 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.deliver(data: data, attempt: attempt + 1)
+            }
+            return
+        }
+
         session.transferUserInfo([
             "type": "tracker_recent_history_v5",
             "data": data,

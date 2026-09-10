@@ -35,6 +35,7 @@ Status vocabulary:
 
 - repository: `Rzbck/ios-godot-lab`
 - branch: `feat/watch-sensor-v040-20260910`
+- dedicated Windows worktree confirmed: `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-v040`
 - first v0.4 code/CI head: `b8702027f2546189326e747e8c842177120c303c`
 - first v0.4 CI run: `34464673739` — SUCCESS
 - validated summary/segments/Health-context slice SHA: `89e04aa508e978a21627a98cccc4a21e99f64278`
@@ -45,7 +46,12 @@ Status vocabulary:
 - CI run: `34468156004` — SUCCESS
 - artifact id: `10148457809`
 - artifact digest: `sha256:d2140e14b0750f1d606240adc0b96e8b0cce481e21c800c917b4e4a46a45f992`
-- this v0.4 line is NOT physically validated yet.
+- first hardware candidate SHA: `3efcc2cd313f1fefccb2ad5b011a2322aec2ca37`
+- candidate CI run: `34468523258` — SUCCESS
+- downloaded IPA: `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\3efcc2cd313f\WatchSensorLab-companion-unsigned-3efcc2cd313f.ipa`
+- downloaded IPA SHA-256: `07b8aa7bec9e0716b569f6f5ec925c8299d4d3056405acd10a5451f8f1dc798f`
+- first hardware checkpoint: iPhone launches, Apple Watch launches, existing baseline history remains visible on iPhone after upgrade.
+- field validation of new v0.4 metrics is deferred until the user next goes outside.
 
 ## Mandatory requirements from field analysis + user feedback
 
@@ -86,16 +92,18 @@ Status vocabulary:
 
 ### Startup and live UI
 
-- `V040-009` — **Remove redundant Watch badge obscuring iPhone map** — `CI_VALIDATED`, hardware validation pending.
+- `V040-009` — **Remove redundant Watch badge obscuring iPhone map** — `CI_VALIDATED`, hardware/UX validation pending.
   - Header now contains history access instead of the redundant Watch capsule.
 
-- `V040-010` — **Compact GPS / Watch / Health readiness UI on iPhone** — `CI_VALIDATED`, hardware validation pending.
+- `V040-010` — **Compact GPS / Watch / Health readiness UI on iPhone** — `CI_VALIDATED`, hardware/UX validation pending.
 
 - `V040-011` — **Stop startup values jumping visibly** — `CI_VALIDATED / PARTIAL`, hardware validation pending.
   - Initial GPS/altitude/distance/speed display is gated behind acquisition state/placeholders.
   - Acceptance: real startup looks stable; add further display smoothing only if hardware still visibly jumps.
 
-- `V040-012` — **Real-time active calories on iPhone and Watch** — `CI_VALIDATED`, hardware validation pending.
+- `V040-012` — **Real-time active calories on iPhone and Watch** — `CI_VALIDATED`, new-session hardware validation pending.
+  - Baseline v0.3.1 summary does not contain calories, so its history row cannot display a stored calorie value. Do not invent one.
+  - Future enrichment from a confidently matched HealthKit workout may backfill legacy display context.
 
 - `V040-013` — **Horizontal swipe for additional Watch live data pages** — `CI_VALIDATED`, hardware/UX validation pending.
   - Live metrics page contains a horizontal inner pager while main workout navigation remains vertical.
@@ -140,9 +148,9 @@ Status vocabulary:
 
 ### History and summaries
 
-- `V040-021` — **Persistent activity history on iPhone** — `CI_VALIDATED / PARTIAL`.
-  - History list + activity detail + stored route exist.
-  - Acceptance: existing v0.3.1 activities remain visible after upgrade, and new v0.4 sessions persist across app updates.
+- `V040-021` — **Persistent activity history on iPhone** — `PHYSICALLY_VALIDATED / PARTIAL`.
+  - Upgrade installation of candidate `3efcc2cd...` preserved and displayed the pre-v0.4 baseline activity on the real iPhone.
+  - Remaining acceptance: create a new v0.4 activity, verify it persists across relaunch/update, then validate detail/route/metrics from the new schema.
 
 - `V040-022` — **Proper post-activity summary** — `CI_VALIDATED / PARTIAL`, hardware/UX validation pending.
   - A just-finished session is now automatically presented after STOP.
@@ -157,9 +165,10 @@ Status vocabulary:
 - `V040-024` — **Schema/build/algorithm provenance for historical activities** — `CI_VALIDATED`, hardware/migration validation pending.
   - Acceptance: old summaries decode, new summaries identify schema/app/build/algorithm and remain interpretable after algorithm changes.
 
-- `V040-025` — **Never purge history during normal update/install** — `IMPLEMENTED by storage design / physical upgrade validation pending`.
+- `V040-025` — **Never purge history during normal update/install** — `PHYSICALLY_VALIDATED for first upgrade / PARTIAL`.
+  - Candidate `3efcc2cd...` was installed as an upgrade and the original field-walk history remained visible on the iPhone.
   - Purge remains explicit only.
-  - Acceptance: install v0.4 over the current app and confirm the first field walk is still accessible.
+  - Remaining: revalidate on later v0.4 upgrades and confirm no Watch-side history loss/regression.
 
 ### Auto-pause
 
@@ -212,6 +221,8 @@ These are recommended additions discovered during tracker-product research and s
 - `V040-039` — GPX/TCX/FIT export strategy — `TODO`.
 - `V040-040` — compare a session against previous/baseline activities — `TODO`.
 - `V040-041` — sensor/data-quality score and missingness indicators — `TODO`.
+- `V040-042` — legacy-history HealthKit enrichment — `TODO`.
+  - For old summaries that predate calories/richer fields, optionally attach contextual values only after confidently matching the app-owned HealthKit workout. Never synthesize or guess missing historical values.
 
 ## Definition of v0.4 done
 

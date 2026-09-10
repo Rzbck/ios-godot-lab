@@ -1,3 +1,4 @@
+import Combine
 import CoreLocation
 import CoreMotion
 import Foundation
@@ -5,6 +6,8 @@ import HealthKit
 
 @MainActor
 final class StartupPermissionCoordinator: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published private(set) var healthRequestFinished = false
+
     private let healthStore = HKHealthStore()
     private let locationManager = CLLocationManager()
     private let pedometer = CMPedometer()
@@ -24,6 +27,7 @@ final class StartupPermissionCoordinator: NSObject, ObservableObject, CLLocation
 
     private func requestHealthThenLocation() {
         guard HKHealthStore.isHealthDataAvailable() else {
+            healthRequestFinished = true
             requestLocationThenMotion()
             return
         }
@@ -33,7 +37,9 @@ final class StartupPermissionCoordinator: NSObject, ObservableObject, CLLocation
             read: Self.healthReadTypes()
         ) { [weak self] _, _ in
             DispatchQueue.main.async {
-                self?.requestLocationThenMotion()
+                guard let self else { return }
+                self.healthRequestFinished = true
+                self.requestLocationThenMotion()
             }
         }
     }

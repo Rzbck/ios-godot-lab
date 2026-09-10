@@ -11,6 +11,7 @@ targets:
     deploymentTarget: "10.0"
     sources:
       - path: Sources
+      - path: Assets.xcassets
     info:
       path: Info.plist
       properties:
@@ -22,7 +23,7 @@ targets:
         WKRunsIndependentlyOfCompanionApp: false
         NSLocationWhenInUseUsageDescription: Watch Tracker utilise le GPS de l’Apple Watch pendant la session pour la vitesse, l’altitude et le tracé.
         NSHealthShareUsageDescription: Watch Tracker lit votre fréquence cardiaque et les métriques d’entraînement pendant une session.
-        NSHealthUpdateUsageDescription: Watch Tracker enregistre la session comme entraînement dans Santé.
+        NSHealthUpdateUsageDescription: Watch Tracker utilise HealthKit pour la session en direct. Les sessions de test ne sont pas sauvegardées dans Santé.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watchkitapp
@@ -30,6 +31,7 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_ENTITLEMENTS: Sources/WatchSensorLab.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "4"
         SKIP_INSTALL: NO
     scheme: {}

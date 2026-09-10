@@ -92,75 +92,20 @@ struct TrackerEffortInsightView: View {
     let summary: TrackerSummary
 
     @State private var estimate: TrackerEffortEstimate?
+    @State private var appleEffort: AppleWorkoutEffortSnapshot?
     @State private var perceived: Int?
+    @State private var loadingApple = false
 
+    private let appleReader = AppleWorkoutEffortReader()
     private var perceivedKey: String { "tracker.perceivedEffort.\(summary.sessionID)" }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("EFFORT", systemImage: "gauge.with.dots.needle.50percent")
-                    .font(.caption.weight(.black))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if let estimate {
-                    Text(String(format: "%.1f / 10", estimate.score))
-                        .font(.headline.weight(.black))
-                        .foregroundStyle(.orange)
-                        .monospacedDigit()
-                }
-            }
-
-            if let estimate {
-                HStack(spacing: 12) {
-                    ZStack {
-                        Circle().stroke(.white.opacity(0.08), lineWidth: 8)
-                        Circle()
-                            .trim(from: 0, to: estimate.score / 10)
-                            .stroke(.orange, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                        Text(String(format: "%.1f", estimate.score))
-                            .font(.title3.weight(.black))
-                    }
-                    .frame(width: 72, height: 72)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(estimate.label)
-                            .font(.headline.weight(.bold))
-                        Text(estimate.explanation)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text("TON RESSENTI")
-                    .font(.caption2.weight(.black))
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 5) {
-                    ForEach(1...10, id: \.self) { value in
-                        Button {
-                            perceived = value
-                            UserDefaults.standard.set(value, forKey: perceivedKey)
-                        } label: {
-                            Text("\(value)")
-                                .font(.caption2.weight(.bold))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 28)
-                                .background(
-                                    perceived == value ? Color.cyan : Color.white.opacity(0.07),
-                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                )
-                                .foregroundStyle(perceived == value ? Color.black : Color.primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                Text("1 = très facile · 10 = effort maximal ressenti. Ton ressenti est conservé séparément de l’estimation automatique.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            provenanceGrid
+            trackerExplanation
+            perceivedPicker
+            provenanceNote
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -176,6 +121,172 @@ struct TrackerEffortInsightView: View {
             estimate = TrackerEffortEstimator().estimate(summary: summary)
             let saved = UserDefaults.standard.integer(forKey: perceivedKey)
             perceived = saved > 0 ? saved : nil
+            loadingApple = true
+            appleReader.load(summary: summary) { value in
+                appleEffort = value
+                loadingApple = false
+            }
         }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 3) {
+                Label("EFFORT · PROVENANCE", systemImage: "gauge.with.dots.needle.50percent")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+                Text("Chaque score garde sa source")
+                    .font(.headline.weight(.bold))
+            }
+            Spacer()
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.orange)
+        }
+    }
+
+    private var provenanceGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            EffortProvenanceCard(
+                title: "APPLE · RESSENTI",
+                value: appleEffort?.perceivedScore.map(effortValue) ?? "—",
+                detail: appleEffort?.perceivedScore == nil ? (loadingApple ? "Lecture…" : "Non renseigné") : "Associé au workout",
+                symbol: "apple.logo",
+                accent: .cyan
+            )
+            EffortProvenanceCard(
+                title: "APPLE · ESTIMÉ",
+                value: appleEffort?.estimatedScore.map(effortValue) ?? "—",
+                detail: appleEffort?.estimatedScore == nil ? (loadingApple ? "Lecture…" : "Non disponible") : "Apple Health",
+                symbol: "waveform.path.ecg",
+                accent: .mint
+            )
+            EffortProvenanceCard(
+                title: "TRACKER · ESTIMÉ",
+                value: estimate.map { effortValue($0.score) } ?? "—",
+                detail: estimate?.label ?? "Calcul local",
+                symbol: "scope",
+                accent: .orange
+            )
+            EffortProvenanceCard(
+                title: "TON RESSENTI",
+                value: perceived.map { "\($0) / 10" } ?? "—",
+                detail: perceived == nil ? "À renseigner" : "Conservé séparément",
+                symbol: "person.fill.checkmark",
+                accent: .purple
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var trackerExplanation: some View {
+        if let estimate {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    Circle().stroke(.white.opacity(0.08), lineWidth: 7)
+                    Circle()
+                        .trim(from: 0, to: estimate.score / 10)
+                        .stroke(.orange, style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    Text(String(format: "%.1f", estimate.score))
+                        .font(.headline.weight(.black))
+                        .monospacedDigit()
+                }
+                .frame(width: 58, height: 58)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Pourquoi Tracker dit \(estimate.label.lowercased())")
+                        .font(.subheadline.weight(.bold))
+                    Text(estimate.explanation)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var perceivedPicker: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("TON RESSENTI APRÈS LA SÉANCE")
+                .font(.caption2.weight(.black))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                ForEach(1...10, id: \.self) { value in
+                    Button {
+                        perceived = value
+                        UserDefaults.standard.set(value, forKey: perceivedKey)
+                    } label: {
+                        Text("\(value)")
+                            .font(.caption2.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 30)
+                            .background(
+                                perceived == value ? Color.purple : Color.white.opacity(0.07),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            )
+                            .foregroundStyle(perceived == value ? Color.white : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text("1 = très facile · 10 = effort maximal ressenti. Cette valeur n’écrase jamais un score Apple ni l’estimation Tracker.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var provenanceNote: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Données séparées par conception", systemImage: "checkmark.shield.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.mint)
+            Text("Apple Health, le calcul local Watch Tracker et ton propre ressenti restent indépendants. Une valeur absente n’est jamais remplacée par zéro ni devinée à partir d’une autre source.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func effortValue(_ value: Double) -> String {
+        String(format: "%.1f / 10", value)
+    }
+}
+
+private struct EffortProvenanceCard: View {
+    let title: String
+    let value: String
+    let detail: String
+    let symbol: String
+    let accent: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: symbol)
+                    .foregroundStyle(accent)
+                Spacer()
+                Circle()
+                    .fill(accent.opacity(0.85))
+                    .frame(width: 6, height: 6)
+            }
+            Text(title)
+                .font(.system(size: 9, weight: .black))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(value)
+                .font(.headline.weight(.black))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
+        .padding(11)
+        .background(accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }

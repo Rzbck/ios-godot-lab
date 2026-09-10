@@ -3,16 +3,24 @@ import SwiftUI
 struct TodayDashboardView: View {
     @EnvironmentObject private var tracker: TrackerModel
     let openActivity: () -> Void
+    let openProgression: () -> Void
     let openHistory: () -> Void
 
+    @AppStorage("tracker.healthInsightsEnabled") private var healthInsightsEnabled = false
     @State private var summaries: [TrackerSummary] = []
+    @State private var health = HealthProgressionData.empty
+    @State private var healthLoading = false
+    @State private var showSettings = false
+
     private let store = NativeSessionStore()
+    private let healthReader = HealthProgressionReader()
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
                     statusHero
+                    healthSnapshotCard
                     weeklyOverview
                     lastActivityCard
                 }
@@ -22,14 +30,29 @@ struct TodayDashboardView: View {
             .navigationTitle("Aujourd’hui")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Image(systemName: "person.crop.circle")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("Profil et réglages")
+                    Button { showSettings = true } label: {
+                        Image(systemName: "person.crop.circle")
+                            .font(.title3)
+                    }
+                    .accessibilityLabel("Profil et réglages")
                 }
             }
-            .onAppear { refresh() }
+            .sheet(isPresented: $showSettings) {
+                TrackerSettingsView()
+                    .environmentObject(tracker)
+            }
+            .refreshable {
+                refresh()
+                refreshHealthIfEnabled()
+            }
+            .onAppear {
+                refresh()
+                refreshHealthIfEnabled()
+            }
             .onChange(of: tracker.lastSummary) { _, _ in refresh() }
+            .onChange(of: healthInsightsEnabled) { _, enabled in
+                if enabled { refreshHealthIfEnabled() }
+            }
         }
     }
 
@@ -69,6 +92,74 @@ struct TodayDashboardView: View {
         }
         .padding(16)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var healthSnapshotCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("SANTÉ AUJOURD’HUI", systemImage: "heart.text.square.fill")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Progression", action: openProgression)
+                    .font(.caption.weight(.semibold))
+            }
+
+            if !healthInsightsEnabled {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "heart.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.pink)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Ajoute ton contexte Santé")
+                            .font(.headline.weight(.bold))
+                        Text("Sommeil, FC au repos, HRV, pas et autres tendances restent facultatifs et ne sont demandés que lorsque tu ouvres Progression.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Button("Configurer dans Progression", action: openProgression)
+                    .buttonStyle(.bordered)
+            } else if healthLoading {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Actualisation des données Santé…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    TodayHealthMetric(
+                        title: "Pas",
+                        value: health.stepsToday.map { "\(Int($0.rounded()))" } ?? "—",
+                        detail: "aujourd’hui",
+                        symbol: "shoeprints.fill"
+                    )
+                    TodayHealthMetric(
+                        title: "Sommeil",
+                        value: health.sleepHours.map(todayHoursText) ?? "—",
+                        detail: health.sleepSource ?? "indisponible / non partagé",
+                        symbol: "bed.double.fill"
+                    )
+                    TodayHealthMetric(
+                        title: "FC repos",
+                        value: health.restingHeartRate.map { String(format: "%.0f bpm", $0.value) } ?? "—",
+                        detail: health.restingHeartRate.map { $0.source } ?? "indisponible / non partagé",
+                        symbol: "heart.fill"
+                    )
+                    TodayHealthMetric(
+                        title: "HRV",
+                        value: health.hrvSDNN.map { String(format: "%.0f ms", $0.value) } ?? "—",
+                        detail: health.hrvSDNN.map { $0.source } ?? "indisponible / non partagé",
+                        symbol: "waveform.path.ecg"
+                    )
+                }
+            }
+        }
+        .padding(16)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     private var weeklyOverview: some View {
@@ -160,219 +251,14 @@ struct TodayDashboardView: View {
     private func refresh() {
         summaries = store.listSummaries()
     }
-}
 
-struct ActivityHubView: View {
-    @EnvironmentObject private var tracker: TrackerModel
-
-    var body: some View {
-        Group {
-            if tracker.isActive {
-                LiveTrackerView()
-            } else {
-                NavigationStack {
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            activityHero
-                            readinessCard
-                            autoPauseCard
-                        }
-                        .padding(16)
-                    }
-                    .navigationTitle("Activité")
-                    .onAppear { tracker.requestLocationPermission() }
-                }
-            }
+    private func refreshHealthIfEnabled() {
+        guard healthInsightsEnabled, !healthLoading else { return }
+        healthLoading = true
+        healthReader.load { result in
+            health = result
+            healthLoading = false
         }
-    }
-
-    private var activityHero: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("NOUVELLE ACTIVITÉ")
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(.secondary)
-                    Text(tracker.selectedActivity.label)
-                        .font(.title2.weight(.bold))
-                    if tracker.selectedActivity.isAutomatic {
-                        Text("La Watch adapte le type d’activité avec une détection conservatrice.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                Image(systemName: tracker.selectedActivity.symbol)
-                    .font(.system(size: 34, weight: .semibold))
-                    .foregroundStyle(.mint)
-            }
-
-            Menu {
-                Section("Recommandé") {
-                    activityMenuButton(.automatic)
-                    activityMenuButton(.walking)
-                    activityMenuButton(.running)
-                    activityMenuButton(.cycling)
-                    activityMenuButton(.hiking)
-                    activityMenuButton(.swimBikeRun)
-                }
-                Section("Tous les sports") {
-                    ForEach(ActivityKind.allCases.filter {
-                        ![.automatic, .walking, .running, .cycling, .hiking, .swimBikeRun].contains($0)
-                    }) { activity in
-                        activityMenuButton(activity)
-                    }
-                }
-            } label: {
-                HStack {
-                    Label(tracker.selectedActivity.label, systemImage: tracker.selectedActivity.symbol)
-                    Spacer()
-                    Image(systemName: "chevron.up.chevron.down")
-                }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 14)
-                .frame(height: 48)
-                .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-            }
-            .buttonStyle(.plain)
-
-            Button { tracker.startFromPhone() } label: {
-                Label("Démarrer", systemImage: "play.fill")
-                    .font(.headline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .disabled(tracker.pendingCommand != nil)
-        }
-        .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-    }
-
-    private var readinessCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("PRÉPARATION")
-                .font(.caption.weight(.black))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                ReadinessPill(title: "Watch", ready: tracker.watchReachable, symbol: "applewatch")
-                ReadinessPill(title: "GPS", ready: tracker.horizontalAccuracy >= 0, symbol: "location.fill")
-                ReadinessPill(title: "Santé", ready: tracker.healthAuthorized, symbol: "heart.text.square.fill")
-            }
-            Text(tracker.pendingCommand == nil ? tracker.statusMessage : "En attente de confirmation de la Watch…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(16)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-
-    private var autoPauseCard: some View {
-        Toggle(
-            isOn: Binding(
-                get: { tracker.autoPauseEnabled },
-                set: { tracker.setAutoPauseEnabled($0) }
-            )
-        ) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Pause automatique")
-                    .font(.headline)
-                Text("La Watch garde l’autorité. Les réglages détaillés seront centralisés sur l’iPhone.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .tint(.mint)
-        .padding(16)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-
-    private func activityMenuButton(_ activity: ActivityKind) -> some View {
-        Button {
-            tracker.selectActivity(activity)
-        } label: {
-            Label(activity.label, systemImage: activity.symbol)
-        }
-    }
-}
-
-struct ProgressionDashboardView: View {
-    @State private var summaries: [TrackerSummary] = []
-    private let store = NativeSessionStore()
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Tes tendances personnelles")
-                        .font(.title3.weight(.bold))
-                    Text("Cette première vue utilise uniquement les activités Watch Tracker déjà enregistrées. L’enrichissement historique Apple Health sera ajouté séparément pour ne jamais confondre absence de permission et valeur zéro.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    comparisonCard
-                    foundationCard
-                }
-                .padding(16)
-            }
-            .navigationTitle("Progression")
-            .onAppear { summaries = store.listSummaries() }
-        }
-    }
-
-    private var comparisonCard: some View {
-        let seven = aggregate(days: 7)
-        let twentyEight = aggregate(days: 28)
-
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("CHARGE D’ACTIVITÉ")
-                .font(.caption.weight(.black))
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 10) {
-                DashboardMetric(value: dashboardDuration(seven.duration), label: "7 jours", symbol: "7.circle.fill")
-                DashboardMetric(value: dashboardDuration(twentyEight.duration), label: "28 jours", symbol: "calendar.circle.fill")
-            }
-
-            Text(progressMessage(sevenDays: seven.duration, twentyEightDays: twentyEight.duration))
-                .font(.subheadline.weight(.semibold))
-        }
-        .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-
-    private var foundationCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Bientôt : contexte Santé", systemImage: "heart.text.square.fill")
-                .font(.headline.weight(.bold))
-            Text("Sommeil, FC au repos, HRV et autres tendances HealthKit ne seront affichés qu’avec des données réellement lisibles et une provenance claire.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .padding(16)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-
-    private func aggregate(days: Int) -> (duration: TimeInterval, distance: Double, count: Int) {
-        let threshold = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? .distantPast
-        let filtered = summaries.filter { $0.startedAt >= threshold }
-        return (
-            filtered.reduce(0) { $0 + $1.duration },
-            filtered.reduce(0) { $0 + $1.distanceMeters },
-            filtered.count
-        )
-    }
-
-    private func progressMessage(sevenDays: TimeInterval, twentyEightDays: TimeInterval) -> String {
-        guard twentyEightDays > 0 else { return "Enregistre quelques séances pour construire une tendance fiable." }
-        let weeklyBaseline = twentyEightDays / 4.0
-        guard weeklyBaseline > 0 else { return "Données insuffisantes pour comparer les périodes." }
-        let ratio = sevenDays / weeklyBaseline
-        if ratio > 1.25 { return "Volume récent nettement au-dessus de ta moyenne des 4 dernières semaines." }
-        if ratio < 0.75 { return "Volume récent plus léger que ta moyenne des 4 dernières semaines." }
-        return "Volume récent proche de ta moyenne des 4 dernières semaines."
     }
 }
 
@@ -432,6 +318,33 @@ private struct SummaryValue: View {
     }
 }
 
+private struct TodayHealthMetric: View {
+    let title: String
+    let value: String
+    let detail: String
+    let symbol: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(title, systemImage: symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title3.weight(.bold))
+                .monospacedDigit()
+                .minimumScaleFactor(0.75)
+                .lineLimit(1)
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
+        .padding(11)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
 private func dashboardDistance(_ meters: Double) -> String {
     if meters >= 1000 { return String(format: "%.1f km", meters / 1000) }
     return String(format: "%.0f m", meters)
@@ -443,4 +356,9 @@ private func dashboardDuration(_ seconds: TimeInterval) -> String {
     let minutes = (total % 3600) / 60
     if hours > 0 { return String(format: "%dh%02d", hours, minutes) }
     return "\(minutes) min"
+}
+
+private func todayHoursText(_ hours: Double) -> String {
+    let minutes = max(0, Int((hours * 60).rounded()))
+    return String(format: "%dh%02d", minutes / 60, minutes % 60)
 }

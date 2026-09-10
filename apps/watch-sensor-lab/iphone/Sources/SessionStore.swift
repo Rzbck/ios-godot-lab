@@ -28,13 +28,7 @@ final class NativeSessionStore {
         close()
         self.sessionID = sessionID
 
-        let root = try FileManager.default.url(
-            for: .documentDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ).appendingPathComponent("Sessions", isDirectory: true)
-
+        let root = try sessionsRoot(create: true)
         let directory = root.appendingPathComponent(sessionID, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let samplesURL = directory.appendingPathComponent("samples.jsonl")
@@ -100,10 +94,31 @@ final class NativeSessionStore {
         sessionID = ""
     }
 
+    func deleteAllSessions() throws {
+        close()
+        let root = try sessionsRoot(create: false)
+        guard FileManager.default.fileExists(atPath: root.path) else { return }
+        try FileManager.default.removeItem(at: root)
+    }
+
     func close() {
         closeHandleOnly()
         sessionDirectory = nil
         sessionID = ""
+    }
+
+    private func sessionsRoot(create: Bool) throws -> URL {
+        let documents = try FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let root = documents.appendingPathComponent("Sessions", isDirectory: true)
+        if create {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+        return root
     }
 
     private func append(_ object: [String: Any]) {

@@ -37,11 +37,11 @@ private struct TrackerRootView: View {
             .tag(TrackerAppSection.today)
             .tabItem { Label("Aujourd’hui", systemImage: "sparkles") }
 
-            ActivityHubView()
+            ActivityExperienceView()
                 .tag(TrackerAppSection.activity)
                 .tabItem { Label("Activité", systemImage: "figure.run") }
 
-            ProgressionDashboardView()
+            HealthProgressionDashboardView()
                 .tag(TrackerAppSection.progression)
                 .tabItem { Label("Progression", systemImage: "chart.xyaxis.line") }
 

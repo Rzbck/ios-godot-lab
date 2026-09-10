@@ -36,7 +36,7 @@ targets:
         NSSupportsLiveActivities: true
         NSLocationWhenInUseUsageDescription: Watch Tracker utilise votre position pendant une session pour tracer le parcours, calculer la distance, la vitesse, l'altitude, le dénivelé et associer le contexte météo extérieur.
         NSMotionUsageDescription: Watch Tracker utilise les données de mouvement et de pas de l’iPhone pour la cadence, l’allure et l’analyse de qualité de l’activité lorsqu’elles sont disponibles.
-        NSHealthShareUsageDescription: Watch Tracker lit la fréquence cardiaque et les données d'entraînement de votre Apple Watch pour afficher les métriques de la session.
+        NSHealthShareUsageDescription: Watch Tracker lit vos entraînements et les données Santé utiles au suivi sportif, notamment activité, fréquence cardiaque, HRV, sommeil, cardio et mobilité, afin d’afficher votre historique et vos tendances personnelles.
         NSHealthUpdateUsageDescription: Watch Tracker coordonne l'entraînement avec l'Apple Watch afin d'enregistrer la séance et son parcours dans Santé.
         UIBackgroundModes:
           - location

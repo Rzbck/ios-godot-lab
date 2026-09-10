@@ -388,24 +388,51 @@ struct LiveTrackerView: View {
     @ViewBuilder
     private var weatherLine: some View {
         if let weather = tracker.currentWeather {
-            HStack(spacing: 10) {
-                Image(systemName: "cloud.sun.fill").foregroundStyle(.cyan)
-                if let temperature = weather.temperatureC {
-                    Text(String(format: "%.1f °C", temperature)).fontWeight(.bold)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Image(systemName: "cloud.sun.fill").foregroundStyle(.cyan)
+                    if let temperature = weather.temperatureC {
+                        Text(String(format: "%.1f °C", temperature)).fontWeight(.bold)
+                    }
+                    if let apparent = weather.apparentTemperatureC {
+                        Text("ress. \(String(format: "%.1f°", apparent))")
+                    }
+                    if let wind = weather.windSpeedKPH {
+                        Text("vent \(String(format: "%.0f", wind)) km/h")
+                    }
+                    if let direction = weather.windDirectionDegrees {
+                        Text("de \(compassDirection(direction))")
+                    }
+                    Spacer(minLength: 0)
                 }
-                if let apparent = weather.apparentTemperatureC {
-                    Text("ress. \(String(format: "%.1f°", apparent))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        if let gust = weather.windGustKPH {
+                            LiveWeatherChip(symbol: "wind", text: "Raf. \(String(format: "%.0f", gust)) km/h")
+                        }
+                        if let humidity = weather.relativeHumidityPercent {
+                            LiveWeatherChip(symbol: "humidity.fill", text: "\(Int(humidity.rounded())) %")
+                        }
+                        if let pressure = weather.pressureHPA {
+                            LiveWeatherChip(symbol: "gauge.with.dots.needle.50percent", text: "\(Int(pressure.rounded())) hPa")
+                        }
+                        if let direction = weather.windDirectionDegrees {
+                            LiveWeatherChip(symbol: "location.north.fill", text: "\(Int(direction.rounded()))°")
+                        }
+                        if let component = liveHeadwindComponent(weather: weather) {
+                            LiveWeatherChip(
+                                symbol: component >= 0 ? "arrow.down" : "arrow.up",
+                                text: component >= 0
+                                    ? "Face \(String(format: "%.0f", component)) km/h"
+                                    : "Arrière \(String(format: "%.0f", abs(component))) km/h"
+                            )
+                        }
+                    }
                 }
-                if let wind = weather.windSpeedKPH {
-                    Text("vent \(String(format: "%.0f", wind)) km/h")
-                }
-                if let gust = weather.windGustKPH {
-                    Text("raf. \(String(format: "%.0f", gust))")
-                }
-                Spacer(minLength: 0)
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
         } else if tracker.elapsedSeconds > 5 {
             HStack(spacing: 6) {
                 Image(systemName: "cloud")
@@ -433,6 +460,35 @@ struct LiveTrackerView: View {
         .padding(.horizontal, 9)
         .padding(.vertical, 6)
         .background(.white.opacity(0.10), in: Capsule())
+    }
+
+    private func liveHeadwindComponent(weather: SessionWeatherSnapshot) -> Double? {
+        guard let windSpeed = weather.windSpeedKPH,
+              let windFrom = weather.windDirectionDegrees,
+              tracker.route.count >= 2 else { return nil }
+        let from = tracker.route[tracker.route.count - 2]
+        let to = tracker.route[tracker.route.count - 1]
+        let heading = bearing(from: from, to: to)
+        var delta = (heading - windFrom).truncatingRemainder(dividingBy: 360)
+        if delta > 180 { delta -= 360 }
+        if delta < -180 { delta += 360 }
+        return windSpeed * cos(delta * .pi / 180)
+    }
+
+    private func bearing(from: CLLocationCoordinate2D, to: CLLocationCoordinate2D) -> Double {
+        let lat1 = from.latitude * .pi / 180
+        let lat2 = to.latitude * .pi / 180
+        let deltaLon = (to.longitude - from.longitude) * .pi / 180
+        let y = sin(deltaLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(deltaLon)
+        return (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+    }
+
+    private func compassDirection(_ degrees: Double) -> String {
+        let normalized = (degrees.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+        let labels = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"]
+        let index = Int((normalized + 22.5) / 45.0) % labels.count
+        return labels[index]
     }
 
     private func formatDistance(_ meters: Double) -> String {
@@ -500,5 +556,19 @@ private struct CompactReadinessChip: View {
         .frame(maxWidth: .infinity)
         .frame(height: 26)
         .background(.white.opacity(0.06), in: Capsule())
+    }
+}
+
+private struct LiveWeatherChip: View {
+    let symbol: String
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: symbol)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(.white.opacity(0.06), in: Capsule())
     }
 }

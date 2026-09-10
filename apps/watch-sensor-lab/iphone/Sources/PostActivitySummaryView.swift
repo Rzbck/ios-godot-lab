@@ -51,6 +51,7 @@ struct PostActivitySummaryView: View {
                     }
 
                     metricsGrid
+                    TrackerEffortInsightView(summary: summary)
                     SessionPauseSummaryView(summary: summary)
                     segmentsSection
                     SessionTimelineView(points: timeline)

@@ -37,7 +37,7 @@ private struct TrackerRootView: View {
             .tag(TrackerAppSection.today)
             .tabItem { Label("Aujourd’hui", systemImage: "sparkles") }
 
-            LiveTrackerView()
+            ActivityHubView()
                 .tag(TrackerAppSection.activity)
                 .tabItem { Label("Activité", systemImage: "figure.run") }
 

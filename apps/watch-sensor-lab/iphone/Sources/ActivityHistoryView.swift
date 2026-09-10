@@ -41,12 +41,20 @@ struct ActivityHistoryView: View {
 
 private struct ActivityHistoryRow: View {
     let summary: TrackerSummary
+    @State private var review: ActivityReviewRecord?
+
+    private var displayedActivity: String { review?.confirmedActivity ?? summary.activity }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Label(activityLabel(summary.activity), systemImage: activitySymbol(summary.activity))
+                Label(activityLabel(displayedActivity), systemImage: activitySymbol(displayedActivity))
                     .font(.headline.weight(.bold))
+                if review?.changedByUser == true {
+                    Text("CORRIGÉ")
+                        .font(.system(size: 8, weight: .black))
+                        .foregroundStyle(.orange)
+                }
                 Spacer()
                 Text(summary.startedAt, format: .dateTime.day().month().hour().minute())
                     .font(.caption)
@@ -60,6 +68,9 @@ private struct ActivityHistoryRow: View {
             }
         }
         .padding(.vertical, 5)
+        .onAppear {
+            review = ActivityReviewStore().load(sessionID: summary.sessionID)
+        }
     }
 }
 
@@ -68,8 +79,13 @@ private struct ActivityDetailView: View {
 
     @State private var route: [CLLocationCoordinate2D] = []
     @State private var cameraPosition: MapCameraPosition = .automatic
+    @State private var timeline: [SessionTimelinePoint] = []
+    @State private var review: ActivityReviewRecord?
 
     private let store = NativeSessionStore()
+    private let timelineLoader = SessionTimelineLoader()
+
+    private var displayedActivity: String { review?.confirmedActivity ?? summary.activity }
 
     var body: some View {
         ScrollView {
@@ -91,6 +107,10 @@ private struct ActivityDetailView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                 }
 
+                ActivityReviewCard(summary: summary) { saved in
+                    review = saved
+                }
+
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                     DetailMetric(title: "DISTANCE", value: distanceText(summary.distanceMeters), symbol: "point.topleft.down.to.point.bottomright.curvepath")
                     DetailMetric(title: "TEMPS ACTIF", value: durationText(summary.duration), symbol: "timer")
@@ -101,6 +121,8 @@ private struct ActivityDetailView: View {
                     DetailMetric(title: "VITESSE MAX", value: summary.maxSpeedMps > 0 ? String(format: "%.1f km/h", summary.maxSpeedMps * 3.6) : "—", symbol: "speedometer")
                     DetailMetric(title: "CADENCE", value: summary.averageCadenceSPM.map { String(format: "%.0f pas/min", $0) } ?? "—", symbol: "metronome.fill")
                 }
+
+                SessionTimelineView(points: timeline)
 
                 if let weather = summary.weatherSnapshots, !weather.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -117,6 +139,14 @@ private struct ActivityDetailView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("TRACE TECHNIQUE").font(.caption2.weight(.black)).foregroundStyle(.secondary)
                     Text("Session \(summary.sessionID)").font(.caption.monospaced())
+                    if let review {
+                        Text("Activité détectée \(review.detectedActivity) · confirmée \(review.confirmedActivity)")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                        Text("Santé: \(review.healthKitSyncState)")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
                     if let build = summary.buildSHA { Text("Build \(build)").font(.caption2.monospaced()).foregroundStyle(.secondary) }
                     if let algorithm = summary.algorithmVersion { Text(algorithm).font(.caption2.monospaced()).foregroundStyle(.secondary) }
                 }
@@ -124,19 +154,22 @@ private struct ActivityDetailView: View {
             }
             .padding()
         }
-        .navigationTitle(activityLabel(summary.activity))
+        .navigationTitle(activityLabel(displayedActivity))
         .navigationBarTitleDisplayMode(.inline)
-        .task { loadRoute() }
+        .task { loadSessionData() }
     }
 
-    private func loadRoute() {
+    private func loadSessionData() {
         let sessionID = summary.sessionID
+        review = ActivityReviewStore().load(sessionID: sessionID)
         DispatchQueue.global(qos: .userInitiated).async {
-            let loaded = store.loadRoute(sessionID: sessionID)
+            let loadedRoute = store.loadRoute(sessionID: sessionID)
+            let loadedTimeline = timelineLoader.load(sessionID: sessionID)
             DispatchQueue.main.async {
-                route = loaded
-                guard !loaded.isEmpty else { return }
-                cameraPosition = .region(region(for: loaded))
+                route = loadedRoute
+                timeline = loadedTimeline
+                guard !loadedRoute.isEmpty else { return }
+                cameraPosition = .region(region(for: loadedRoute))
             }
         }
     }
@@ -175,15 +208,28 @@ private struct WeatherHistoryRow: View {
                 }
                 HStack(spacing: 10) {
                     if let humidity = snapshot.relativeHumidityPercent { Text("\(Int(humidity)) % hum.") }
+                    if let pressure = snapshot.pressureHPA { Text("\(Int(pressure)) hPa") }
                     if let wind = snapshot.windSpeedKPH { Text("vent \(String(format: "%.0f", wind)) km/h") }
                     if let gust = snapshot.windGustKPH { Text("raf. \(String(format: "%.0f", gust))") }
                 }
                 .font(.caption2).foregroundStyle(.secondary)
+                if let direction = snapshot.windDirectionDegrees {
+                    Text("Direction du vent : \(compassDirection(direction)) · \(Int(direction.rounded()))°")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer()
             Text(snapshot.timestamp, format: .dateTime.hour().minute())
                 .font(.caption2).foregroundStyle(.secondary)
         }
+    }
+
+    private func compassDirection(_ degrees: Double) -> String {
+        let normalized = (degrees.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+        let labels = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"]
+        let index = Int((normalized + 22.5) / 45.0) % labels.count
+        return labels[index]
     }
 }
 

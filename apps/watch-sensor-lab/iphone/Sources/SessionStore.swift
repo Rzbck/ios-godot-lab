@@ -174,24 +174,30 @@ final class NativeSessionStore {
             return
         }
 
+        fileHandle?.synchronizeFile()
+        let finalSummary = summary.segments == nil
+            ? copy(summary, segments: deriveSegments(for: summary, directory: directory))
+            : summary
+
         var summaryPayload: [String: Any] = [
-            "activity": summary.activity,
-            "duration_s": summary.duration,
-            "distance_m": summary.distanceMeters,
-            "elevation_gain_m": summary.elevationGainMeters,
-            "elevation_loss_m": summary.elevationLossMeters,
-            "max_speed_mps": summary.maxSpeedMps,
-            "average_heart_rate_bpm": summary.averageHeartRate,
+            "activity": finalSummary.activity,
+            "duration_s": finalSummary.duration,
+            "distance_m": finalSummary.distanceMeters,
+            "elevation_gain_m": finalSummary.elevationGainMeters,
+            "elevation_loss_m": finalSummary.elevationLossMeters,
+            "max_speed_mps": finalSummary.maxSpeedMps,
+            "average_heart_rate_bpm": finalSummary.averageHeartRate,
         ]
-        if let value = summary.activeEnergyKcal { summaryPayload["active_energy_kcal"] = value }
-        if let value = summary.maxHeartRate { summaryPayload["max_heart_rate_bpm"] = value }
-        if let value = summary.averageCadenceSPM { summaryPayload["average_cadence_spm"] = value }
+        if let value = finalSummary.activeEnergyKcal { summaryPayload["active_energy_kcal"] = value }
+        if let value = finalSummary.maxHeartRate { summaryPayload["max_heart_rate_bpm"] = value }
+        if let value = finalSummary.averageCadenceSPM { summaryPayload["average_cadence_spm"] = value }
+        if let segments = finalSummary.segments { summaryPayload["segment_count"] = segments.count }
 
         append([
             "record": "session_end",
             "schema": Self.currentSchema,
-            "session_id": summary.sessionID,
-            "timestamp": summary.endedAt.timeIntervalSince1970,
+            "session_id": finalSummary.sessionID,
+            "timestamp": finalSummary.endedAt.timeIntervalSince1970,
             "summary": summaryPayload,
         ])
 
@@ -199,7 +205,7 @@ final class NativeSessionStore {
         closeHandleOnly()
 
         do {
-            let data = try encoder.encode(summary)
+            let data = try encoder.encode(finalSummary)
             try data.write(to: directory.appendingPathComponent("summary.json"), options: .atomic)
         } catch {
             // samples.jsonl remains the durable source if summary serialization fails.
@@ -269,6 +275,150 @@ final class NativeSessionStore {
         closeHandleOnly()
         sessionDirectory = nil
         sessionID = ""
+    }
+
+    private func deriveSegments(for summary: TrackerSummary, directory: URL) -> [TrackerSegmentSummary]? {
+        let samplesURL = directory.appendingPathComponent("samples.jsonl")
+        guard let text = try? String(contentsOf: samplesURL, encoding: .utf8) else { return nil }
+
+        var currentActivity = summary.activity
+        var currentStart = summary.startedAt
+        var currentWatchDistance: Double?
+        var currentPhoneDistance: Double?
+        var segmentStartWatchDistance = 0.0
+        var segmentStartPhoneDistance = 0.0
+        var hasWatchDistanceAtSegmentStart = true
+        var hasPhoneDistanceAtSegmentStart = true
+        var segments: [TrackerSegmentSummary] = []
+
+        func distanceForCurrentSegment() -> Double? {
+            if hasWatchDistanceAtSegmentStart, let currentWatchDistance {
+                return max(0, currentWatchDistance - segmentStartWatchDistance)
+            }
+            if hasPhoneDistanceAtSegmentStart, let currentPhoneDistance {
+                return max(0, currentPhoneDistance - segmentStartPhoneDistance)
+            }
+            return nil
+        }
+
+        func closeSegment(at end: Date, nextActivity: String?) {
+            let clampedEnd = max(end, currentStart)
+            if clampedEnd.timeIntervalSince(currentStart) >= 0.5 {
+                segments.append(
+                    TrackerSegmentSummary(
+                        id: "\(summary.sessionID)-segment-\(segments.count + 1)",
+                        activity: currentActivity,
+                        startedAt: currentStart,
+                        endedAt: clampedEnd,
+                        distanceMeters: distanceForCurrentSegment(),
+                        activeEnergyKcal: nil
+                    )
+                )
+            }
+
+            guard let nextActivity else { return }
+            currentActivity = nextActivity
+            currentStart = clampedEnd
+            if let currentWatchDistance {
+                segmentStartWatchDistance = currentWatchDistance
+                hasWatchDistanceAtSegmentStart = true
+            } else {
+                segmentStartWatchDistance = 0
+                hasWatchDistanceAtSegmentStart = false
+            }
+            if let currentPhoneDistance {
+                segmentStartPhoneDistance = currentPhoneDistance
+                hasPhoneDistanceAtSegmentStart = true
+            } else {
+                segmentStartPhoneDistance = 0
+                hasPhoneDistanceAtSegmentStart = false
+            }
+        }
+
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let data = String(line).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+            if object["record"] as? String == "session_start",
+               let metadata = object["metadata"] as? [String: Any],
+               let effective = metadata["effective_activity"] as? String,
+               !effective.isEmpty {
+                currentActivity = effective
+                continue
+            }
+
+            if object["record"] as? String == "sample",
+               let kind = object["kind"] as? String,
+               let payload = object["payload"] as? [String: Any],
+               let distance = payload["distance_m"] as? Double {
+                if kind == "watch_location" {
+                    currentWatchDistance = distance
+                } else if kind == "location" {
+                    currentPhoneDistance = distance
+                }
+            }
+
+            guard object["record"] as? String == "event",
+                  let event = object["event"] as? String,
+                  let timestamp = object["timestamp"] as? Double else { continue }
+            let payload = object["payload"] as? [String: Any] ?? [:]
+            let date = Date(timeIntervalSince1970: timestamp)
+
+            let nextActivity: String?
+            switch event {
+            case "multisport_transition_started":
+                nextActivity = "transition"
+            case "multisport_segment_started":
+                nextActivity = payload["activity"] as? String
+            case "effective_activity_changed", "auto_activity_changed":
+                nextActivity = payload["to"] as? String
+            default:
+                nextActivity = nil
+            }
+
+            if let nextActivity, !nextActivity.isEmpty, nextActivity != currentActivity {
+                closeSegment(at: date, nextActivity: nextActivity)
+            }
+        }
+
+        closeSegment(at: summary.endedAt, nextActivity: nil)
+
+        if segments.count == 1, segments[0].distanceMeters == nil {
+            let only = segments[0]
+            segments[0] = TrackerSegmentSummary(
+                id: only.id,
+                activity: only.activity,
+                startedAt: only.startedAt,
+                endedAt: only.endedAt,
+                distanceMeters: summary.distanceMeters,
+                activeEnergyKcal: only.activeEnergyKcal
+            )
+        }
+
+        return segments.isEmpty ? nil : segments
+    }
+
+    private func copy(_ summary: TrackerSummary, segments: [TrackerSegmentSummary]?) -> TrackerSummary {
+        TrackerSummary(
+            sessionID: summary.sessionID,
+            activity: summary.activity,
+            startedAt: summary.startedAt,
+            endedAt: summary.endedAt,
+            duration: summary.duration,
+            distanceMeters: summary.distanceMeters,
+            elevationGainMeters: summary.elevationGainMeters,
+            elevationLossMeters: summary.elevationLossMeters,
+            maxSpeedMps: summary.maxSpeedMps,
+            averageHeartRate: summary.averageHeartRate,
+            activeEnergyKcal: summary.activeEnergyKcal,
+            maxHeartRate: summary.maxHeartRate,
+            averageCadenceSPM: summary.averageCadenceSPM,
+            weatherSnapshots: summary.weatherSnapshots,
+            segments: segments,
+            buildSHA: summary.buildSHA,
+            schemaVersion: summary.schemaVersion,
+            algorithmVersion: summary.algorithmVersion
+        )
     }
 
     private func sessionsRoot(create: Bool) throws -> URL {

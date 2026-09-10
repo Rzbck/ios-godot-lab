@@ -19,13 +19,29 @@ Do not change the active-workout UI/behavior yet: the user has not physically te
 - branch: `feat/watch-sensor-history-watch-nav-20260910`
 - branch base: `d2e9da6958d7754d310a5f2b1d366ca551d318ba`
 - physically installed code checkpoint before this chantier: `fa28758bda549deaddbbc12c24eb869d0965af4b`
-- previous CI run: `34507870711` SUCCESS for `fa28758...`
-- previous exact IPA SHA-256: `3f782f0a6c6845d6a28af65610116e0826c99c1408a7a1eca81d0da41e987e62`
+- dedicated local Windows worktree: `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-history-watch-nav`
 - verify current branch HEAD before continuation.
+
+## Current exact-SHA CI/artifact checkpoint
+
+SHA `e8854651b564c40a8611a32228f1de6fd96b5d1b`
+
+- GitHub Actions run `34513228617` — SUCCESS.
+- iPhone unsigned native build: SUCCESS.
+- watchOS unsigned companion build: SUCCESS.
+- HealthKit declarations: SUCCESS.
+- companion assembly: SUCCESS.
+- exact-SHA companion IPA packaging/upload: SUCCESS.
+- artifact: `watch-sensor-lab-companion-e8854651b564c40a8611a32228f1de6fd96b5d1b`.
+- artifact ID: `10166669922`.
+- downloaded IPA: `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\e8854651b564\WatchSensorLab-companion-unsigned-e8854651b564.ipa`.
+- downloaded IPA SHA-256: `27fcfdc7fcdefdfd955c208b3a05cdc6d49d531bdfb9b5a9b700600100c2e210`.
+- exact artifact sync completed successfully through existing `UPDATE_WATCH_SENSOR_LAB.ps1`.
+- this checkpoint is CI + artifact validated only; physical installation/behavior is NOT yet validated.
 
 ## Physical observations that triggered this branch
 
-- iPhone upgraded and opened successfully.
+- iPhone upgraded and opened successfully on prior checkpoint.
 - iPhone retained local Watch Tracker history.
 - Watch recent activities page displayed no synchronized activities even though iPhone had history.
 - user wants no long downward-scrolling Watch home; prefers compact page-based navigation and left/right swipes for functions.
@@ -92,19 +108,18 @@ Updated `WatchRecentHistory.swift`.
 
 ## Validation state
 
-- NOT CI validated yet.
-- NOT physically validated yet.
+- CI VALIDATED on exact SHA `e8854651b564c40a8611a32228f1de6fd96b5d1b` via run `34513228617`.
+- exact IPA downloaded and SHA-256 verified locally.
+- NOT physically installed/validated yet.
 - Active workout behavior was not modified on this branch.
 
 ## Required next validation
 
-1. Run `watch-sensor-lab-bootstrap.yml` manually on the exact final branch HEAD.
-2. If CI succeeds, download exact-SHA IPA with existing `UPDATE_WATCH_SENSOR_LAB.ps1` from a dedicated local worktree for this branch.
-3. Upgrade in place through the already validated auth-fixed iLoader; do not uninstall/purge.
-4. On iPhone, accept the consolidated startup permissions and verify History -> Santé contains workouts recorded outside Watch Tracker.
-5. On Watch, verify horizontal idle pages fit without downward content scrolling.
-6. Verify recent history arrives from the iPhone and Progression is populated.
-7. Only after that, separately test the existing active-workout pages and report physical UX issues before modifying them.
+1. Upgrade in place through the already validated auth-fixed iLoader; do not uninstall/purge.
+2. On iPhone, accept the consolidated startup permissions and verify History -> Santé contains workouts recorded outside Watch Tracker.
+3. On Watch, verify horizontal idle pages fit without downward content scrolling.
+4. Verify recent history arrives from the iPhone and Progression is populated.
+5. Only after that, separately test the existing active-workout pages and report physical UX issues before modifying them.
 
 ## Do not modify
 

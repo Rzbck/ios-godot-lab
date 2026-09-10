@@ -160,7 +160,7 @@ struct SessionAutoDecisionView: View {
                             if let provenance = entry.provenance {
                                 Text(provenance)
                                     .font(.caption2)
-                                    .foregroundStyle(provenance.contains("Inférence Watch Tracker") ? .orange : .tertiary)
+                                    .foregroundStyle(provenance.contains("Inférence Watch Tracker") ? Color.orange : Color.secondary.opacity(0.65))
                             }
                             if let detail = entry.detail {
                                 Text(detail).font(.caption2).foregroundStyle(.tertiary)

@@ -6,6 +6,7 @@ on:
     branches:
       - feat/watch-sensor-lab-bootstrap-20260909
       - feat/watch-sensor-tracker-recorder-20260909
+      - feat/watch-sensor-v040-20260910
     paths:
       - 'apps/watch-sensor-lab/**'
       - '.github/workflows/watch-sensor-lab-bootstrap.yml'
@@ -187,6 +188,8 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :NSHealthShareUsageDescription' "$WATCH_APP_PATH/Info.plist" >/dev/null
           /usr/libexec/PlistBuddy -c 'Print :NSLocationWhenInUseUsageDescription' "$IPHONE_APP_PATH/Info.plist" >/dev/null
           /usr/libexec/PlistBuddy -c 'Print :NSLocationWhenInUseUsageDescription' "$WATCH_APP_PATH/Info.plist" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :NSMotionUsageDescription' "$IPHONE_APP_PATH/Info.plist" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :NSMotionUsageDescription' "$WATCH_APP_PATH/Info.plist" >/dev/null
 
       - name: Assemble iPhone app with embedded watchOS companion
         shell: bash

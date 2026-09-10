@@ -313,7 +313,6 @@ final class SensorModel: NSObject, ObservableObject {
         locationManager.activityType = .fitness
         locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         locationManager.distanceFilter = 1.0
-        locationManager.pausesLocationUpdatesAutomatically = false
     }
 
     private func requestLocationPermission() {

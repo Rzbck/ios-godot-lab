@@ -2,14 +2,48 @@ import SwiftUI
 
 @main
 struct WatchSensorLabApp: App {
-    @StateObject private var tracker = TrackerModel()
+    @StateObject private var startupPermissions = StartupPermissionCoordinator()
 
     var body: some Scene {
         WindowGroup {
-            TrackerRootView(tracker: tracker)
-                .environmentObject(tracker)
-                .preferredColorScheme(.dark)
+            Group {
+                if startupPermissions.healthRequestFinished {
+                    TrackerAppContainer(startupPermissions: startupPermissions)
+                } else {
+                    StartupPermissionView()
+                }
+            }
+            .preferredColorScheme(.dark)
+            .onAppear { startupPermissions.start() }
         }
+    }
+}
+
+private struct StartupPermissionView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "heart.text.square.fill")
+                .font(.system(size: 42, weight: .semibold))
+                .foregroundStyle(.mint)
+            Text("Préparation de Watch Tracker")
+                .font(.title3.weight(.bold))
+            Text("Autorise les données utilisées par l’historique, la progression et le suivi sportif.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            ProgressView()
+        }
+        .padding(28)
+    }
+}
+
+private struct TrackerAppContainer: View {
+    @ObservedObject var startupPermissions: StartupPermissionCoordinator
+    @StateObject private var tracker = TrackerModel()
+
+    var body: some View {
+        TrackerRootView(tracker: tracker, startupPermissions: startupPermissions)
+            .environmentObject(tracker)
     }
 }
 
@@ -22,7 +56,7 @@ private enum TrackerAppSection: Hashable {
 
 private struct TrackerRootView: View {
     @ObservedObject var tracker: TrackerModel
-    @StateObject private var startupPermissions = StartupPermissionCoordinator()
+    @ObservedObject var startupPermissions: StartupPermissionCoordinator
     @State private var completedSummary: TrackerSummary?
     @State private var selection: TrackerAppSection = .today
 
@@ -52,16 +86,11 @@ private struct TrackerRootView: View {
                 .tabItem { Label("Historique", systemImage: "clock.arrow.circlepath") }
         }
         .task {
-            startupPermissions.start()
-            try? await Task.sleep(for: .seconds(1))
             WatchReliableRecovery.refreshAllAvailableSummaries()
-        }
-        .onChange(of: startupPermissions.healthRequestFinished) { _, finished in
-            guard finished else { return }
             recentHistoryBridge.publish(summaries: store.listSummaries())
         }
         .onChange(of: tracker.watchReachable) { _, reachable in
-            guard reachable, startupPermissions.healthRequestFinished else { return }
+            guard reachable else { return }
             recentHistoryBridge.publish(summaries: store.listSummaries())
         }
         .onChange(of: tracker.isActive) { _, active in

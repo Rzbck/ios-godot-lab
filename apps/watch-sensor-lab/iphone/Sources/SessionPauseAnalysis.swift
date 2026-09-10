@@ -150,7 +150,7 @@ struct SessionPauseSummaryView: View {
     @State private var report: SessionPauseReport?
 
     var body: some View {
-        Group {
+        VStack(spacing: 14) {
             if let report, report.totalPaused > 0.5 {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
@@ -196,10 +196,11 @@ struct SessionPauseSummaryView: View {
                 .padding(14)
                 .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
+
+            SessionAutoDecisionView(summary: summary)
         }
         .task(id: summary.sessionID) {
-            let value = SessionPauseAnalyzer().analyze(summary: summary)
-            report = value
+            report = SessionPauseAnalyzer().analyze(summary: summary)
         }
     }
 

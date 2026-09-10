@@ -45,6 +45,7 @@ final class SensorModel: NSObject, ObservableObject {
     private let healthStore = HKHealthStore()
     private let locationManager = CLLocationManager()
     private let motion = CMMotionManager()
+    private let saveWorkoutToHealth = false
 
     private var workoutSession: HKWorkoutSession?
     private var workoutBuilder: HKLiveWorkoutBuilder?
@@ -250,7 +251,7 @@ final class SensorModel: NSObject, ObservableObject {
     func stop() {
         guard running else { return }
         sendControl(command: "stop")
-        stopCore(status: "Session enregistrée")
+        stopCore(status: "Session terminée")
     }
 
     private func pauseCore() {
@@ -296,8 +297,12 @@ final class SensorModel: NSObject, ObservableObject {
 
         let builder = workoutBuilder
         workoutSession?.end()
-        builder?.endCollection(withEnd: end) { _, _ in
-            builder?.finishWorkout { _, _ in }
+        if saveWorkoutToHealth {
+            builder?.endCollection(withEnd: end) { _, _ in
+                builder?.finishWorkout { _, _ in }
+            }
+        } else {
+            builder?.discardWorkout()
         }
 
         workoutSession = nil
@@ -305,7 +310,7 @@ final class SensorModel: NSObject, ObservableObject {
         startedAt = nil
         pausedAt = nil
         phase = .ready
-        sessionStatus = status
+        sessionStatus = saveWorkoutToHealth ? status : "\(status) · Santé non modifiée"
     }
 
     private func configureLocation() {

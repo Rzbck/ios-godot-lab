@@ -17,11 +17,13 @@ private struct TrackerRootView: View {
     @ObservedObject var tracker: TrackerModel
     @State private var completedSummary: TrackerSummary?
 
+    private let store = NativeSessionStore()
+
     var body: some View {
         LiveTrackerView()
             .onChange(of: tracker.lastSummary) { previous, current in
                 guard let current, previous?.sessionID != current.sessionID else { return }
-                completedSummary = current
+                completedSummary = store.listSummaries().first(where: { $0.sessionID == current.sessionID }) ?? current
             }
             .sheet(item: $completedSummary) { summary in
                 PostActivitySummaryView(summary: summary)

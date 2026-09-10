@@ -197,6 +197,7 @@ struct SessionPauseSummaryView: View {
                 .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
 
+            SessionHeartRateZonesView(summary: summary)
             SessionAutoDecisionView(summary: summary)
         }
         .task(id: summary.sessionID) {

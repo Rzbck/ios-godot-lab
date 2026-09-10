@@ -17,6 +17,7 @@ struct PostActivitySummaryView: View {
     private let healthReader = HealthContextReader()
     private let effortAnalyzer = SessionEffortAnalyzer()
     private let timelineLoader = SessionTimelineLoader()
+    private let recentHistoryBridge = PhoneRecentHistoryBridge()
 
     private var displayedActivity: String { review?.confirmedActivity ?? summary.activity }
     private var activityConfirmed: Bool { review != nil }
@@ -29,6 +30,7 @@ struct PostActivitySummaryView: View {
 
                     ActivityReviewCard(summary: summary, requiresConfirmation: true) { saved in
                         review = saved
+                        recentHistoryBridge.publish(summaries: store.listSummaries())
                     }
 
                     if route.count > 1 {

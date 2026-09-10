@@ -35,8 +35,16 @@ Status vocabulary:
 
 - repository: `Rzbck/ios-godot-lab`
 - branch: `feat/watch-sensor-v040-20260910`
-- first v0.4 code/CI head before this docs ledger: `b8702027f2546189326e747e8c842177120c303c`
-- CI run: `34464673739` — SUCCESS
+- first v0.4 code/CI head: `b8702027f2546189326e747e8c842177120c303c`
+- first v0.4 CI run: `34464673739` — SUCCESS
+- validated summary/segments/Health-context slice SHA: `89e04aa508e978a21627a98cccc4a21e99f64278`
+- CI run: `34467626579` — SUCCESS
+- artifact id: `10148264237`
+- artifact digest: `sha256:aceb8151cd847f103e5dbcdfe4de7a0539f9151ba41ff7e9ca781e176fc9be58`
+- validated Watch-recent-history slice SHA: `af38d7c7fc90f44873bdd4bf00e79960bd2c821c`
+- CI run: `34468156004` — SUCCESS
+- artifact id: `10148457809`
+- artifact digest: `sha256:d2140e14b0750f1d606240adc0b96e8b0cce481e21c800c917b4e4a46a45f992`
 - this v0.4 line is NOT physically validated yet.
 
 ## Mandatory requirements from field analysis + user feedback
@@ -98,17 +106,20 @@ Status vocabulary:
   - `CMPedometer` cadence and steps are implemented and exposed.
   - Remaining: validate hardware availability/cadence quality; expose additional pedestrian pace/derived metrics where useful.
 
-- `V040-015` — **Walking gait/balance/asymmetry/step length/double support** — `TODO`.
-  - Must distinguish system-generated HealthKit mobility samples from true live streams.
-  - Acceptance: show them as historical/contextual metrics when available; do not fabricate live values.
+- `V040-015` — **Walking gait/balance/asymmetry/step length/double support** — `CI_VALIDATED / PARTIAL`, hardware/data-availability validation pending.
+  - Post-session Health context now queries Apple-produced walking speed, step length, asymmetry, double-support and Walking Steadiness when available.
+  - These are explicitly labelled as contextual Health data, not fake live Watch Tracker sensors.
+  - Acceptance: verify real device permissions and which metrics actually exist for the baseline/new sessions.
 
-- `V040-016` — **Respiration-related data** — `TODO`.
-  - Apple-measured respiratory rate may be used where HealthKit actually provides it.
-  - Any workout-time estimator must be explicitly labelled estimated/experimental and separately validated.
+- `V040-016` — **Respiration-related data** — `CI_VALIDATED / PARTIAL`.
+  - Post-session Health context can show Apple respiratory-rate samples found around the activity window.
+  - It is explicitly labelled contextual, not workout-live respiration.
+  - Remaining: decide whether a separate experimental workout-time estimator is useful; if implemented it must be clearly labelled estimated/experimental and separately validated.
 
-- `V040-017` — **Richer heart-rate / running metrics** — `TODO / PARTIAL`.
-  - Current/average HR and calories exist.
-  - Add supported high-value metrics such as HR max/recovery/zones and, on compatible hardware/workouts, running power, stride length, ground contact time and vertical oscillation.
+- `V040-017` — **Richer heart-rate / running metrics** — `CI_VALIDATED / PARTIAL`.
+  - Current/average/max HR and calories exist.
+  - Post-session Health context now queries HR max/recovery and, when available, running speed, running power, stride length, ground contact time and vertical oscillation.
+  - Remaining: zones/time-in-zone and physical availability/quality checks on compatible hardware.
 
 - `V040-018` — **Sensor availability/quality indicators** — `CI_VALIDATED / PARTIAL`.
   - Acquisition placeholders, GPS accuracy and gyro source exist.
@@ -121,9 +132,10 @@ Status vocabulary:
   - Current provider implementation is Open-Meteo to avoid adding an unvalidated WeatherKit entitlement to the iLoader signing path.
   - Captures are coarse snapshots, not per-GPS-point spam.
 
-- `V040-020` — **Use weather to improve interpretation of effort** — `TODO`.
-  - Acceptance: post-session analysis can correlate pace/speed, HR, elevation and environmental conditions.
-  - Wind must matter: headwind/tailwind context should be preserved/derived from route heading + wind direction where evidence is sufficient.
+- `V040-020` — **Use weather to improve interpretation of effort** — `CI_VALIDATED / PARTIAL`, physical/network validation pending.
+  - Post-session analyzer computes average temperature/apparent temperature/humidity/pressure/wind, peak gust and a descriptive headwind/tailwind component derived from route heading + meteorological wind direction.
+  - The summary explicitly labels this as environmental context, not a medical score.
+  - Remaining: validate real snapshots, tune route/segment correlation and later use environmental context in cross-session comparisons.
   - Never treat Apple Watch wrist temperature as ambient temperature.
 
 ### History and summaries
@@ -132,11 +144,15 @@ Status vocabulary:
   - History list + activity detail + stored route exist.
   - Acceptance: existing v0.3.1 activities remain visible after upgrade, and new v0.4 sessions persist across app updates.
 
-- `V040-022` — **Proper post-activity summary** — `CI_VALIDATED / PARTIAL`.
-  - Activity detail view has distance, active time, average pace, HR, calories, D+/D-, max speed, cadence, weather and technical trace.
-  - Remaining: automatically present a polished just-finished summary after STOP and enrich it with pauses/segments/zones/weather analysis.
+- `V040-022` — **Proper post-activity summary** — `CI_VALIDATED / PARTIAL`, hardware/UX validation pending.
+  - A just-finished session is now automatically presented after STOP.
+  - Summary includes route, distance, active time, pace, average/max HR, calories, D+/D-, max speed, cadence, persistent segments, environmental effort context, contextual Health metrics and technical trace.
+  - Remaining: explicit pause totals/events and zones/time-in-zone; refine presentation after real-device feedback.
 
-- `V040-023` — **Recent activity/history access on Apple Watch** — `TODO`.
+- `V040-023` — **Recent activity/history access on Apple Watch** — `CI_VALIDATED`, hardware/sync validation pending.
+  - iPhone publishes compact digests for the 8 most recent sessions through WatchConnectivity queued user info.
+  - Watch persists them locally and exposes an `Activités récentes` screen with sport/date/duration/distance/calories/D+.
+  - Acceptance: confirm history arrives after upgrading/opening iPhone and remains viewable on Watch without immediate phone reachability.
 
 - `V040-024` — **Schema/build/algorithm provenance for historical activities** — `CI_VALIDATED`, hardware/migration validation pending.
   - Acceptance: old summaries decode, new summaries identify schema/app/build/algorithm and remain interpretable after algorithm changes.
@@ -166,9 +182,10 @@ Status vocabulary:
 
 ### Multisport / triathlon / mixed outings
 
-- `V040-030` — **First-class session segments** — `TODO / PARTIAL`.
-  - Triathlon foundation exists inside Watch workout control.
-  - General persisted segment model across history/summary still required.
+- `V040-030` — **First-class session segments** — `CI_VALIDATED / PARTIAL`.
+  - v0.4 now derives and persists segment summaries from durable Auto/multisport transition events at session finish, including activity, start/end and distance when cumulative location evidence is available.
+  - Auto changes and manual triathlon transitions therefore become visible in the post-session summary/history.
+  - Remaining: guarantee segment-event delivery across Watch/iPhone disconnection, persist richer segment metrics (energy/HR/elevation), and support general mixed-master semantics.
 
 - `V040-031` — **Manual triathlon in one HealthKit `swimBikeRun` session** — `CI_VALIDATED`, hardware validation pending.
   - Current code supports swim -> transition -> bike -> transition -> run through explicit Watch advancement.

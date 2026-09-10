@@ -14,7 +14,54 @@ final class SensorModel: NSObject, ObservableObject {
         case paused
     }
 
+    enum ActivityKind: String, CaseIterable, Identifiable {
+        case walking
+        case running
+        case hiking
+        case cycling
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .walking: return "Marche"
+            case .running: return "Course"
+            case .hiking: return "Randonnée"
+            case .cycling: return "Vélo"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .walking: return "figure.walk"
+            case .running: return "figure.run"
+            case .hiking: return "figure.hiking"
+            case .cycling: return "bicycle"
+            }
+        }
+
+        var healthKitType: HKWorkoutActivityType {
+            switch self {
+            case .walking: return .walking
+            case .running: return .running
+            case .hiking: return .hiking
+            case .cycling: return .cycling
+            }
+        }
+
+        init?(healthKitType: HKWorkoutActivityType) {
+            switch healthKitType {
+            case .walking: self = .walking
+            case .running: self = .running
+            case .hiking: self = .hiking
+            case .cycling: self = .cycling
+            default: return nil
+            }
+        }
+    }
+
     @Published private(set) var phase: Phase = .ready
+    @Published var selectedActivity: ActivityKind = .walking
     @Published private(set) var sessionID = ""
     @Published private(set) var elapsedSeconds: TimeInterval = 0
     @Published private(set) var distanceMeters = 0.0
@@ -45,6 +92,8 @@ final class SensorModel: NSObject, ObservableObject {
     private let healthStore = HKHealthStore()
     private let locationManager = CLLocationManager()
     private let motion = CMMotionManager()
+
+    // Development builds intentionally do not persist a workout into Apple Health.
     private let saveWorkoutToHealth = false
 
     private var workoutSession: HKWorkoutSession?
@@ -109,9 +158,12 @@ final class SensorModel: NSObject, ObservableObject {
     }
 
     func startFromPhoneConfiguration(_ configuration: HKWorkoutConfiguration) {
+        if let activity = ActivityKind(healthKitType: configuration.activityType) {
+            selectedActivity = activity
+        }
         pendingPhoneConfiguration = configuration
-        // WatchConnectivity normally delivers the shared session id immediately. Give its
-        // application context a short window to arrive before creating the HealthKit session.
+
+        // Give WatchConnectivity a short window to deliver the exact shared session id/revision.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, !self.running, let config = self.pendingPhoneConfiguration else { return }
             self.pendingPhoneConfiguration = nil
@@ -135,10 +187,14 @@ final class SensorModel: NSObject, ObservableObject {
 
         let config = configuration ?? {
             let value = HKWorkoutConfiguration()
-            value.activityType = .running
+            value.activityType = selectedActivity.healthKitType
             value.locationType = .outdoor
             return value
         }()
+
+        if let activity = ActivityKind(healthKitType: config.activityType) {
+            selectedActivity = activity
+        }
 
         guard healthAuthorized else {
             requestHealthAuthorizationAndStart(config, origin: origin, sessionID: identifier)
@@ -160,6 +216,7 @@ final class SensorModel: NSObject, ObservableObject {
 
         let readTypes: Set<HKObjectType> = [heartRateType, energyType, distanceType]
         let shareTypes: Set<HKSampleType> = [HKObjectType.workoutType()]
+
         healthStore.requestAuthorization(toShare: shareTypes, read: readTypes) { [weak self] success, error in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -194,21 +251,11 @@ final class SensorModel: NSObject, ObservableObject {
             startedAt = Date()
             pausedAt = nil
             pausedDuration = 0
-            elapsedSeconds = 0
-            distanceMeters = 0
-            currentSpeedMps = 0
-            altitudeMeters = 0
-            elevationGainMeters = 0
-            elevationLossMeters = 0
-            heartRate = 0
-            averageHeartRate = 0
-            activeEnergyKcal = 0
-            route = []
-            currentCoordinate = nil
-            previousLocation = nil
-            previousAltitudeLocation = nil
+            resetPresentationData()
             phase = .active
-            sessionStatus = origin == "iphone" ? "Démarrée depuis l’iPhone" : "Session en cours"
+            sessionStatus = origin == "iphone"
+                ? "\(selectedActivity.label) depuis l’iPhone"
+                : "\(selectedActivity.label) en cours"
 
             requestLocationPermission()
             locationManager.startUpdatingLocation()
@@ -235,6 +282,9 @@ final class SensorModel: NSObject, ObservableObject {
             }
 
             sendState(force: true)
+            if origin == "watch" {
+                sendControl(command: "start")
+            }
         } catch {
             sessionStatus = "Impossible de démarrer: \(error.localizedDescription)"
             phase = .ready
@@ -262,13 +312,26 @@ final class SensorModel: NSObject, ObservableObject {
         stopCore(status: "Session terminée")
     }
 
+    func deleteAllTestData() {
+        guard !running else {
+            sessionStatus = "Termine la session avant d’effacer"
+            return
+        }
+        resetPresentationData()
+        sessionID = ""
+        lastEndedSessionID = ""
+        controlRevision = 0
+        sessionStatus = "Données de test effacées"
+        sendDevAction(action: "clear_test_data")
+    }
+
     private func pauseCore() {
         guard phase == .active else { return }
-        workoutSession?.pause()
         phase = .paused
         pausedAt = Date()
         currentSpeedMps = 0
         locationManager.stopUpdatingLocation()
+        workoutSession?.pause()
         sessionStatus = "En pause"
         sendState(force: true)
     }
@@ -281,10 +344,10 @@ final class SensorModel: NSObject, ObservableObject {
         self.pausedAt = nil
         previousLocation = nil
         previousAltitudeLocation = nil
-        workoutSession?.resume()
         phase = .active
+        workoutSession?.resume()
         locationManager.startUpdatingLocation()
-        sessionStatus = "Session en cours"
+        sessionStatus = "\(selectedActivity.label) en cours"
         sendState(force: true)
     }
 
@@ -320,6 +383,29 @@ final class SensorModel: NSObject, ObservableObject {
         pausedAt = nil
         phase = .ready
         sessionStatus = saveWorkoutToHealth ? status : "\(status) · Santé non modifiée"
+    }
+
+    private func resetPresentationData() {
+        elapsedSeconds = 0
+        distanceMeters = 0
+        currentSpeedMps = 0
+        altitudeMeters = 0
+        elevationGainMeters = 0
+        elevationLossMeters = 0
+        heartRate = 0
+        averageHeartRate = 0
+        activeEnergyKcal = 0
+        route = []
+        currentCoordinate = nil
+        horizontalAccuracy = -1
+        previousLocation = nil
+        previousAltitudeLocation = nil
+        accelX = 0
+        accelY = 0
+        accelZ = 0
+        gyroX = 0
+        gyroY = 0
+        gyroZ = 0
     }
 
     private func configureLocation() {
@@ -400,7 +486,9 @@ final class SensorModel: NSObject, ObservableObject {
                 distanceMeters += delta
                 let rawSpeed = location.speed >= 0 ? location.speed : delta / dt
                 if rawSpeed >= 0, rawSpeed < 80 {
-                    currentSpeedMps = currentSpeedMps == 0 ? rawSpeed : (currentSpeedMps * 0.7 + rawSpeed * 0.3)
+                    currentSpeedMps = currentSpeedMps == 0
+                        ? rawSpeed
+                        : (currentSpeedMps * 0.7 + rawSpeed * 0.3)
                 }
             }
         }
@@ -425,6 +513,7 @@ final class SensorModel: NSObject, ObservableObject {
         )) >= 1.5 {
             route.append(location.coordinate)
         }
+
         previousLocation = location
         sendState()
     }
@@ -442,6 +531,7 @@ final class SensorModel: NSObject, ObservableObject {
             "payload": [
                 "accel": [accelX, accelY, accelZ],
                 "gyro": [gyroX, gyroY, gyroZ],
+                "activity": selectedActivity.rawValue,
             ],
         ]
         sendLive(payload)
@@ -452,10 +542,20 @@ final class SensorModel: NSObject, ObservableObject {
             "type": "tracker_control",
             "command": command,
             "session_id": sessionID,
+            "activity": selectedActivity.rawValue,
             "control_revision": controlRevision,
             "timestamp": Date().timeIntervalSince1970,
         ]
-        sendLive(payload)
+        sendContextAndLive(payload)
+    }
+
+    private func sendDevAction(action: String) {
+        let payload: [String: Any] = [
+            "type": "tracker_dev",
+            "action": action,
+            "timestamp": Date().timeIntervalSince1970,
+        ]
+        sendContextAndLive(payload)
     }
 
     private func sendState(force: Bool = false, phaseOverride: String? = nil) {
@@ -469,6 +569,7 @@ final class SensorModel: NSObject, ObservableObject {
             "phase": phaseOverride ?? phase.rawValue,
             "session_id": sessionID,
             "origin": "watch",
+            "activity": selectedActivity.rawValue,
             "control_revision": controlRevision,
             "elapsed_s": elapsedSeconds,
             "distance_m": distanceMeters,
@@ -485,6 +586,11 @@ final class SensorModel: NSObject, ObservableObject {
             payload["started_at"] = startedAt.timeIntervalSince1970
         }
 
+        sendContextAndLive(payload)
+    }
+
+    private func sendContextAndLive(_ payload: [String: Any]) {
+        guard WCSession.isSupported() else { return }
         let session = WCSession.default
         try? session.updateApplicationContext(payload)
         sendLive(payload)
@@ -499,36 +605,51 @@ final class SensorModel: NSObject, ObservableObject {
 
     private func handlePhonePayload(_ payload: [String: Any]) {
         guard let type = payload["type"] as? String else { return }
+
+        if type == "tracker_dev" {
+            if payload["action"] as? String == "clear_test_data", !running {
+                resetPresentationData()
+                sessionID = ""
+                lastEndedSessionID = ""
+                controlRevision = 0
+                sessionStatus = "Données de test effacées"
+            }
+            return
+        }
+
         guard type == "tracker_state" || type == "tracker_control" else { return }
 
-        let remoteSessionID = (payload["session_id"] as? String) ?? ""
+        let remoteID = payload["session_id"] as? String ?? ""
         let remoteRevision = Self.int64Value(payload["control_revision"]) ?? 0
 
         if type == "tracker_control", let command = payload["command"] as? String {
             guard acceptRemoteTransition(
-                sessionID: remoteSessionID,
+                sessionID: remoteID,
                 revision: remoteRevision,
                 allowNewSession: command == "start"
             ) else { return }
+            applyRemoteActivity(payload)
             applyRemotePhase(command, payload: payload)
             return
         }
 
         guard let remotePhase = payload["phase"] as? String else { return }
         guard acceptRemoteTransition(
-            sessionID: remoteSessionID,
+            sessionID: remoteID,
             revision: remoteRevision,
             allowNewSession: remotePhase == "active"
         ) else { return }
 
+        applyRemoteActivity(payload)
+
         switch remotePhase {
         case "active":
             if !running {
-                pendingRemoteSessionID = remoteSessionID
+                pendingRemoteSessionID = remoteID
                 if let pendingPhoneConfiguration {
-                    start(configuration: pendingPhoneConfiguration, origin: "iphone", sessionID: remoteSessionID)
+                    start(configuration: pendingPhoneConfiguration, origin: "iphone", sessionID: remoteID)
                 } else {
-                    start(configuration: nil, origin: "iphone", sessionID: remoteSessionID)
+                    start(configuration: nil, origin: "iphone", sessionID: remoteID)
                 }
             } else if phase == .paused {
                 resumeCore()
@@ -559,6 +680,12 @@ final class SensorModel: NSObject, ObservableObject {
         guard revision >= controlRevision else { return false }
         controlRevision = revision
         return true
+    }
+
+    private func applyRemoteActivity(_ payload: [String: Any]) {
+        guard let raw = payload["activity"] as? String,
+              let activity = ActivityKind(rawValue: raw) else { return }
+        selectedActivity = activity
     }
 
     private func applyRemotePhase(_ command: String, payload: [String: Any]) {
@@ -606,11 +733,13 @@ extension SensorModel: HKWorkoutSessionDelegate {
     ) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            // App/WatchConnectivity control state is authoritative. HealthKit delegate
-            // callbacks can arrive after the corresponding command and must not roll the UI
-            // back to an older phase.
-            if toState == .paused, self.phase == .paused { return }
-            if toState == .running, self.phase == .active { return }
+            if toState == .paused, self.phase != .ready {
+                self.phase = .paused
+            }
+            // Ignore a late running callback after a user-commanded pause.
+            if toState == .running, self.phase != .paused, self.phase != .ready {
+                self.phase = .active
+            }
         }
     }
 
@@ -655,7 +784,8 @@ extension SensorModel: HKLiveWorkoutBuilderDelegate {
 
 extension SensorModel: CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
+        if manager.authorizationStatus == .authorizedAlways ||
+            manager.authorizationStatus == .authorizedWhenInUse {
             if phase == .active { manager.startUpdatingLocation() }
         }
     }
@@ -682,7 +812,9 @@ extension SensorModel: WCSessionDelegate {
     ) {
         DispatchQueue.main.async { [weak self] in
             self?.phoneReachable = session.isReachable
-            if let error { self?.sessionStatus = "iPhone: \(error.localizedDescription)" }
+            if let error {
+                self?.sessionStatus = "iPhone: \(error.localizedDescription)"
+            }
         }
     }
 

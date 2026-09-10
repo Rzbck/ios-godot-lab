@@ -46,45 +46,64 @@ private struct ReadyWorkoutView: View {
     @EnvironmentObject private var model: SensorModel
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("WATCH TRACKER")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-                    Text("Prêt")
-                        .font(.title2.weight(.heavy))
+        ScrollView {
+            VStack(spacing: 9) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("WATCH TRACKER")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                        Text(model.selectedActivity.label)
+                            .font(.title3.weight(.heavy))
+                    }
+                    Spacer()
+                    Image(systemName: model.selectedActivity.symbol)
+                        .font(.title2)
+                        .foregroundStyle(.green)
                 }
-                Spacer()
-                Image(systemName: "figure.run.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.green)
-            }
 
-            HStack(spacing: 6) {
-                WatchStatusChip(symbol: "iphone", ready: model.phoneReachable)
-                WatchStatusChip(symbol: "heart.fill", ready: model.healthAuthorized)
-                WatchStatusChip(symbol: "location.fill", ready: model.horizontalAccuracy >= 0)
-            }
+                Picker("Activité", selection: $model.selectedActivity) {
+                    ForEach(SensorModel.ActivityKind.allCases) { activity in
+                        Label(activity.label, systemImage: activity.symbol)
+                            .tag(activity)
+                    }
+                }
+                .pickerStyle(.navigationLink)
 
-            Button {
-                model.start()
-            } label: {
-                Label("Démarrer", systemImage: "play.fill")
-                    .font(.headline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .controlSize(.large)
+                HStack(spacing: 6) {
+                    WatchStatusChip(symbol: "iphone", ready: model.phoneReachable)
+                    WatchStatusChip(symbol: "heart.fill", ready: model.healthAuthorized)
+                    WatchStatusChip(symbol: "location.fill", ready: model.horizontalAccuracy >= 0)
+                }
 
-            Text(model.sessionStatus)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
+                Button {
+                    model.start()
+                } label: {
+                    Label("Démarrer", systemImage: "play.fill")
+                        .font(.headline.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .controlSize(.large)
+
+                Button(role: .destructive) {
+                    model.deleteAllTestData()
+                } label: {
+                    Label("Effacer test", systemImage: "trash")
+                        .font(.caption.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Text(model.sessionStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 4)
         }
-        .padding(.horizontal, 4)
     }
 }
 
@@ -110,8 +129,10 @@ private struct WatchPrimaryMetricsPage: View {
                     Circle()
                         .fill(model.isPaused ? Color.orange : Color.green)
                         .frame(width: 7, height: 7)
-                    Text(model.isPaused ? "PAUSE" : "LIVE")
+                    Text(model.isPaused ? "PAUSE" : model.selectedActivity.label.uppercased())
                         .font(.caption2.weight(.black))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
                 Spacer()
                 Image(systemName: model.phoneReachable ? "iphone.radiowaves.left.and.right" : "iphone.slash")
@@ -128,7 +149,7 @@ private struct WatchPrimaryMetricsPage: View {
                     title: "DISTANCE",
                     value: formatDistance(model.distanceMeters),
                     unit: model.distanceMeters >= 1000 ? "km" : "m",
-                    symbol: "figure.run"
+                    symbol: model.selectedActivity.symbol
                 )
                 WatchMetricCard(
                     title: "CŒUR",
@@ -229,7 +250,7 @@ private struct WatchControlsPage: View {
 
     var body: some View {
         VStack(spacing: 9) {
-            Text("SESSION")
+            Text(model.selectedActivity.label.uppercased())
                 .font(.caption2.weight(.black))
                 .foregroundStyle(.secondary)
 

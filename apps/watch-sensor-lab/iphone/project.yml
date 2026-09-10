@@ -12,6 +12,13 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+    preBuildScripts:
+      - name: Generate App Icon
+        shell: /bin/bash
+        script: |
+          set -euo pipefail
+          python3 "$SRCROOT/../GENERATE_APP_ICON.py" "$SRCROOT/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+        basedOnDependencyAnalysis: false
     info:
       path: Info.plist
       properties:

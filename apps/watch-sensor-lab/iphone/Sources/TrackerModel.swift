@@ -11,7 +11,44 @@ final class TrackerModel: NSObject, ObservableObject {
         case paused
     }
 
+    enum ActivityKind: String, CaseIterable, Identifiable {
+        case walking
+        case running
+        case hiking
+        case cycling
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .walking: return "Marche"
+            case .running: return "Course"
+            case .hiking: return "Randonnée"
+            case .cycling: return "Vélo"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .walking: return "figure.walk"
+            case .running: return "figure.run"
+            case .hiking: return "figure.hiking"
+            case .cycling: return "bicycle"
+            }
+        }
+
+        var healthKitType: HKWorkoutActivityType {
+            switch self {
+            case .walking: return .walking
+            case .running: return .running
+            case .hiking: return .hiking
+            case .cycling: return .cycling
+            }
+        }
+    }
+
     @Published private(set) var phase: Phase = .ready
+    @Published var selectedActivity: ActivityKind = .walking
     @Published private(set) var sessionID = ""
     @Published private(set) var origin = "iphone"
     @Published private(set) var elapsedSeconds: TimeInterval = 0
@@ -104,6 +141,26 @@ final class TrackerModel: NSObject, ObservableObject {
         finishLocalSession(reason: "iphone")
     }
 
+    func deleteAllTestData() {
+        guard !isActive else {
+            statusMessage = "Termine la session avant d’effacer les données"
+            return
+        }
+
+        do {
+            try store.deleteAllSessions()
+            resetPresentationData()
+            sessionID = ""
+            lastEndedSessionID = ""
+            controlRevision = 0
+            lastSummary = nil
+            statusMessage = "Données locales de test effacées"
+            sendDevAction(action: "clear_test_data")
+        } catch {
+            statusMessage = "Suppression impossible: \(error.localizedDescription)"
+        }
+    }
+
     private func configureLocation() {
         locationManager.delegate = self
         locationManager.activityType = .fitness
@@ -169,7 +226,7 @@ final class TrackerModel: NSObject, ObservableObject {
     private func launchWatchWorkout() {
         guard HKHealthStore.isHealthDataAvailable() else { return }
         let configuration = HKWorkoutConfiguration()
-        configuration.activityType = .running
+        configuration.activityType = selectedActivity.healthKitType
         configuration.locationType = .outdoor
 
         Task { [weak self] in
@@ -177,7 +234,7 @@ final class TrackerModel: NSObject, ObservableObject {
             do {
                 try await self.healthStore.startWatchApp(toHandle: configuration)
                 await MainActor.run {
-                    self.statusMessage = "Session envoyée à l’Apple Watch"
+                    self.statusMessage = "\(self.selectedActivity.label) envoyée à l’Apple Watch"
                 }
             } catch {
                 await MainActor.run {
@@ -196,24 +253,11 @@ final class TrackerModel: NSObject, ObservableObject {
         startedAt = Date()
         pausedAt = nil
         pausedDuration = 0
-        elapsedSeconds = 0
-        distanceMeters = 0
-        currentSpeedMps = 0
-        averageSpeedMps = 0
-        maxSpeedMps = 0
-        altitudeMeters = 0
-        elevationGainMeters = 0
-        elevationLossMeters = 0
-        heartRate = 0
-        averageHeartRate = 0
-        activeEnergyKcal = 0
-        route = []
-        currentCoordinate = nil
-        previousLocation = nil
-        previousAltitudeLocation = nil
-        lastHeartRateSample = 0
+        resetPresentationData()
         phase = .active
-        statusMessage = origin == "watch" ? "Session démarrée depuis la Watch" : "Session en cours"
+        statusMessage = origin == "watch"
+            ? "\(selectedActivity.label) démarrée depuis la Watch"
+            : "\(selectedActivity.label) en cours"
 
         do {
             try store.begin(
@@ -223,6 +267,7 @@ final class TrackerModel: NSObject, ObservableObject {
                     "build_sha": BuildInfo.gitSHA,
                     "origin": origin,
                     "platform": "iphone",
+                    "activity": selectedActivity.rawValue,
                 ]
             )
         } catch {
@@ -241,7 +286,10 @@ final class TrackerModel: NSObject, ObservableObject {
         currentSpeedMps = 0
         locationManager.stopUpdatingLocation()
         statusMessage = "En pause"
-        store.appendSample(source: "iphone", kind: "session_control", payload: ["command": "pause"])
+        store.appendSample(source: "iphone", kind: "session_control", payload: [
+            "command": "pause",
+            "activity": selectedActivity.rawValue,
+        ])
         pushStateToWatch(force: true)
     }
 
@@ -255,8 +303,11 @@ final class TrackerModel: NSObject, ObservableObject {
         previousLocation = nil
         previousAltitudeLocation = nil
         locationManager.startUpdatingLocation()
-        statusMessage = "Session en cours"
-        store.appendSample(source: "iphone", kind: "session_control", payload: ["command": "resume"])
+        statusMessage = "\(selectedActivity.label) en cours"
+        store.appendSample(source: "iphone", kind: "session_control", payload: [
+            "command": "resume",
+            "activity": selectedActivity.rawValue,
+        ])
         pushStateToWatch(force: true)
     }
 
@@ -270,6 +321,7 @@ final class TrackerModel: NSObject, ObservableObject {
         let endedAt = Date()
         let summary = TrackerSummary(
             sessionID: sessionID,
+            activity: selectedActivity.rawValue,
             startedAt: startedAt,
             endedAt: endedAt,
             duration: elapsedSeconds,
@@ -288,11 +340,31 @@ final class TrackerModel: NSObject, ObservableObject {
         timer = nil
         phase = .ready
         currentSpeedMps = 0
-        statusMessage = "Session enregistrée"
+        statusMessage = "\(selectedActivity.label) enregistrée"
         pushStateToWatch(force: true, phaseOverride: "ended", stopReason: reason)
         mirroredWorkoutSession = nil
         self.startedAt = nil
         self.pausedAt = nil
+    }
+
+    private func resetPresentationData() {
+        elapsedSeconds = 0
+        distanceMeters = 0
+        currentSpeedMps = 0
+        averageSpeedMps = 0
+        maxSpeedMps = 0
+        altitudeMeters = 0
+        elevationGainMeters = 0
+        elevationLossMeters = 0
+        heartRate = 0
+        averageHeartRate = 0
+        activeEnergyKcal = 0
+        route = []
+        currentCoordinate = nil
+        horizontalAccuracy = -1
+        previousLocation = nil
+        previousAltitudeLocation = nil
+        lastHeartRateSample = 0
     }
 
     private func startClock() {
@@ -331,7 +403,9 @@ final class TrackerModel: NSObject, ObservableObject {
                 distanceMeters += delta
                 let rawSpeed = location.speed >= 0 ? location.speed : delta / dt
                 if rawSpeed >= 0, rawSpeed < 80 {
-                    currentSpeedMps = currentSpeedMps == 0 ? rawSpeed : (currentSpeedMps * 0.72 + rawSpeed * 0.28)
+                    currentSpeedMps = currentSpeedMps == 0
+                        ? rawSpeed
+                        : (currentSpeedMps * 0.72 + rawSpeed * 0.28)
                     maxSpeedMps = max(maxSpeedMps, currentSpeedMps)
                 }
             }
@@ -371,6 +445,7 @@ final class TrackerModel: NSObject, ObservableObject {
                 "distance_m": distanceMeters,
                 "elevation_gain_m": elevationGainMeters,
                 "elevation_loss_m": elevationLossMeters,
+                "activity": selectedActivity.rawValue,
             ],
             quality: [
                 "horizontal_accuracy_m": location.horizontalAccuracy,
@@ -386,6 +461,7 @@ final class TrackerModel: NSObject, ObservableObject {
             "type": "tracker_control",
             "command": command,
             "session_id": sessionID,
+            "activity": selectedActivity.rawValue,
             "control_revision": controlRevision,
             "timestamp": Date().timeIntervalSince1970,
         ]
@@ -396,7 +472,25 @@ final class TrackerModel: NSObject, ObservableObject {
         }
     }
 
-    private func pushStateToWatch(force: Bool = false, phaseOverride: String? = nil, stopReason: String? = nil) {
+    private func sendDevAction(action: String) {
+        guard WCSession.isSupported() else { return }
+        let payload: [String: Any] = [
+            "type": "tracker_dev",
+            "action": action,
+            "timestamp": Date().timeIntervalSince1970,
+        ]
+        let session = WCSession.default
+        try? session.updateApplicationContext(payload)
+        if session.activationState == .activated, session.isReachable {
+            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        }
+    }
+
+    private func pushStateToWatch(
+        force: Bool = false,
+        phaseOverride: String? = nil,
+        stopReason: String? = nil
+    ) {
         guard WCSession.isSupported() else { return }
         let now = Date()
         if !force, now.timeIntervalSince(lastStatePush) < 1.0 { return }
@@ -407,6 +501,7 @@ final class TrackerModel: NSObject, ObservableObject {
             "phase": phaseOverride ?? phase.rawValue,
             "session_id": sessionID,
             "origin": origin,
+            "activity": selectedActivity.rawValue,
             "control_revision": controlRevision,
             "elapsed_s": elapsedSeconds,
             "distance_m": distanceMeters,
@@ -436,6 +531,23 @@ final class TrackerModel: NSObject, ObservableObject {
     private func handleWatchPayload(_ payload: [String: Any]) {
         guard let type = payload["type"] as? String else { return }
 
+        if type == "tracker_dev" {
+            if payload["action"] as? String == "clear_test_data", !isActive {
+                do {
+                    try store.deleteAllSessions()
+                    resetPresentationData()
+                    sessionID = ""
+                    lastEndedSessionID = ""
+                    controlRevision = 0
+                    lastSummary = nil
+                    statusMessage = "Données locales de test effacées"
+                } catch {
+                    statusMessage = "Suppression impossible: \(error.localizedDescription)"
+                }
+            }
+            return
+        }
+
         if type == "sensor_sample" {
             if isActive,
                let source = payload["source"] as? String,
@@ -456,6 +568,7 @@ final class TrackerModel: NSObject, ObservableObject {
                 revision: remoteRevision,
                 allowNewSession: command == "start"
             ) else { return }
+            applyRemoteActivity(payload)
             applyRemoteCommand(command, payload: payload)
             return
         }
@@ -466,6 +579,8 @@ final class TrackerModel: NSObject, ObservableObject {
             revision: remoteRevision,
             allowNewSession: remotePhase == "active"
         ) else { return }
+
+        applyRemoteActivity(payload)
 
         if remotePhase == "active", !isActive {
             beginLocalSession(sessionID: remoteSessionID, origin: "watch")
@@ -481,11 +596,19 @@ final class TrackerModel: NSObject, ObservableObject {
             heartRate = value
             if value > 0, abs(value - lastHeartRateSample) >= 0.1 {
                 lastHeartRateSample = value
-                store.appendSample(source: "watch", kind: "heart_rate", payload: ["bpm": value])
+                store.appendSample(
+                    source: "watch",
+                    kind: "heart_rate",
+                    payload: ["bpm": value, "activity": selectedActivity.rawValue]
+                )
             }
         }
-        if let value = Self.doubleValue(payload["average_heart_rate_bpm"]) { averageHeartRate = value }
-        if let value = Self.doubleValue(payload["active_energy_kcal"]) { activeEnergyKcal = value }
+        if let value = Self.doubleValue(payload["average_heart_rate_bpm"]) {
+            averageHeartRate = value
+        }
+        if let value = Self.doubleValue(payload["active_energy_kcal"]) {
+            activeEnergyKcal = value
+        }
     }
 
     private func acceptRemoteTransition(
@@ -505,6 +628,12 @@ final class TrackerModel: NSObject, ObservableObject {
         guard revision >= controlRevision else { return false }
         controlRevision = revision
         return true
+    }
+
+    private func applyRemoteActivity(_ payload: [String: Any]) {
+        guard let raw = payload["activity"] as? String,
+              let activity = ActivityKind(rawValue: raw) else { return }
+        selectedActivity = activity
     }
 
     private func applyRemoteCommand(_ command: String, payload: [String: Any]) {

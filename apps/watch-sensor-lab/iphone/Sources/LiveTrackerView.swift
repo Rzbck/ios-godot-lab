@@ -12,6 +12,11 @@ struct LiveTrackerView: View {
         GridItem(.flexible(), spacing: 10),
     ]
 
+    private let activityColumns = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+    ]
+
     var body: some View {
         ZStack {
             liveMap
@@ -110,7 +115,7 @@ struct LiveTrackerView: View {
                 Text("WATCH TRACKER")
                     .font(.caption.weight(.bold))
                     .tracking(1.4)
-                Text(tracker.isActive ? "SESSION LIVE" : "PRÊT À PARTIR")
+                Text(tracker.isActive ? tracker.selectedActivity.label.uppercased() : "PRÊT À PARTIR")
                     .font(.title3.weight(.heavy))
             }
 
@@ -153,7 +158,7 @@ struct LiveTrackerView: View {
         VStack(spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("TEMPS")
+                    Text(tracker.selectedActivity.label.uppercased())
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.secondary)
                     Text(formatDuration(tracker.elapsedSeconds))
@@ -167,7 +172,7 @@ struct LiveTrackerView: View {
             LazyVGrid(columns: metricColumns, spacing: 10) {
                 MetricTile(title: "DISTANCE", value: formatDistance(tracker.distanceMeters), unit: tracker.distanceMeters >= 1000 ? "km" : "m", symbol: "point.topleft.down.to.point.bottomright.curvepath")
                 MetricTile(title: "VITESSE", value: String(format: "%.1f", tracker.currentSpeedMps * 3.6), unit: "km/h", symbol: "speedometer")
-                MetricTile(title: "ALLURE", value: formatPace(tracker.currentSpeedMps), unit: "/km", symbol: "figure.run")
+                MetricTile(title: "ALLURE", value: formatPace(tracker.currentSpeedMps), unit: "/km", symbol: tracker.selectedActivity.symbol)
                 MetricTile(title: "CŒUR", value: tracker.heartRate > 0 ? String(format: "%.0f", tracker.heartRate) : "—", unit: "bpm", symbol: "heart.fill", emphasized: tracker.heartRate > 0)
                 MetricTile(title: "ALTITUDE", value: String(format: "%.0f", tracker.altitudeMeters), unit: "m", symbol: "mountain.2.fill")
                 MetricTile(title: "DÉNIVELÉ", value: String(format: "+%.0f", tracker.elevationGainMeters), unit: "m", symbol: "arrow.up.right")
@@ -199,20 +204,39 @@ struct LiveTrackerView: View {
     }
 
     private var readyPanel: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 12) {
             HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("TRACKER COMPACT")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("CHOISIS TON ACTIVITÉ")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
-                    Text("Carte, Watch, GPS et cardio dans une seule session.")
-                        .font(.headline)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text(tracker.selectedActivity.label)
+                        .font(.title3.weight(.heavy))
                 }
                 Spacer(minLength: 8)
-                Image(systemName: "figure.run.circle.fill")
-                    .font(.system(size: 42))
+                Image(systemName: tracker.selectedActivity.symbol)
+                    .font(.system(size: 38, weight: .semibold))
                     .foregroundStyle(.mint)
+            }
+
+            LazyVGrid(columns: activityColumns, spacing: 8) {
+                ForEach(TrackerModel.ActivityKind.allCases) { activity in
+                    Button {
+                        tracker.selectedActivity = activity
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: activity.symbol)
+                            Text(activity.label)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(tracker.selectedActivity == activity ? .mint : .secondary.opacity(0.45))
+                }
             }
 
             HStack(spacing: 8) {
@@ -226,7 +250,7 @@ struct LiveTrackerView: View {
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "play.fill")
-                    Text("DÉMARRER LA SESSION")
+                    Text("DÉMARRER · \(tracker.selectedActivity.label.uppercased())")
                 }
                 .font(.headline.weight(.bold))
                 .frame(maxWidth: .infinity)
@@ -237,7 +261,7 @@ struct LiveTrackerView: View {
 
             if let summary = tracker.lastSummary {
                 HStack {
-                    Label("Dernière", systemImage: "checkmark.circle.fill")
+                    Label(activityLabel(summary.activity), systemImage: "checkmark.circle.fill")
                     Spacer()
                     Text("\(formatDistance(summary.distanceMeters)) · \(formatDuration(summary.duration))")
                         .monospacedDigit()
@@ -250,6 +274,16 @@ struct LiveTrackerView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            Button(role: .destructive) {
+                tracker.deleteAllTestData()
+            } label: {
+                Label("EFFACER LES DONNÉES DE TEST", systemImage: "trash.fill")
+                    .font(.caption.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 38)
+            }
+            .buttonStyle(.bordered)
         }
     }
 
@@ -264,6 +298,10 @@ struct LiveTrackerView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(.white.opacity(0.10), in: Capsule())
+    }
+
+    private func activityLabel(_ raw: String) -> String {
+        TrackerModel.ActivityKind(rawValue: raw)?.label ?? raw.capitalized
     }
 
     private func formatDistance(_ meters: Double) -> String {

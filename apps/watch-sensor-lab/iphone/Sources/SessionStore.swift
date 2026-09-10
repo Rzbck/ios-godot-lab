@@ -2,6 +2,7 @@ import Foundation
 
 struct TrackerSummary: Codable, Equatable {
     let sessionID: String
+    let activity: String
     let startedAt: Date
     let endedAt: Date
     let duration: TimeInterval
@@ -71,6 +72,7 @@ final class NativeSessionStore {
             "session_id": summary.sessionID,
             "timestamp": summary.endedAt.timeIntervalSince1970,
             "summary": [
+                "activity": summary.activity,
                 "duration_s": summary.duration,
                 "distance_m": summary.distanceMeters,
                 "elevation_gain_m": summary.elevationGainMeters,
@@ -87,7 +89,7 @@ final class NativeSessionStore {
             let data = try encoder.encode(summary)
             try data.write(to: directory.appendingPathComponent("summary.json"), options: .atomic)
         } catch {
-            // samples.jsonl is the durable source of truth even if summary serialization fails.
+            // samples.jsonl remains the durable source if summary serialization fails.
         }
 
         sessionDirectory = nil

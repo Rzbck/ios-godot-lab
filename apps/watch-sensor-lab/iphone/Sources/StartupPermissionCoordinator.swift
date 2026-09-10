@@ -94,6 +94,9 @@ final class StartupPermissionCoordinator: NSObject, ObservableObject, CLLocation
             .runningVerticalOscillation,
             .heartRateRecoveryOneMinute,
             .respiratoryRate,
+            .bodyMass,
+            .height,
+            .appleSleepingWristTemperature,
         ]
 
         for identifier in quantityIdentifiers {
@@ -113,6 +116,9 @@ final class StartupPermissionCoordinator: NSObject, ObservableObject, CLLocation
 
         if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
             types.insert(sleep)
+        }
+        if let birthDate = HKObjectType.characteristicType(forIdentifier: .dateOfBirth) {
+            types.insert(birthDate)
         }
 
         return types

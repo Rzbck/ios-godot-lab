@@ -102,6 +102,15 @@ final class StartupPermissionCoordinator: NSObject, ObservableObject, CLLocation
             }
         }
 
+        if #available(iOS 18.0, *) {
+            if let type = HKQuantityType.quantityType(forIdentifier: .workoutEffortScore) {
+                types.insert(type)
+            }
+            if let type = HKQuantityType.quantityType(forIdentifier: .estimatedWorkoutEffortScore) {
+                types.insert(type)
+            }
+        }
+
         if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
             types.insert(sleep)
         }

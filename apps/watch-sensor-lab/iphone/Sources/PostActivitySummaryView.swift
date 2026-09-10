@@ -1,3 +1,4 @@
+import Charts
 import MapKit
 import SwiftUI
 
@@ -5,10 +6,12 @@ struct PostActivitySummaryView: View {
     let summary: TrackerSummary
 
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("tracker.map.style") private var mapStyleRaw = TrackerMapStyleChoice.standard.rawValue
     @State private var route: [CLLocationCoordinate2D] = []
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var healthContext = HealthContextReport.empty
     @State private var effort = SessionEffortReport.empty
+    @State private var terrain = SessionTerrainReport.unavailable
     @State private var contextLoading = true
     @State private var review: ActivityReviewRecord?
     @State private var timeline: [SessionTimelinePoint] = []
@@ -16,11 +19,13 @@ struct PostActivitySummaryView: View {
     private let store = NativeSessionStore()
     private let healthReader = HealthContextReader()
     private let effortAnalyzer = SessionEffortAnalyzer()
+    private let terrainAnalyzer = SessionTerrainAnalyzer()
     private let timelineLoader = SessionTimelineLoader()
     private let recentHistoryBridge = PhoneRecentHistoryBridge()
 
     private var displayedActivity: String { review?.confirmedActivity ?? summary.activity }
     private var activityConfirmed: Bool { review != nil }
+    private var selectedMapStyle: TrackerMapStyleChoice { TrackerMapStyleChoice(rawValue: mapStyleRaw) ?? .standard }
 
     var body: some View {
         NavigationStack {
@@ -33,24 +38,9 @@ struct PostActivitySummaryView: View {
                         recentHistoryBridge.publish(summaries: store.listSummaries())
                     }
 
-                    if route.count > 1 {
-                        Map(position: $cameraPosition, interactionModes: [.pan, .zoom]) {
-                            MapPolyline(coordinates: route)
-                                .stroke(.mint, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                            if let first = route.first {
-                                Annotation("Départ", coordinate: first) {
-                                    Image(systemName: "flag.fill")
-                                        .padding(8)
-                                        .background(.black.opacity(0.75), in: Circle())
-                                        .foregroundStyle(.mint)
-                                }
-                            }
-                        }
-                        .frame(height: 240)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    }
-
+                    routeSection
                     metricsGrid
+                    terrainSection
                     TrackerEffortInsightView(summary: summary)
                     SessionPauseSummaryView(summary: summary)
                     segmentsSection
@@ -99,6 +89,63 @@ struct PostActivitySummaryView: View {
         .padding(.vertical, 8)
     }
 
+    @ViewBuilder
+    private var routeSection: some View {
+        if route.count > 1 {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("PARCOURS", systemImage: "map.fill")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(selectedMapStyle.label)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+
+                Map(position: $cameraPosition, interactionModes: [.pan, .zoom, .rotate]) {
+                    MapPolyline(coordinates: route)
+                        .stroke(.mint, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                    if let first = route.first {
+                        Annotation("Départ", coordinate: first) {
+                            Image(systemName: "flag.fill")
+                                .padding(8)
+                                .background(.black.opacity(0.75), in: Circle())
+                                .foregroundStyle(.mint)
+                        }
+                    }
+                    if let last = route.last {
+                        Annotation("Arrivée", coordinate: last) {
+                            Image(systemName: "flag.checkered")
+                                .padding(8)
+                                .background(.black.opacity(0.75), in: Circle())
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+                .mapStyle(selectedMapStyle.mapStyle)
+                .mapControls {
+                    MapCompass()
+                    MapScaleView()
+                }
+                .frame(height: 250)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    TrackerMapStyleMenu(
+                        selection: Binding(
+                            get: { selectedMapStyle },
+                            set: { mapStyleRaw = $0.rawValue }
+                        )
+                    )
+                    .padding(10)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+    }
+
     private var metricsGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
             SummaryMetric(title: "DISTANCE", value: distanceText(summary.distanceMeters), symbol: "point.topleft.down.to.point.bottomright.curvepath")
@@ -110,6 +157,62 @@ struct PostActivitySummaryView: View {
             SummaryMetric(title: "DÉNIVELÉ", value: String(format: "+%.0f / -%.0f m", summary.elevationGainMeters, summary.elevationLossMeters), symbol: "mountain.2.fill")
             SummaryMetric(title: "VITESSE MAX", value: summary.maxSpeedMps > 0 ? String(format: "%.1f km/h", summary.maxSpeedMps * 3.6) : "—", symbol: "speedometer")
             SummaryMetric(title: "CADENCE", value: summary.averageCadenceSPM.map { String(format: "%.0f pas/min", $0) } ?? "—", symbol: "metronome.fill")
+        }
+    }
+
+    @ViewBuilder
+    private var terrainSection: some View {
+        if !terrain.points.isEmpty {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack {
+                    Label("RELIEF / TERRAIN", systemImage: "mountain.2.fill")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(terrain.reliefLabel)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.mint)
+                }
+
+                Chart(terrain.points) { point in
+                    AreaMark(
+                        x: .value("Distance", point.distanceMeters / 1000),
+                        y: .value("Altitude", point.altitudeMeters)
+                    )
+                    .foregroundStyle(
+                        LinearGradient(colors: [.mint.opacity(0.30), .mint.opacity(0.02)], startPoint: .top, endPoint: .bottom)
+                    )
+                    LineMark(
+                        x: .value("Distance", point.distanceMeters / 1000),
+                        y: .value("Altitude", point.altitudeMeters)
+                    )
+                    .foregroundStyle(.mint)
+                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                }
+                .frame(height: 170)
+                .chartXAxisLabel("km")
+                .chartYAxisLabel("m")
+
+                HStack(spacing: 14) {
+                    ContextValue(label: "Amplitude", value: terrain.elevationRangeMeters.map { String(format: "%.0f m", $0) } ?? "—")
+                    ContextValue(label: "Pente + max", value: terrain.maxUphillGradePercent.map { String(format: "%.0f %%", $0) } ?? "—")
+                    ContextValue(label: "Pente − max", value: terrain.maxDownhillGradePercent.map { String(format: "%.0f %%", abs($0)) } ?? "—")
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Surface")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                    Text(terrain.surfaceLabel)
+                        .font(.caption)
+                    Text(terrain.note)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
     }
 
@@ -264,10 +367,12 @@ struct PostActivitySummaryView: View {
         DispatchQueue.global(qos: .userInitiated).async {
             let loadedRoute = store.loadRoute(sessionID: sessionID)
             let effortReport = effortAnalyzer.analyze(summary: summary)
+            let terrainReport = terrainAnalyzer.analyze(sessionID: sessionID)
             let loadedTimeline = timelineLoader.load(sessionID: sessionID)
             DispatchQueue.main.async {
                 route = loadedRoute
                 effort = effortReport
+                terrain = terrainReport
                 timeline = loadedTimeline
                 if !loadedRoute.isEmpty {
                     cameraPosition = .region(region(for: loadedRoute))

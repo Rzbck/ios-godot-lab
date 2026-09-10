@@ -41,7 +41,7 @@ private struct ReadyWatchHomeView: View {
     var body: some View {
         TabView(selection: $selectedPage) {
             WatchLaunchPage().tag(0)
-            WatchVisualProgressionPage().tag(1)
+            WatchProgressionDepthView().tag(1)
             WatchVisualRecentPage(showHistory: $showHistory).tag(2)
         }
         .tabViewStyle(.page)

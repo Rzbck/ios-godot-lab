@@ -1,5 +1,4 @@
 import HealthKit
-import MapKit
 import SwiftUI
 import WatchKit
 
@@ -41,9 +40,9 @@ private struct ReadyWatchHomeView: View {
 
     var body: some View {
         TabView(selection: $selectedPage) {
-            WatchStartPage().tag(0)
-            WatchProgressionPage().tag(1)
-            WatchHistoryLauncherPage(showHistory: $showHistory).tag(2)
+            WatchLaunchPage().tag(0)
+            WatchVisualProgressionPage().tag(1)
+            WatchVisualRecentPage(showHistory: $showHistory).tag(2)
         }
         .tabViewStyle(.page)
         .sheet(isPresented: $showHistory) {
@@ -52,486 +51,369 @@ private struct ReadyWatchHomeView: View {
     }
 }
 
-private struct WatchStartPage: View {
+private struct WatchLaunchPage: View {
     @EnvironmentObject private var model: SensorModel
+    @State private var showSportPicker = false
 
-    private var activityBinding: Binding<ActivityKind> {
-        Binding(get: { model.selectedActivity }, set: { model.selectActivity($0) })
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Text("PRÊT")
+                    .font(.caption2.weight(.black))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                WatchTinyStatus(symbol: "iphone", ready: model.phoneReachable, accent: .cyan)
+                WatchTinyStatus(symbol: "heart.fill", ready: model.healthAuthorized, accent: .pink)
+                WatchTinyStatus(symbol: "location.fill", ready: model.horizontalAccuracy >= 0, accent: .mint)
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                showSportPicker = true
+            } label: {
+                VStack(spacing: 5) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 30, weight: .black))
+                    Text("Démarrer")
+                        .font(.title3.weight(.black))
+                }
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .frame(height: 92)
+                .background(
+                    LinearGradient(
+                        colors: [.cyan, .mint],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+                )
+            }
+            .buttonStyle(.plain)
+
+            HStack(spacing: 7) {
+                Label(model.selectedActivity.label, systemImage: model.selectedActivity.symbol)
+                    .font(.caption.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+
+                Spacer(minLength: 2)
+
+                Button {
+                    model.setAutoPauseEnabled(!model.autoPauseEnabled)
+                } label: {
+                    Image(systemName: model.autoPauseEnabled ? "pause.circle.fill" : "pause.circle")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(model.autoPauseEnabled ? Color.orange : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(model.autoPauseEnabled ? "Pause automatique activée" : "Pause automatique désactivée")
+            }
+            .padding(.horizontal, 4)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+        .sheet(isPresented: $showSportPicker) {
+            WatchSportStartPicker()
+        }
+    }
+}
+
+private struct WatchSportStartPicker: View {
+    @EnvironmentObject private var model: SensorModel
+    @Environment(\.dismiss) private var dismiss
+
+    private var pages: [[ActivityKind]] {
+        let priority: [ActivityKind] = [
+            .automatic, .walking, .running, .cycling,
+            .hiking, .swimming, .rowing, .swimBikeRun,
+            .functionalStrengthTraining, .traditionalStrengthTraining, .highIntensityIntervalTraining, .elliptical,
+            .yoga, .soccer, .tennis, .basketball,
+        ]
+        let prioritySet = Set(priority.map(\.rawValue))
+        let remaining = ActivityKind.allCases.filter { !prioritySet.contains($0.rawValue) }
+        let ordered = priority + remaining
+        return stride(from: 0, to: ordered.count, by: 4).map { index in
+            Array(ordered[index..<min(index + 4, ordered.count)])
+        }
     }
 
-    private var autoPauseBinding: Binding<Bool> {
-        Binding(get: { model.autoPauseEnabled }, set: { model.setAutoPauseEnabled($0) })
+    var body: some View {
+        TabView {
+            ForEach(Array(pages.enumerated()), id: \.offset) { index, activities in
+                VStack(spacing: 7) {
+                    HStack {
+                        Text(index == 0 ? "CHOISIR & DÉMARRER" : "SPORTS")
+                            .font(.system(size: 9, weight: .black))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(index + 1)/\(pages.count)")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.cyan)
+                    }
+
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
+                        ForEach(activities) { activity in
+                            Button {
+                                model.selectActivity(activity)
+                                model.start()
+                                dismiss()
+                            } label: {
+                                VStack(spacing: 4) {
+                                    Image(systemName: activity.symbol)
+                                        .font(.title3.weight(.bold))
+                                    Text(activity.label)
+                                        .font(.system(size: 10, weight: .bold))
+                                        .lineLimit(2)
+                                        .minimumScaleFactor(0.65)
+                                        .multilineTextAlignment(.center)
+                                }
+                                .foregroundStyle(sportAccent(activity))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 61)
+                                .background(
+                                    sportAccent(activity).opacity(0.13),
+                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+        .tabViewStyle(.verticalPage)
+    }
+
+    private func sportAccent(_ activity: ActivityKind) -> Color {
+        switch activity {
+        case .automatic: return .cyan
+        case .walking, .hiking: return .mint
+        case .running, .trackAndField: return .orange
+        case .cycling, .handCycling: return .yellow
+        case .swimming, .rowing, .paddleSports, .waterFitness, .waterPolo, .waterSports, .sailing, .surfingSports, .underwaterDiving: return .blue
+        case .functionalStrengthTraining, .traditionalStrengthTraining, .coreTraining, .crossTraining, .highIntensityIntervalTraining: return .red
+        case .yoga, .mindAndBody, .pilates, .taiChi, .flexibility: return .purple
+        default: return .pink
+        }
+    }
+}
+
+private struct WatchVisualProgressionPage: View {
+    @ObservedObject private var history = WatchRecentHistoryStore.shared
+
+    private var weeklyReference: TimeInterval {
+        history.twentyEightDays.duration / 4
+    }
+
+    private var progressRatio: Double {
+        guard weeklyReference > 0 else { return 0 }
+        return min(1.5, history.sevenDays.duration / weeklyReference)
+    }
+
+    private var comparison: String {
+        guard weeklyReference > 0 else { return "—" }
+        let delta = (history.sevenDays.duration - weeklyReference) / weeklyReference
+        if abs(delta) < 0.05 { return "≈ habituel" }
+        return String(format: "%+.0f%%", delta * 100)
     }
 
     var body: some View {
         VStack(spacing: 8) {
             HStack {
-                Image(systemName: model.selectedActivity.symbol)
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(.green)
-                Text(model.selectedActivity.label)
-                    .font(.headline.weight(.bold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("PROGRESSION")
+                        .font(.system(size: 9, weight: .black))
+                        .foregroundStyle(.secondary)
+                    Text("7 derniers jours")
+                        .font(.caption.weight(.bold))
+                }
                 Spacer()
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .foregroundStyle(.cyan)
             }
 
-            Picker("Activité", selection: activityBinding) {
-                ForEach(ActivityKind.allCases) { activity in
-                    Label(activity.label, systemImage: activity.symbol).tag(activity)
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .stroke(.white.opacity(0.08), lineWidth: 8)
+                    Circle()
+                        .trim(from: 0, to: min(1, progressRatio))
+                        .stroke(
+                            LinearGradient(colors: [.cyan, .mint], startPoint: .top, endPoint: .bottom),
+                            style: StrokeStyle(lineWidth: 8, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                    VStack(spacing: 1) {
+                        Text(compactVisualDuration(history.sevenDays.duration))
+                            .font(.headline.weight(.black))
+                            .minimumScaleFactor(0.65)
+                        Text(comparison)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.cyan)
+                    }
+                }
+                .frame(width: 82, height: 82)
+
+                VStack(spacing: 7) {
+                    WatchVisualMetric(
+                        value: "\(history.sevenDays.count)",
+                        label: "séances",
+                        symbol: "figure.run",
+                        accent: .orange
+                    )
+                    WatchVisualMetric(
+                        value: compactVisualDistance(history.sevenDays.distanceMeters),
+                        label: "distance",
+                        symbol: "location.fill",
+                        accent: .mint
+                    )
                 }
             }
-            .pickerStyle(.navigationLink)
 
-            HStack(spacing: 5) {
-                WatchStatusChip(symbol: "iphone", ready: model.phoneReachable)
-                WatchStatusChip(symbol: "heart.fill", ready: model.healthAuthorized)
-                WatchStatusChip(symbol: "location.fill", ready: model.horizontalAccuracy >= 0)
-            }
-
-            Toggle("Pause auto", isOn: autoPauseBinding)
-                .font(.caption.weight(.semibold))
-                .tint(.mint)
-
-            Button { model.start() } label: {
-                Label("Démarrer", systemImage: "play.fill")
-                    .font(.headline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .controlSize(.large)
+            Text("Swipe → pour les activités récentes")
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 3)
+        .padding(.horizontal, 4)
     }
 }
 
-private struct WatchProgressionPage: View {
-    @ObservedObject private var history = WatchRecentHistoryStore.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("PROGRESSION", systemImage: "chart.line.uptrend.xyaxis")
-                    .font(.caption2.weight(.black))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("7 J")
-                    .font(.caption2.weight(.black))
-                    .foregroundStyle(.mint)
-            }
-
-            HStack(spacing: 7) {
-                WatchProgressMetric(value: "\(history.sevenDays.count)", label: "SÉANCES")
-                WatchProgressMetric(value: compactWatchDuration(history.sevenDays.duration), label: "TEMPS")
-            }
-
-            HStack(spacing: 7) {
-                WatchProgressMetric(value: compactWatchDistance(history.sevenDays.distanceMeters), label: "DISTANCE")
-                WatchProgressMetric(value: weeklyComparison, label: "VS 28 J")
-            }
-
-            Text(history.activities.isEmpty
-                 ? "Ouvre l’iPhone pour synchroniser Santé + Tracker."
-                 : "Données issues de l’historique synchronisé depuis l’iPhone.")
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-        }
-        .padding(.horizontal, 3)
-    }
-
-    private var weeklyComparison: String {
-        let baseline = history.twentyEightDays.duration / 4
-        guard baseline > 0 else { return "—" }
-        let delta = (history.sevenDays.duration - baseline) / baseline
-        if abs(delta) < 0.05 { return "≈" }
-        return String(format: "%+.0f%%", delta * 100)
-    }
-}
-
-private struct WatchHistoryLauncherPage: View {
+private struct WatchVisualRecentPage: View {
     @ObservedObject private var history = WatchRecentHistoryStore.shared
     @Binding var showHistory: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(spacing: 8) {
             HStack {
-                Label("RÉCENTES", systemImage: "clock.arrow.circlepath")
-                    .font(.caption2.weight(.black))
+                Text("RÉCENTES")
+                    .font(.system(size: 9, weight: .black))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text("\(history.activities.count)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.mint)
+                    .font(.caption2.weight(.black))
+                    .foregroundStyle(.pink)
             }
 
             if let latest = history.activities.first {
-                HStack(spacing: 9) {
-                    Image(systemName: latest.activityKind?.symbol ?? "figure.mixed.cardio")
-                        .font(.title2.weight(.bold))
-                        .foregroundStyle(.mint)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(latest.activityKind?.label ?? latest.activity)
-                            .font(.headline.weight(.bold))
-                            .lineLimit(1)
-                        Text(latest.date, format: .dateTime.day().month().hour().minute())
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                VStack(spacing: 6) {
+                    HStack(spacing: 8) {
+                        Image(systemName: latest.activityKind?.symbol ?? "figure.mixed.cardio")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(latest.activityKind?.label ?? latest.activity)
+                                .font(.headline.weight(.black))
+                                .lineLimit(1)
+                            Text(latest.date, format: .dateTime.day().month().hour().minute())
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+
+                    HStack(spacing: 7) {
+                        WatchVisualMetric(
+                            value: compactVisualDuration(latest.duration),
+                            label: "temps",
+                            symbol: "clock.fill",
+                            accent: .cyan
+                        )
+                        WatchVisualMetric(
+                            value: compactVisualDistance(latest.distanceMeters),
+                            label: "distance",
+                            symbol: "location.fill",
+                            accent: .mint
+                        )
                     }
                 }
-
-                HStack(spacing: 7) {
-                    WatchProgressMetric(value: compactWatchDistance(latest.distanceMeters), label: "DIST")
-                    WatchProgressMetric(value: compactWatchDuration(latest.duration), label: "TEMPS")
-                }
+                .padding(9)
+                .background(
+                    LinearGradient(
+                        colors: [.orange.opacity(0.16), .pink.opacity(0.08)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                )
             } else {
-                VStack(spacing: 6) {
+                VStack(spacing: 5) {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(.title2)
                         .foregroundStyle(.secondary)
                     Text("Synchronisation iPhone…")
                         .font(.caption.weight(.semibold))
-                        .multilineTextAlignment(.center)
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            Button { showHistory = true } label: {
-                Label("Voir l’historique", systemImage: "rectangle.stack.fill")
+            Button {
+                showHistory = true
+            } label: {
+                Label("Tout voir", systemImage: "rectangle.stack.fill")
                     .font(.caption.weight(.bold))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .tint(.pink)
             .disabled(history.activities.isEmpty)
         }
-        .padding(.horizontal, 3)
+        .padding(.horizontal, 4)
     }
 }
 
-private struct ActiveWorkoutView: View {
-    var body: some View {
-        TabView {
-            WatchPrimaryMetricsPage()
-            WatchEffortMetricsPage()
-            WatchRouteTerrainPage()
-            WatchControlsPage()
-        }
-        .tabViewStyle(.verticalPage)
-    }
-}
-
-private struct WatchPrimaryMetricsPage: View {
-    @EnvironmentObject private var model: SensorModel
-
-    var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(model.isPaused ? Color.orange : Color.green)
-                    .frame(width: 7, height: 7)
-                Text(primaryStateLabel)
-                    .font(.caption2.weight(.black))
-                    .lineLimit(1)
-                Spacer()
-                Image(systemName: model.phoneReachable ? "iphone.radiowaves.left.and.right" : "iphone.slash")
-                    .foregroundStyle(model.phoneReachable ? Color.green : Color.secondary)
-            }
-
-            Text(formatDuration(model.elapsedSeconds))
-                .font(.system(size: 36, weight: .black, design: .rounded))
-                .monospacedDigit()
-                .minimumScaleFactor(0.78)
-
-            HStack(spacing: 8) {
-                WatchMetricCard(
-                    title: "DISTANCE",
-                    value: model.elapsedSeconds > 4 ? formatDistance(model.distanceMeters) : "—",
-                    unit: model.distanceMeters >= 1000 ? "km" : "m",
-                    symbol: model.displayActivity.symbol
-                )
-                WatchMetricCard(
-                    title: "CŒUR",
-                    value: model.heartRate > 0 ? String(format: "%.0f", model.heartRate) : "—",
-                    unit: "bpm",
-                    symbol: "heart.fill",
-                    accent: .red
-                )
-            }
-
-            HStack(spacing: 8) {
-                Label(speedLabel, systemImage: "speedometer")
-                Spacer()
-                Label(model.elapsedSeconds > 4 ? "+\(Int(model.elevationGainMeters)) m" : "D+ —", systemImage: "arrow.up.right")
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 2)
-    }
-
-    private var primaryStateLabel: String {
-        if model.isPaused { return model.autoPaused ? "PAUSE AUTO" : "PAUSE" }
-        if model.selectedActivity.isAutomatic { return "AUTO · \(model.effectiveActivity.label.uppercased())" }
-        if model.selectedActivity == .swimBikeRun, model.multisportTransition { return "TRANSITION" }
-        return model.displayActivity.label.uppercased()
-    }
-
-    private var speedLabel: String {
-        guard model.horizontalAccuracy >= 0, model.elapsedSeconds > 4 else { return "GPS…" }
-        return String(format: "%.1f km/h", model.currentSpeedMps * 3.6)
-    }
-}
-
-private struct WatchEffortMetricsPage: View {
-    @EnvironmentObject private var model: SensorModel
-
-    var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text("EFFORT")
-                    .font(.caption2.weight(.black))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Image(systemName: "waveform.path.ecg")
-                    .foregroundStyle(.mint)
-            }
-
-            HStack(spacing: 8) {
-                WatchMetricCard(
-                    title: "CALORIES",
-                    value: model.activeEnergyKcal > 0 ? String(format: "%.0f", model.activeEnergyKcal) : "—",
-                    unit: "kcal",
-                    symbol: "flame.fill",
-                    accent: .orange
-                )
-                WatchMetricCard(
-                    title: "CADENCE",
-                    value: model.cadenceSPM > 0 ? String(format: "%.0f", model.cadenceSPM) : "—",
-                    unit: "pas/min",
-                    symbol: "metronome.fill",
-                    accent: .cyan
-                )
-            }
-
-            HStack(spacing: 8) {
-                WatchMetricCard(
-                    title: "FC MOY.",
-                    value: model.averageHeartRate > 0 ? String(format: "%.0f", model.averageHeartRate) : "—",
-                    unit: "bpm",
-                    symbol: "heart.text.square.fill",
-                    accent: .red
-                )
-                WatchMetricCard(
-                    title: "PAS",
-                    value: model.steps > 0 ? "\(model.steps)" : "—",
-                    unit: "pas",
-                    symbol: "shoeprints.fill"
-                )
-            }
-        }
-        .padding(.horizontal, 2)
-    }
-}
-
-private struct WatchRouteTerrainPage: View {
-    @EnvironmentObject private var model: SensorModel
-    @State private var position: MapCameraPosition = .automatic
-
-    var body: some View {
-        VStack(spacing: 7) {
-            Map(position: $position, interactionModes: []) {
-                UserAnnotation()
-                if model.route.count > 1 {
-                    MapPolyline(coordinates: model.route)
-                        .stroke(.green, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                }
-            }
-            .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
-            .frame(maxHeight: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-            HStack(spacing: 8) {
-                CompactTerrainValue(
-                    title: "ALT",
-                    value: model.elapsedSeconds > 4 ? "\(Int(model.altitudeMeters)) m" : "—"
-                )
-                CompactTerrainValue(
-                    title: "D+",
-                    value: model.elapsedSeconds > 4 ? "+\(Int(model.elevationGainMeters)) m" : "—"
-                )
-                CompactTerrainValue(
-                    title: "GPS",
-                    value: model.horizontalAccuracy >= 0 ? "±\(Int(model.horizontalAccuracy)) m" : "—"
-                )
-            }
-        }
-        .onAppear { recenter() }
-        .onChange(of: model.route.count) { _, _ in recenter() }
-    }
-
-    private func recenter() {
-        guard let coordinate = model.currentCoordinate else { return }
-        position = .region(
-            MKCoordinateRegion(
-                center: coordinate,
-                latitudinalMeters: 500,
-                longitudinalMeters: 500
-            )
-        )
-    }
-}
-
-private struct WatchControlsPage: View {
-    @EnvironmentObject private var model: SensorModel
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Spacer(minLength: 2)
-
-            if model.selectedActivity == .swimBikeRun, model.canAdvanceTriathlon {
-                Button { model.advanceTriathlon() } label: {
-                    Label(
-                        model.multisportTransition ? "Démarrer suivant" : "Transition",
-                        systemImage: model.multisportTransition ? "forward.fill" : "arrow.triangle.2.circlepath"
-                    )
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
-            }
-
-            Button { model.isPaused ? model.resume() : model.pause() } label: {
-                Label(
-                    model.isPaused ? "Reprendre" : "Pause",
-                    systemImage: model.isPaused ? "play.fill" : "pause.fill"
-                )
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(model.isPaused ? .green : .orange)
-            .controlSize(.large)
-
-            Button(role: .destructive) { model.stop() } label: {
-                Label("Terminer", systemImage: "stop.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-
-            Spacer(minLength: 2)
-        }
-        .padding(.horizontal, 2)
-    }
-}
-
-private struct WatchStatusChip: View {
+private struct WatchTinyStatus: View {
     let symbol: String
     let ready: Bool
+    let accent: Color
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(ready ? Color.green : Color.secondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 30)
-            .background(.white.opacity(0.07), in: Capsule())
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(ready ? accent : Color.secondary.opacity(0.45))
+            .frame(width: 17, height: 17)
+            .background((ready ? accent : Color.secondary).opacity(0.10), in: Circle())
     }
 }
 
-private struct WatchProgressMetric: View {
+private struct WatchVisualMetric: View {
     let value: String
     let label: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value)
-                .font(.headline.weight(.heavy))
-                .monospacedDigit()
-                .minimumScaleFactor(0.65)
-                .lineLimit(1)
-            Text(label)
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-private struct WatchMetricCard: View {
-    let title: String
-    let value: String
-    let unit: String
     let symbol: String
-    var accent: Color = .green
+    let accent: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 3) {
-                Image(systemName: symbol).foregroundStyle(accent)
-                Text(title)
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(accent)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(value)
+                    .font(.caption.weight(.black))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+                Text(label)
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
-            .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(.secondary)
-
-            Text(value)
-                .font(.system(size: 23, weight: .heavy, design: .rounded))
-                .monospacedDigit()
-                .minimumScaleFactor(0.68)
-                .lineLimit(1)
-
-            Text(unit)
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 8)
+        .frame(height: 38)
+        .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
-private struct CompactTerrainValue: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(spacing: 1) {
-            Text(value)
-                .font(.caption.weight(.bold))
-                .monospacedDigit()
-                .minimumScaleFactor(0.7)
-                .lineLimit(1)
-            Text(title)
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-private func compactWatchDuration(_ seconds: TimeInterval) -> String {
+private func compactVisualDuration(_ seconds: TimeInterval) -> String {
     let minutes = max(0, Int(seconds / 60))
     if minutes >= 60 { return String(format: "%dh%02d", minutes / 60, minutes % 60) }
     return "\(minutes)m"
 }
 
-private func compactWatchDistance(_ meters: Double) -> String {
-    meters >= 1000 ? String(format: "%.1fkm", meters / 1000) : String(format: "%.0fm", meters)
-}
-
-private func formatDuration(_ seconds: TimeInterval) -> String {
-    let total = max(0, Int(seconds))
-    let hours = total / 3600
-    let minutes = (total % 3600) / 60
-    let secs = total % 60
-    return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, secs) : String(format: "%02d:%02d", minutes, secs)
-}
-
-private func formatDistance(_ meters: Double) -> String {
-    meters >= 1000 ? String(format: "%.2f", meters / 1000) : String(format: "%.0f", meters)
+private func compactVisualDistance(_ meters: Double) -> String {
+    meters >= 1000 ? String(format: "%.1f km", meters / 1000) : String(format: "%.0f m", meters)
 }

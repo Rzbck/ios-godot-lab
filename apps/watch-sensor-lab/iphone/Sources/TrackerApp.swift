@@ -22,6 +22,7 @@ private enum TrackerAppSection: Hashable {
 
 private struct TrackerRootView: View {
     @ObservedObject var tracker: TrackerModel
+    @StateObject private var startupPermissions = StartupPermissionCoordinator()
     @State private var completedSummary: TrackerSummary?
     @State private var selection: TrackerAppSection = .today
 
@@ -46,13 +47,21 @@ private struct TrackerRootView: View {
                 .tag(TrackerAppSection.progression)
                 .tabItem { Label("Progression", systemImage: "chart.xyaxis.line") }
 
-            ActivityHistoryView()
+            HistoryEntryView()
                 .tag(TrackerAppSection.history)
                 .tabItem { Label("Historique", systemImage: "clock.arrow.circlepath") }
         }
         .task {
+            startupPermissions.start()
             try? await Task.sleep(for: .seconds(1))
             WatchReliableRecovery.refreshAllAvailableSummaries()
+        }
+        .onChange(of: startupPermissions.healthRequestFinished) { _, finished in
+            guard finished else { return }
+            recentHistoryBridge.publish(summaries: store.listSummaries())
+        }
+        .onChange(of: tracker.watchReachable) { _, reachable in
+            guard reachable, startupPermissions.healthRequestFinished else { return }
             recentHistoryBridge.publish(summaries: store.listSummaries())
         }
         .onChange(of: tracker.isActive) { _, active in

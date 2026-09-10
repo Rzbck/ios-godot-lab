@@ -10,16 +10,26 @@ struct PostActivitySummaryView: View {
     @State private var healthContext = HealthContextReport.empty
     @State private var effort = SessionEffortReport.empty
     @State private var contextLoading = true
+    @State private var review: ActivityReviewRecord?
+    @State private var timeline: [SessionTimelinePoint] = []
 
     private let store = NativeSessionStore()
     private let healthReader = HealthContextReader()
     private let effortAnalyzer = SessionEffortAnalyzer()
+    private let timelineLoader = SessionTimelineLoader()
+
+    private var displayedActivity: String { review?.confirmedActivity ?? summary.activity }
+    private var activityConfirmed: Bool { review != nil }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 14) {
                     completionHeader
+
+                    ActivityReviewCard(summary: summary, requiresConfirmation: true) { saved in
+                        review = saved
+                    }
 
                     if route.count > 1 {
                         Map(position: $cameraPosition, interactionModes: [.pan, .zoom]) {
@@ -40,6 +50,7 @@ struct PostActivitySummaryView: View {
 
                     metricsGrid
                     segmentsSection
+                    SessionTimelineView(points: timeline)
                     environmentSection
                     healthContextSection
                     technicalTrace
@@ -51,23 +62,34 @@ struct PostActivitySummaryView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Terminé") { dismiss() }
+                        .disabled(!activityConfirmed)
                 }
             }
             .task { loadContext() }
         }
+        .interactiveDismissDisabled(!activityConfirmed)
         .preferredColorScheme(.dark)
     }
 
     private var completionHeader: some View {
         VStack(spacing: 7) {
-            Image(systemName: activitySymbol(summary.activity))
+            Image(systemName: activitySymbol(displayedActivity))
                 .font(.system(size: 36, weight: .semibold))
                 .foregroundStyle(.mint)
-            Text(activityLabel(summary.activity))
+            Text(activityLabel(displayedActivity))
                 .font(.title2.weight(.black))
             Text(summary.startedAt, format: .dateTime.day().month().year().hour().minute())
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if !activityConfirmed {
+                Label("Confirme le type d’activité avant de fermer", systemImage: "exclamationmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+            } else if review?.changedByUser == true {
+                Text("Détection corrigée par l’utilisateur")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
@@ -158,6 +180,10 @@ struct PostActivitySummaryView: View {
                     }
                 }
 
+                if let pressure = summary.weatherSnapshots?.compactMap(\.pressureHPA).average {
+                    ContextValue(label: "Pression moy.", value: String(format: "%.0f hPa", pressure))
+                }
+
                 if let note = effort.note {
                     Text(note).font(.caption).foregroundStyle(.secondary)
                 }
@@ -214,6 +240,14 @@ struct PostActivitySummaryView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("TRACE TECHNIQUE").font(.caption2.weight(.black)).foregroundStyle(.secondary)
             Text("Session \(summary.sessionID)").font(.caption.monospaced())
+            if let review {
+                Text("Détecté \(review.detectedActivity) · confirmé \(review.confirmedActivity)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                Text("Santé: \(review.healthKitSyncState)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(review.changedByUser ? .orange : .secondary)
+            }
             if let build = summary.buildSHA { Text("Build \(build)").font(.caption2.monospaced()).foregroundStyle(.secondary) }
             if let algorithm = summary.algorithmVersion { Text(algorithm).font(.caption2.monospaced()).foregroundStyle(.secondary) }
         }
@@ -222,12 +256,15 @@ struct PostActivitySummaryView: View {
 
     private func loadContext() {
         let sessionID = summary.sessionID
+        review = ActivityReviewStore().load(sessionID: sessionID)
         DispatchQueue.global(qos: .userInitiated).async {
             let loadedRoute = store.loadRoute(sessionID: sessionID)
             let effortReport = effortAnalyzer.analyze(summary: summary)
+            let loadedTimeline = timelineLoader.load(sessionID: sessionID)
             DispatchQueue.main.async {
                 route = loadedRoute
                 effort = effortReport
+                timeline = loadedTimeline
                 if !loadedRoute.isEmpty {
                     cameraPosition = .region(region(for: loadedRoute))
                 }
@@ -282,6 +319,13 @@ private struct ContextValue: View {
             Text(value).font(.subheadline.weight(.bold)).monospacedDigit()
             Text(label).font(.caption2).foregroundStyle(.secondary)
         }
+    }
+}
+
+private extension Array where Element == Double {
+    var average: Double? {
+        guard !isEmpty else { return nil }
+        return reduce(0, +) / Double(count)
     }
 }
 

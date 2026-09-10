@@ -12,20 +12,22 @@ private struct PhoneRecentActivityDigest: Codable {
 }
 
 final class PhoneRecentHistoryBridge {
+    private let reviewStore = ActivityReviewStore()
+
     func publish(summaries: [TrackerSummary]) {
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         guard session.activationState == .activated else { return }
 
-        let digests = summaries.prefix(8).map {
+        let digests = summaries.prefix(8).map { summary in
             PhoneRecentActivityDigest(
-                sessionID: $0.sessionID,
-                activity: $0.activity,
-                startedAt: $0.startedAt.timeIntervalSince1970,
-                duration: $0.duration,
-                distanceMeters: $0.distanceMeters,
-                activeEnergyKcal: $0.activeEnergyKcal,
-                elevationGainMeters: $0.elevationGainMeters
+                sessionID: summary.sessionID,
+                activity: reviewStore.effectiveActivity(for: summary),
+                startedAt: summary.startedAt.timeIntervalSince1970,
+                duration: summary.duration,
+                distanceMeters: summary.distanceMeters,
+                activeEnergyKcal: summary.activeEnergyKcal,
+                elevationGainMeters: summary.elevationGainMeters
             )
         }
         guard let data = try? JSONEncoder().encode(digests) else { return }

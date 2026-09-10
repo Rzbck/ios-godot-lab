@@ -1288,9 +1288,60 @@ final class SensorModel: NSObject, ObservableObject {
     }
 
     private func handlePreferences(_ payload: [String: Any]) {
-        guard !running, let enabled = payload["auto_pause_enabled"] as? Bool else { return }
-        autoPauseEnabled = enabled
-        defaults.set(enabled, forKey: "tracker.autoPauseEnabled")
+        guard !running else { return }
+
+        if let enabled = payload["auto_pause_enabled"] as? Bool {
+            autoPauseEnabled = enabled
+            defaults.set(enabled, forKey: "tracker.autoPauseEnabled")
+        }
+
+        func number(_ key: String) -> Double? {
+            if let value = payload[key] as? Double { return value }
+            if let value = payload[key] as? NSNumber { return value.doubleValue }
+            return nil
+        }
+
+        func applyProfile(
+            _ profile: String,
+            enabledKey: String,
+            pauseKey: String,
+            resumeKey: String
+        ) {
+            if let value = payload["auto_pause_\(profile)_enabled"] as? Bool {
+                defaults.set(value, forKey: enabledKey)
+            }
+            if let value = number("auto_pause_\(profile)_pause_dwell") {
+                defaults.set(max(1, value), forKey: pauseKey)
+            }
+            if let value = number("auto_pause_\(profile)_resume_dwell") {
+                defaults.set(max(1, value), forKey: resumeKey)
+            }
+        }
+
+        applyProfile(
+            "walking",
+            enabledKey: WatchAutoPauseSettings.walkEnabledKey,
+            pauseKey: WatchAutoPauseSettings.walkPauseDwellKey,
+            resumeKey: WatchAutoPauseSettings.walkResumeDwellKey
+        )
+        applyProfile(
+            "hiking",
+            enabledKey: WatchAutoPauseSettings.hikeEnabledKey,
+            pauseKey: WatchAutoPauseSettings.hikePauseDwellKey,
+            resumeKey: WatchAutoPauseSettings.hikeResumeDwellKey
+        )
+        applyProfile(
+            "running",
+            enabledKey: WatchAutoPauseSettings.runEnabledKey,
+            pauseKey: WatchAutoPauseSettings.runPauseDwellKey,
+            resumeKey: WatchAutoPauseSettings.runResumeDwellKey
+        )
+        applyProfile(
+            "cycling",
+            enabledKey: WatchAutoPauseSettings.cycleEnabledKey,
+            pauseKey: WatchAutoPauseSettings.cyclePauseDwellKey,
+            resumeKey: WatchAutoPauseSettings.cycleResumeDwellKey
+        )
     }
 
     private func applyPurgeIfNeeded(_ purgeID: String) {

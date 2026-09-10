@@ -1,4 +1,5 @@
 import SwiftUI
+import WatchConnectivity
 
 enum WatchAutoPauseSettings {
     static let walkEnabledKey = "tracker.autoPause.walk.enabled"
@@ -17,15 +18,27 @@ enum WatchAutoPauseSettings {
     static let cycleResumeDwellKey = "tracker.autoPause.cycle.resumeDwell"
 
     static func isEnabled(for activity: ActivityKind, defaults: UserDefaults = .standard) -> Bool {
-        bool(defaults, key: enabledKey(for: activity), fallback: true)
+        if let remote = remoteBool("auto_pause_\(profileID(for: activity))_enabled") { return remote }
+        return bool(defaults, key: enabledKey(for: activity), fallback: true)
     }
 
     static func pauseDwell(for activity: ActivityKind, defaults: UserDefaults = .standard) -> TimeInterval {
-        value(defaults, key: pauseKey(for: activity), fallback: defaultPauseDwell(for: activity))
+        if let remote = remoteDouble("auto_pause_\(profileID(for: activity))_pause_dwell") { return max(1, remote) }
+        return value(defaults, key: pauseKey(for: activity), fallback: defaultPauseDwell(for: activity))
     }
 
     static func resumeDwell(for activity: ActivityKind, defaults: UserDefaults = .standard) -> TimeInterval {
-        value(defaults, key: resumeKey(for: activity), fallback: defaultResumeDwell(for: activity))
+        if let remote = remoteDouble("auto_pause_\(profileID(for: activity))_resume_dwell") { return max(1, remote) }
+        return value(defaults, key: resumeKey(for: activity), fallback: defaultResumeDwell(for: activity))
+    }
+
+    private static func profileID(for activity: ActivityKind) -> String {
+        switch activity {
+        case .hiking: return "hiking"
+        case .running, .trackAndField: return "running"
+        case .cycling, .handCycling: return "cycling"
+        default: return "walking"
+        }
     }
 
     private static func enabledKey(for activity: ActivityKind) -> String {
@@ -70,6 +83,22 @@ enum WatchAutoPauseSettings {
         case .hiking: return 5
         default: return 4
         }
+    }
+
+    private static func remoteBool(_ key: String) -> Bool? {
+        guard WCSession.isSupported() else { return nil }
+        let context = WCSession.default.receivedApplicationContext
+        guard context["type"] as? String == "tracker_preferences_v4" else { return nil }
+        return context[key] as? Bool
+    }
+
+    private static func remoteDouble(_ key: String) -> Double? {
+        guard WCSession.isSupported() else { return nil }
+        let context = WCSession.default.receivedApplicationContext
+        guard context["type"] as? String == "tracker_preferences_v4" else { return nil }
+        if let value = context[key] as? Double { return value }
+        if let value = context[key] as? NSNumber { return value.doubleValue }
+        return nil
     }
 
     private static func bool(_ defaults: UserDefaults, key: String, fallback: Bool) -> Bool {

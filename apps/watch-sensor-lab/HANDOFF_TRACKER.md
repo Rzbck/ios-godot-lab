@@ -27,9 +27,16 @@ Read all three before changing tracker behavior. Every requirement moves through
 - repository: `Rzbck/ios-godot-lab`
 - application: `apps/watch-sensor-lab`
 - v0.4 branch: `feat/watch-sensor-v040-20260910`
-- v0.4 first CI-validated code SHA: `b8702027f2546189326e747e8c842177120c303c`
-- v0.4 CI run: `34464673739` — SUCCESS
-- current branch HEAD after scope/HANDOFF documentation commits: verify from Git before work; docs commits are not new physical validation.
+- first v0.4 CI-validated code SHA: `b8702027f2546189326e747e8c842177120c303c`
+- first v0.4 CI run: `34464673739` — SUCCESS
+- summary/segments/Health-context code SHA: `89e04aa508e978a21627a98cccc4a21e99f64278`
+- CI run: `34467626579` — SUCCESS
+- artifact id: `10148264237`
+- Watch recent-history code SHA: `af38d7c7fc90f44873bdd4bf00e79960bd2c821c`
+- CI run: `34468156004` — SUCCESS
+- artifact id: `10148457809`
+- artifact digest: `sha256:d2140e14b0750f1d606240adc0b96e8b0cce481e21c800c917b4e4a46a45f992`
+- current branch HEAD may be later docs-only commits; verify branch before new code work and keep the exact tested code SHA distinct from docs-only HEAD.
 - old Windows worktree still belongs to the earlier tracker branch unless explicitly changed: `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-tracker-recorder`
 - a dedicated local v0.4 worktree has NOT yet been confirmed from Windows in this chat. Create/verify one before local code edits or exact-SHA sync; do not assume the old worktree switched branches.
 
@@ -72,52 +79,69 @@ Key measured results from `1789026745407`:
 
 All user UI/product feedback and acceptance criteria are enumerated in `V040_SCOPE.md`; that file is the completion contract.
 
-## v0.4 code already CI-validated at `b8702027...`
+## v0.4 implementation state
 
-The first v0.4 implementation batch compiled and packaged successfully on exact SHA `b8702027...` in run `34464673739`.
+### First CI-validated slice — `b8702027...`
 
-Implemented foundations include:
+Implemented and compiled/packaged:
 
-- richer backward-compatible session summaries/history schema with build/algorithm identity;
-- iPhone activity history + detail route view;
-- weather context model and coarse outdoor snapshots including temperature, apparent temperature, humidity, pressure, wind speed/direction/gusts and provider provenance;
-- Open-Meteo provider for now to avoid adding an unvalidated WeatherKit entitlement to the signing pipeline;
-- compact iPhone UI with redundant Watch badge removed from the map header;
-- horizontal live metric ribbon on iPhone;
-- live calories, cadence and steps surfaces;
-- startup acquisition gating/placeholders;
-- horizontal Watch effort metrics page nested inside the existing vertical workout navigation;
+- richer backward-compatible session/history schema with build/algorithm identity;
+- iPhone activity history + route detail;
+- weather snapshots including temperature/apparent temperature/humidity/pressure/wind speed/direction/gusts/provider;
+- Open-Meteo provider abstraction; WeatherKit entitlement intentionally not introduced yet;
+- compact iPhone UI; redundant Watch map badge removed;
+- horizontal iPhone metrics ribbon;
+- live calories, cadence, steps;
+- startup acquisition placeholders;
+- horizontal Watch effort page inside vertical workout navigation;
 - sport-aware GPS plausibility filtering;
-- Watch barometric relative-altitude accumulation via `CMAltimeter`, GPS fallback;
-- Watch gyro pipeline preferring `CMDeviceMotion.rotationRate` with raw gyro fallback and source logging;
-- lightweight event logging and Watch GPS sample forwarding for later comparisons;
-- optional Watch-owned auto-pause foundation with sport-dependent delay and manual/auto distinction;
-- conservative Auto Walk/Run/Cycle remains;
-- triathlon `swimBikeRun` foundation with manual swim -> transition -> bike -> transition -> run progression.
+- Watch `CMAltimeter` elevation with GPS fallback;
+- Watch gyro via `CMDeviceMotion.rotationRate`, raw gyro fallback, source logging;
+- event logging + Watch GPS sample forwarding;
+- optional Watch-owned auto-pause foundation;
+- conservative Auto Walk/Run/Cycle;
+- manual HealthKit triathlon foundation with swim/transition/bike/transition/run.
 
-These are **CI_VALIDATED only**, not physically validated. Refer to `V040_SCOPE.md` for items that remain partial despite the foundation.
+### Second CI-validated slice — `89e04aa...`
+
+Implemented and compiled/packaged:
+
+- persistent segment summaries derived from durable Auto/multisport events at session finish;
+- automatic just-finished summary presentation after STOP;
+- summary includes route, core metrics, segments, weather/environment effort context and technical trace;
+- HealthKit contextual reader for walking speed, step length, asymmetry, double support, Walking Steadiness, HR max/recovery, running speed/power/stride/ground-contact/vertical-oscillation and respiratory context where Apple has samples;
+- environmental analyzer computes descriptive average conditions and route-heading vs wind-direction headwind/tailwind component.
+
+The initial attempt at this slice (`505d9a467474864d5891b8de6875aa18084b37a6`, run `34467348676`) failed only because the `HealthContextReader.add` helper declared `detail` unlabeled while calls used `detail:`. This was corrected at `89e04aa...`; the corrected exact-SHA run is SUCCESS. Preserve this CI history rather than claiming the failed SHA was validated.
+
+### Third CI-validated slice — `af38d7c7...`
+
+Implemented and compiled/packaged:
+
+- iPhone publishes compact digests for up to 8 recent activities to Watch through queued WatchConnectivity user info;
+- Watch persists the received digests locally;
+- Watch ready screen exposes `Activités récentes`;
+- recent entries show activity/date/duration/distance/calories/D+.
+
+Everything above is **CI_VALIDATED only**, not physically validated. `V040_SCOPE.md` remains authoritative for partial/remaining acceptance criteria.
 
 ## Important remaining work — do not lose
 
 The complete list is `V040_SCOPE.md`. Major unfinished categories include:
 
-- dynamic Auto HealthKit/multi-segment correctness when the detected sport changes after session start;
-- hardware validation of speed filter, barometric D+/D-, gyro, cadence, weather, auto-pause and UI;
+- dynamic Auto HealthKit correctness when sport changes after session start;
+- guarantee segment-event persistence across Watch/iPhone disconnection and add richer per-segment metrics;
+- hardware validation of speed filter, D+/D-, gyro, cadence, weather, auto-pause, history sync and UI;
 - actual Health/Fitness workout type/route/deletion validation;
 - deliberate Walk -> Run -> Walk and Cycle Auto tests;
-- proper immediate post-STOP summary polish;
-- recent history on Watch;
-- gait/asymmetry/step-length/double-support contextual HealthKit metrics where available;
-- respiration handling without fabricating a live Apple respiratory stream;
-- richer HR/running metrics and zones;
-- environmental effort interpretation including headwind/tailwind correlation;
+- pause totals/events and HR/pace/speed zones in finished summaries;
 - activity-specific auto-pause settings/tuning;
-- hiking inference;
-- persisted first-class segment model;
+- hiking inference + Auto confidence/provenance UI;
 - automatic triathlon transitions;
 - general mixed outing master session, e.g. bike -> walk -> run -> bike;
 - automatic mixed-sport transitions;
-- splits, haptic alerts, rolling pace, exports, comparisons and sensor-quality indicators.
+- splits, haptic alerts, rolling pace, exports, comparisons and sensor-quality indicators;
+- respiration remains contextual Health data unless an experimental workout-time estimator is explicitly built/labeled/validated.
 
 Do not call v0.4 finished until mandatory `V040-001` through `V040-034` meet the completion rule in `V040_SCOPE.md`.
 
@@ -136,7 +160,7 @@ Do not call v0.4 finished until mandatory `V040-001` through `V040-034` meet the
 
 Environmental conditions are first-class activity context because the same pace/HR can represent different effort under heat/cold/headwind.
 
-Current v0.4 storage captures temperature, apparent temperature, humidity, pressure, wind speed, wind direction, gusts, condition code, timestamp, location and provider. Future analysis should correlate route heading with wind direction to distinguish headwind/tailwind when evidence is sufficient.
+Current v0.4 storage captures temperature, apparent temperature, humidity, pressure, wind speed, wind direction, gusts, condition code, timestamp, location and provider. Post-session analysis now derives a descriptive headwind/tailwind component from route heading and meteorological wind direction when enough data exists.
 
 Never treat Apple Watch wrist temperature as ambient temperature.
 
@@ -148,6 +172,7 @@ WeatherKit remains a possible future provider, but do not add its entitlement un
 - Dynamic mixed Auto requires correct segment semantics; current v0.4 foundation is still partial.
 - Triathlon should use HealthKit `.swimBikeRun` with swim/bike/run sub-activities and transition activities.
 - General mixed outings such as bike -> walk -> run may need one Watch Tracker master session mapped to semantically correct HealthKit object(s), rather than pretending HealthKit supports arbitrary sub-activity combinations inside one triathlon workout.
+- Session segment summaries now exist, but reliable segment event delivery across disconnection is not yet proven/finished.
 
 ## Exact-SHA build/install workflow
 
@@ -170,16 +195,16 @@ Never conflate:
 - Watch launched;
 - physical behavior validated.
 
-The first v0.4 CI proves only build/package success. Every relevant feature still needs real hardware confirmation and the ledger must be updated after each test.
+No v0.4 behavior has been physically validated yet. Every relevant feature still needs real hardware confirmation and the ledger must be updated after each test.
 
 ## Next exact development step
 
-1. verify remote v0.4 branch HEAD and create/verify a dedicated local Windows v0.4 worktree before local edits;
-2. continue the mandatory ledger in `V040_SCOPE.md`, starting with unfinished correctness/segment semantics rather than cosmetic extras;
+1. verify remote v0.4 branch HEAD; docs commits may be ahead of the last exact code artifact;
+2. continue mandatory `V040_SCOPE.md` items, prioritizing Auto/multisport semantic correctness, segment reliability, activity-specific auto-pause, hiking/confidence and summary analytics before cosmetic extras;
 3. keep exact-SHA CI green after each coherent slice;
-4. when a candidate is sufficiently complete, exact-SHA sync/install through the existing script+iLoader chain;
-5. install as an upgrade, verify the baseline historical activity remains visible, then run focused hardware tests for speed/D+/gyro/cadence/weather/auto-pause/HealthKit route+delete/Auto transitions;
-6. extract the new session corpus and compare it quantitatively to `1789026745407`;
+4. before first v0.4 physical test, create/verify a dedicated Windows v0.4 worktree and preserve the existing exact-SHA sync+iLoader path;
+5. install v0.4 as an upgrade, first verify baseline history survives, then run focused speed/D+/gyro/cadence/weather/auto-pause/history/HealthKit/Auto tests;
+6. extract the new session corpus and compare quantitatively to `1789026745407`;
 7. advance `V040_SCOPE.md` statuses only from evidence.
 
 ## Do not modify

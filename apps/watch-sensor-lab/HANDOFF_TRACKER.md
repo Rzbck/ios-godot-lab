@@ -1,168 +1,192 @@
-# HANDOFF — Watch Tracker native product
+# HANDOFF — Watch Tracker v0.4
 
 Date: 2026-09-10
 
 ## Objective
 
-Continue the real native iPhone + Apple Watch tracker as one shared session with Watch authority during an active workout. The next phase is no longer basic bring-up: it is data correctness, richer metrics, history, auto-pause and multisport, while preserving the exact-SHA deployment pipeline and the first real field-test corpus.
+Continue Watch Tracker as one native iPhone + Apple Watch activity-tracking product with the Watch as the single live workout authority. v0.4 is the post-field-test quality/product version: metric correctness, diagnostics, richer live data, weather/environment context, history, auto-pause, improved Auto and multisport.
 
-Detailed field-test findings and the evolving product backlog are in:
+The user explicitly requires that **all field-test feedback be tracked and implemented**, unless a real Apple/platform/hardware limitation is demonstrated. Do not silently drop requirements.
+
+Authoritative requirement/status ledger:
+
+`apps/watch-sensor-lab/V040_SCOPE.md`
+
+Detailed baseline field findings:
 
 `apps/watch-sensor-lab/FIELD_TEST_2026-09-10.md`
 
-Read that file before changing tracker behavior. Update TODO -> IMPLEMENTED -> CI_VALIDATED -> PHYSICALLY_VALIDATED explicitly.
+Capability/product research:
 
-## Repository / worktree / branch
+`apps/watch-sensor-lab/RESEARCH_TRACKING_2026-09-10.md`
+
+Read all three before changing tracker behavior. Every requirement moves through `TODO -> IMPLEMENTED -> CI_VALIDATED -> PHYSICALLY_VALIDATED`; partial foundations stay marked `PARTIAL` until their acceptance criterion is met.
+
+## Repository / branches / worktrees
 
 - repository: `Rzbck/ios-godot-lab`
 - application: `apps/watch-sensor-lab`
-- branch: `feat/watch-sensor-tracker-recorder-20260909`
-- Windows worktree: `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-tracker-recorder`
-- physically tested application SHA: `1bbd803f491651acb9f4ccb0b2518c4f71d5c55e`
-- application version: `0.3.1 (4)`
-- CI run for tested SHA: `34451272790` — SUCCESS
-- CI artifact id: `10141689980`
-- exact IPA SHA-256: `8a8478b7b9ead0afdec7ad17dc3105f41d8e220ca39266ceb75ba9fa9fd6d4b6`
-- exact IPA path: `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\1bbd803f4916\WatchSensorLab-companion-unsigned-1bbd803f4916.ipa`
+- v0.4 branch: `feat/watch-sensor-v040-20260910`
+- v0.4 first CI-validated code SHA: `b8702027f2546189326e747e8c842177120c303c`
+- v0.4 CI run: `34464673739` — SUCCESS
+- current branch HEAD after scope/HANDOFF documentation commits: verify from Git before work; docs commits are not new physical validation.
+- old Windows worktree still belongs to the earlier tracker branch unless explicitly changed: `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-tracker-recorder`
+- a dedicated local v0.4 worktree has NOT yet been confirmed from Windows in this chat. Create/verify one before local code edits or exact-SHA sync; do not assume the old worktree switched branches.
 
-Important: docs commits were added after the physically tested application SHA. Re-fetch branch and verify actual HEAD/status before code changes. Do not treat a docs-only HEAD as a new physically tested build.
+## Immutable physical baseline
 
-## Current architecture
+Physically tested application build:
 
-### Shared session
+- branch at time of test: `feat/watch-sensor-tracker-recorder-20260909`
+- SHA: `1bbd803f491651acb9f4ccb0b2518c4f71d5c55e`
+- version: `0.3.1 (4)`
+- CI run: `34451272790` — SUCCESS
+- artifact id: `10141689980`
+- exact downloaded IPA: `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\1bbd803f4916\WatchSensorLab-companion-unsigned-1bbd803f4916.ipa`
+- IPA SHA-256: `8a8478b7b9ead0afdec7ad17dc3105f41d8e220ca39266ceb75ba9fa9fd6d4b6`
+- installed iPhone bundle observed after iLoader signing: `com.rzbck.watchsensorlab.59858TV9N2`
 
-- Watch is the single authority while an Apple Watch workout is active.
-- iPhone sends requests; Watch applies state, increments authority revision and broadcasts authoritative state.
-- HealthKit workout mirroring is used for Watch/iPhone workout coordination.
-- WatchConnectivity provides bootstrap/durable context/fallback and raw sample transport.
-- stale authority/control state is rejected by revision/session sentinels.
-- START / PAUSE / RESUME / STOP can be initiated from either side and should converge to one session.
+User completed a real outdoor walk successfully and manually used Pause. Preserve this as the before-v0.4 reference.
 
-### iPhone
+Extracted corpus:
 
-- native SwiftUI + MapKit product UI;
-- background Core Location route recording;
-- Live Activity for Lock Screen / Dynamic Island;
-- local durable session store under `Documents/Sessions/<session_id>/samples.jsonl` + `summary.json`;
-- Watch HR/energy/motion ingestion;
-- app-local purge command synchronized to Watch.
-
-### Watch
-
-- `HKWorkoutSession` + `HKLiveWorkoutBuilder` + `HKLiveWorkoutDataSource`;
-- HealthKit workout saving enabled in `0.3.1 (4)`;
-- `HKWorkoutRouteBuilder` route saving;
-- Watch GPS, HR, active energy and motion;
-- Auto currently conservatively classifies only Walk / Run / Cycle with 8-second stability and rejects low confidence;
-- broad manual `HKWorkoutActivityType` catalog;
-- `WKBackgroundModes`: workout processing + location.
-
-## First real long field test — physically observed
-
-The user completed a real outdoor walk on `1bbd803f...` and reports that the overall activity went well. Manual Pause was used during the outing.
-
-Extracted field corpus is preserved on PC:
-
-- `E:\_Project\IOS APP\_Analysis\watch-sensor-lab\walk-20260910-111806`
-- `E:\_Project\IOS APP\_Analysis\watch-sensor-lab\walk-20260910-111806.zip`
+- root: `E:\_Project\IOS APP\_Analysis\watch-sensor-lab\walk-20260910-111806`
+- ZIP: `E:\_Project\IOS APP\_Analysis\watch-sensor-lab\walk-20260910-111806.zip`
 - main session: `1789026745407`
 - short pre-walk session: `1789026601777`
 
-Do not delete this baseline corpus. It is the regression reference for algorithm/UI evolution.
+Do not delete/rewrite this corpus. Normal upgrades must preserve historical activities.
 
-Main measured results are recorded in `FIELD_TEST_2026-09-10.md`. Key points:
+## Baseline field findings
 
-- long session logging completed without JSON corruption;
-- active duration ~58m33s inside ~1h09m29s wall time, consistent with user manual pauses;
-- Watch-authoritative distance ~5.798 km, iPhone integrated distance ~5.931 km (~2.29% difference);
-- Auto stayed Walking for the full walking test with no false Run/Cycle switch;
-- Watch->iPhone motion stream was ~4.89 samples/s against a 5 Hz target with one notable ~14 s gap;
-- iPhone GPS quality was generally good (median horizontal accuracy ~5.1 m);
-- HR stream was present and functional;
-- data analysis exposed objective defects listed below.
+Key measured results from `1789026745407`:
 
-## Current high-priority defects / next-version scope
+- wall span ~1h09m29s; active duration ~58m33s; ~10m56s excluded/paused;
+- Watch-authoritative distance ~5.798 km;
+- iPhone integrated GPS distance ~5.931 km; delta ~2.29%;
+- Auto remained Walking for the whole walk with no false Run/Cycle switch;
+- Watch->iPhone motion ~4.89 samples/s with one notable ~14 s gap;
+- iPhone GPS median horizontal accuracy ~5.1 m;
+- HR functional;
+- objective defects: ~30.2 km/h false max-speed summary, D+/D- too noise-sensitive, all logged gyro values zero, Auto HealthKit type semantics wrong for a dynamic Auto session.
 
-Full checklist is in `FIELD_TEST_2026-09-10.md`. Do not lose these items:
+All user UI/product feedback and acceptance criteria are enumerated in `V040_SCOPE.md`; that file is the completion contract.
 
-1. Fix Auto HealthKit semantics: `automatic` currently creates a `.mixedCardio` workout even when effective activity is Walking.
-2. Remove implausible Watch GPS/speed outliers; field summary reported ~30.2 km/h max during a walk.
-3. Make elevation gain/loss robust; current accumulation is too sensitive to vertical GPS noise.
-4. Diagnose gyroscope: all logged gyro axes were zero in the field corpus while accelerometer was valid.
-5. Add bounded event logging for START/PAUSE/RESUME/STOP, authority revision, selection revision, Auto transitions, transport/reconnect and errors.
-6. Log enough Watch GPS evidence to compare Watch and iPhone routes quantitatively.
-7. Physically verify saved Health/Fitness workout type, HealthKit route and deletion of only Watch Tracker-created workout/route objects.
-8. Perform deliberate Auto transition tests: Walk -> Run -> Walk, then Cycle.
-9. Fix iPhone map being obscured by the redundant top-right Watch badge; compact GPS/Watch/Health status row.
-10. Show live active calories on both iPhone and Watch.
-11. Explore an additional horizontal Watch metric-page interaction while preserving glanceability and simple controls.
-12. Research/implement feasible richer metrics: respiration-related data, gait/asymmetry/balance, cadence/step metrics, richer HR, barometric elevation and environmental context.
-13. Add post-activity summary + persistent activity history on iPhone and useful recent-history access on Watch.
-14. Preserve historical sessions across app upgrades; include schema/app/build/algorithm identity per session.
-15. Add reliable weather/ambient-temperature context with provenance; never confuse wrist temperature with outdoor temperature.
-16. Fix startup display jitter by gating/smoothing values and exposing acquisition state.
-17. Add optional configurable activity-specific auto-pause with hysteresis and manual-control precedence.
-18. Expand Auto conservatively, including hiking inference only if evidence supports it.
-19. Design first-class multisport segments. Target triathlon swim -> bike -> run and general bike -> walk -> run outings in one coherent session, with manual transitions as reliable baseline and automatic transitions only when confidence is strong.
+## v0.4 code already CI-validated at `b8702027...`
 
-## HealthKit delete behavior
+The first v0.4 implementation batch compiled and packaged successfully on exact SHA `b8702027...` in run `34464673739`.
 
-Current Watch code tags app-created HealthKit workout/route objects with private metadata and deletes matching route objects then matching workout objects during synchronized purge. This compiled in CI but deletion has NOT yet been physically validated. Do not claim it works until the user confirms in Health/Fitness.
+Implemented foundations include:
 
-## Exact-SHA sync / deployment workflow — preserve
+- richer backward-compatible session summaries/history schema with build/algorithm identity;
+- iPhone activity history + detail route view;
+- weather context model and coarse outdoor snapshots including temperature, apparent temperature, humidity, pressure, wind speed/direction/gusts and provider provenance;
+- Open-Meteo provider for now to avoid adding an unvalidated WeatherKit entitlement to the signing pipeline;
+- compact iPhone UI with redundant Watch badge removed from the map header;
+- horizontal live metric ribbon on iPhone;
+- live calories, cadence and steps surfaces;
+- startup acquisition gating/placeholders;
+- horizontal Watch effort metrics page nested inside the existing vertical workout navigation;
+- sport-aware GPS plausibility filtering;
+- Watch barometric relative-altitude accumulation via `CMAltimeter`, GPS fallback;
+- Watch gyro pipeline preferring `CMDeviceMotion.rotationRate` with raw gyro fallback and source logging;
+- lightweight event logging and Watch GPS sample forwarding for later comparisons;
+- optional Watch-owned auto-pause foundation with sport-dependent delay and manual/auto distinction;
+- conservative Auto Walk/Run/Cycle remains;
+- triathlon `swimBikeRun` foundation with manual swim -> transition -> bike -> transition -> run progression.
 
-Use existing script, do not invent a parallel downloader:
+These are **CI_VALIDATED only**, not physically validated. Refer to `V040_SCOPE.md` for items that remain partial despite the foundation.
 
-```powershell
-& {
-    $ErrorActionPreference = 'Stop'
+## Important remaining work — do not lose
 
-    Set-Location 'E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-tracker-recorder'
+The complete list is `V040_SCOPE.md`. Major unfinished categories include:
 
-    .\apps\watch-sensor-lab\UPDATE_WATCH_SENSOR_LAB.ps1 `
-        -ExpectedBranch 'feat/watch-sensor-tracker-recorder-20260909' `
-        -NoAutoBuild `
-        -OpenFolder
-}
-```
+- dynamic Auto HealthKit/multi-segment correctness when the detected sport changes after session start;
+- hardware validation of speed filter, barometric D+/D-, gyro, cadence, weather, auto-pause and UI;
+- actual Health/Fitness workout type/route/deletion validation;
+- deliberate Walk -> Run -> Walk and Cycle Auto tests;
+- proper immediate post-STOP summary polish;
+- recent history on Watch;
+- gait/asymmetry/step-length/double-support contextual HealthKit metrics where available;
+- respiration handling without fabricating a live Apple respiratory stream;
+- richer HR/running metrics and zones;
+- environmental effort interpretation including headwind/tailwind correlation;
+- activity-specific auto-pause settings/tuning;
+- hiking inference;
+- persisted first-class segment model;
+- automatic triathlon transitions;
+- general mixed outing master session, e.g. bike -> walk -> run -> bike;
+- automatic mixed-sport transitions;
+- splits, haptic alerts, rolling pace, exports, comparisons and sensor-quality indicators.
 
-The exact-SHA artifact then goes through the already validated iLoader/isideload Watch companion install path. Keep artifact/generated/install/physical-validation states distinct.
+Do not call v0.4 finished until mandatory `V040-001` through `V040-034` meet the completion rule in `V040_SCOPE.md`.
 
-Observed installed iPhone bundle after iLoader signing for the tested build was `com.rzbck.watchsensorlab.59858TV9N2`; do not assume the suffix for every future install without querying the device.
+## Architecture constraints
 
-## Tooling to preserve
+- Watch remains the single active-workout authority.
+- iPhone sends requests; Watch applies state/revisions and broadcasts authoritative state.
+- HealthKit workout mirroring coordinates Watch/iPhone workout state.
+- WatchConnectivity remains bootstrap/durable-context/fallback/sample transport.
+- Keep revision/session stale rejection.
+- Never introduce independent competing workout state on iPhone.
+- Preserve distinction between raw sensor value, accepted/filtered metric and displayed metric.
+- Preserve provenance for Watch GPS, iPhone GPS, HealthKit, Core Motion and external weather.
 
-Do not modify iLoader/isideload transport/provisioning unless a concrete signing/install problem requires it. The Watch companion/HealthKit install path is already validated. Do not touch `main` or `iphone-lab-v2`.
+## Weather principle
 
-## Current validation boundary
+Environmental conditions are first-class activity context because the same pace/HR can represent different effort under heat/cold/headwind.
 
-Physically validated on the long field outing:
+Current v0.4 storage captures temperature, apparent temperature, humidity, pressure, wind speed, wind direction, gusts, condition code, timestamp, location and provider. Future analysis should correlate route heading with wind direction to distinguish headwind/tailwind when evidence is sufficient.
 
-- app installed/launched on real iPhone + Apple Watch;
-- long shared activity completed;
-- user manually paused during activity;
-- local iPhone session data survived and was extracted after the walk;
-- GPS/HR/motion data streams exist in the extracted corpus;
-- Auto did not falsely leave Walking during this walking test.
+Never treat Apple Watch wrist temperature as ambient temperature.
 
-Not yet physically validated / not yet proven from this corpus:
+WeatherKit remains a possible future provider, but do not add its entitlement until the existing iLoader/isideload signing/provisioning path is explicitly validated for that capability. The session storage is provider-agnostic so the provider can be swapped later.
 
-- correct Health/Fitness activity type for Auto (known code issue: Mixed Cardio semantics);
-- HealthKit route appearance/quality in Health/Fitness;
-- deletion of app-created HealthKit workout + route;
-- Run/Cycle Auto transitions;
-- gyro functionality;
-- trustworthy max speed / elevation gain;
-- richer gait/respiration/environmental metrics;
-- auto-pause;
-- multisport.
+## HealthKit / multisport principle
 
-## Next exact step
+- Auto must not save a knowingly false `.mixedCardio` workout for a simple detected walk/run/ride.
+- Dynamic mixed Auto requires correct segment semantics; current v0.4 foundation is still partial.
+- Triathlon should use HealthKit `.swimBikeRun` with swim/bike/run sub-activities and transition activities.
+- General mixed outings such as bike -> walk -> run may need one Watch Tracker master session mapped to semantically correct HealthKit object(s), rather than pretending HealthKit supports arbitrary sub-activity combinations inside one triathlon workout.
 
-Before implementing the next version:
+## Exact-SHA build/install workflow
 
-1. read `FIELD_TEST_2026-09-10.md`;
-2. verify worktree clean/current branch/actual HEAD after the docs commits;
-3. use the preserved field session as the regression baseline;
-4. research current Apple capabilities for the requested richer metrics/multisport/background behavior;
-5. implement the next version in prioritized slices, keeping field-test status updated after every CI/hardware milestone.
+Preserve the existing workflow `.github/workflows/watch-sensor-lab-bootstrap.yml`; v0.4 branch support was added instead of creating a second pipeline.
+
+The existing exact-SHA PowerShell/iLoader flow must be reused. Before local sync, first create/verify the correct v0.4 worktree and update `UPDATE_WATCH_SENSOR_LAB.ps1` parameters only if needed for the new branch; do not silently run the old `ExpectedBranch` value against the v0.4 branch.
+
+Do not modify iLoader/isideload unless a concrete signing/install failure proves it necessary.
+
+## Validation rules
+
+Never conflate:
+
+- Swift/Xcode compile;
+- CI SUCCESS;
+- IPA packaged;
+- exact IPA downloaded;
+- iLoader signed/installed;
+- iPhone launched;
+- Watch launched;
+- physical behavior validated.
+
+The first v0.4 CI proves only build/package success. Every relevant feature still needs real hardware confirmation and the ledger must be updated after each test.
+
+## Next exact development step
+
+1. verify remote v0.4 branch HEAD and create/verify a dedicated local Windows v0.4 worktree before local edits;
+2. continue the mandatory ledger in `V040_SCOPE.md`, starting with unfinished correctness/segment semantics rather than cosmetic extras;
+3. keep exact-SHA CI green after each coherent slice;
+4. when a candidate is sufficiently complete, exact-SHA sync/install through the existing script+iLoader chain;
+5. install as an upgrade, verify the baseline historical activity remains visible, then run focused hardware tests for speed/D+/gyro/cadence/weather/auto-pause/HealthKit route+delete/Auto transitions;
+6. extract the new session corpus and compare it quantitatively to `1789026745407`;
+7. advance `V040_SCOPE.md` statuses only from evidence.
+
+## Do not modify
+
+- `main`;
+- `iphone-lab-v2`;
+- baseline corpus files;
+- validated iLoader/isideload transport/provisioning without a concrete failure;
+- Watch bundle identity/companion relationship without a proven packaging reason;
+- historical activities during normal upgrade testing.

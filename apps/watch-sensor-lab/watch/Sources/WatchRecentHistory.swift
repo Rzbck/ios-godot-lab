@@ -17,32 +17,80 @@ struct WatchRecentActivityDigest: Codable, Identifiable, Equatable {
     var activityKind: ActivityKind? { ActivityKind(rawValue: activity) }
 }
 
+struct WatchHistoryWindowStats: Codable, Equatable {
+    let count: Int
+    let duration: TimeInterval
+    let distanceMeters: Double
+
+    static let zero = WatchHistoryWindowStats(count: 0, duration: 0, distanceMeters: 0)
+}
+
+private struct WatchRecentHistoryEnvelope: Codable {
+    let activities: [WatchRecentActivityDigest]
+    let sevenDays: WatchHistoryWindowStats
+    let twentyEightDays: WatchHistoryWindowStats
+}
+
 final class WatchRecentHistoryStore: ObservableObject {
     static let shared = WatchRecentHistoryStore()
 
     @Published private(set) var activities: [WatchRecentActivityDigest] = []
+    @Published private(set) var sevenDays: WatchHistoryWindowStats = .zero
+    @Published private(set) var twentyEightDays: WatchHistoryWindowStats = .zero
 
-    private let defaultsKey = "tracker.recentHistoryV4"
+    private let defaultsKey = "tracker.recentHistoryV5"
+    private let legacyDefaultsKey = "tracker.recentHistoryV4"
 
     private init() {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
-              let decoded = try? JSONDecoder().decode([WatchRecentActivityDigest].self, from: data) else { return }
-        activities = decoded
+        if let data = UserDefaults.standard.data(forKey: defaultsKey),
+           let decoded = try? JSONDecoder().decode(WatchRecentHistoryEnvelope.self, from: data) {
+            activities = decoded.activities
+            sevenDays = decoded.sevenDays
+            twentyEightDays = decoded.twentyEightDays
+            return
+        }
+
+        if let data = UserDefaults.standard.data(forKey: legacyDefaultsKey),
+           let decoded = try? JSONDecoder().decode([WatchRecentActivityDigest].self, from: data) {
+            activities = decoded
+        }
     }
 
     @discardableResult
     func ingest(_ userInfo: [String: Any]) -> Bool {
-        guard userInfo["type"] as? String == "tracker_recent_history_v4",
-              let data = userInfo["data"] as? Data,
-              let decoded = try? JSONDecoder().decode([WatchRecentActivityDigest].self, from: data) else { return false }
+        guard let type = userInfo["type"] as? String,
+              let data = userInfo["data"] as? Data else { return false }
 
-        DispatchQueue.main.async {
-            self.activities = Array(decoded.prefix(8))
-            if let persisted = try? JSONEncoder().encode(self.activities) {
-                UserDefaults.standard.set(persisted, forKey: self.defaultsKey)
+        if type == "tracker_recent_history_v5",
+           let decoded = try? JSONDecoder().decode(WatchRecentHistoryEnvelope.self, from: data) {
+            DispatchQueue.main.async {
+                self.activities = Array(decoded.activities.prefix(16))
+                self.sevenDays = decoded.sevenDays
+                self.twentyEightDays = decoded.twentyEightDays
+                let persisted = WatchRecentHistoryEnvelope(
+                    activities: self.activities,
+                    sevenDays: self.sevenDays,
+                    twentyEightDays: self.twentyEightDays
+                )
+                if let encoded = try? JSONEncoder().encode(persisted) {
+                    UserDefaults.standard.set(encoded, forKey: self.defaultsKey)
+                }
             }
+            return true
         }
-        return true
+
+        if type == "tracker_recent_history_v4",
+           let decoded = try? JSONDecoder().decode([WatchRecentActivityDigest].self, from: data) {
+            DispatchQueue.main.async {
+                self.activities = Array(decoded.prefix(8))
+                if let persisted = try? JSONEncoder().encode(self.activities) {
+                    UserDefaults.standard.set(persisted, forKey: self.legacyDefaultsKey)
+                }
+            }
+            return true
+        }
+
+        return false
     }
 }
 
@@ -56,80 +104,97 @@ struct WatchRecentHistoryView: View {
     @ObservedObject private var history = WatchRecentHistoryStore.shared
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 9) {
-                HStack {
-                    Text("ACTIVITÉS")
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(.secondary)
-                    Spacer()
+        Group {
+            if history.activities.isEmpty {
+                VStack(spacing: 8) {
                     Image(systemName: "clock.arrow.circlepath")
-                        .foregroundStyle(.mint)
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text("Aucune activité synchronisée")
+                        .font(.caption.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                    Text("Ouvre l’app iPhone avec la Watch connectée.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
-
-                if history.activities.isEmpty {
-                    VStack(spacing: 6) {
-                        Image(systemName: "figure.walk")
-                            .font(.title2)
-                            .foregroundStyle(.secondary)
-                        Text("Aucune activité synchronisée")
-                            .font(.caption)
-                            .multilineTextAlignment(.center)
-                        Text("Ouvre l’app iPhone pour envoyer l’historique récent.")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                } else {
+                .padding(.horizontal, 8)
+            } else {
+                TabView {
                     ForEach(history.activities) { activity in
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Label(
-                                    activity.activityKind?.label ?? activity.activity,
-                                    systemImage: activity.activityKind?.symbol ?? "figure.mixed.cardio"
-                                )
-                                .font(.caption.weight(.bold))
-                                Spacer()
-                                Text(activity.date, format: .dateTime.day().month())
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            HStack(spacing: 8) {
-                                Text(formatWatchHistoryDistance(activity.distanceMeters))
-                                Text(formatWatchHistoryDuration(activity.duration))
-                                if let kcal = activity.activeEnergyKcal {
-                                    Text(String(format: "%.0f kcal", kcal))
-                                }
-                            }
-                            .font(.system(size: 10, weight: .semibold))
-                            .monospacedDigit()
-
-                            if activity.elevationGainMeters > 0 {
-                                Text(String(format: "+%.0f m D+", activity.elevationGainMeters))
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(8)
-                        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        WatchHistoryActivityPage(activity: activity)
                     }
                 }
+                .tabViewStyle(.verticalPage)
             }
-            .padding(.horizontal, 3)
         }
+        .navigationTitle("Activités")
     }
 }
 
-private func formatWatchHistoryDuration(_ seconds: TimeInterval) -> String {
+private struct WatchHistoryActivityPage: View {
+    let activity: WatchRecentActivityDigest
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: activity.activityKind?.symbol ?? "figure.mixed.cardio")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.mint)
+                Text(activity.activityKind?.label ?? activity.activity)
+                    .font(.headline.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                Spacer()
+            }
+
+            Text(activity.date, format: .dateTime.day().month().hour().minute())
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 7) {
+                watchHistoryMetric(formatWatchHistoryDistance(activity.distanceMeters), "DIST")
+                watchHistoryMetric(formatWatchHistoryDuration(activity.duration), "TEMPS")
+            }
+
+            HStack(spacing: 7) {
+                watchHistoryMetric(
+                    activity.activeEnergyKcal.map { String(format: "%.0f", $0) } ?? "—",
+                    "KCAL"
+                )
+                watchHistoryMetric(
+                    activity.elevationGainMeters > 0 ? String(format: "+%.0f m", activity.elevationGainMeters) : "—",
+                    "D+"
+                )
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func watchHistoryMetric(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.headline.weight(.bold))
+                .monospacedDigit()
+                .minimumScaleFactor(0.68)
+                .lineLimit(1)
+            Text(label)
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+func formatWatchHistoryDuration(_ seconds: TimeInterval) -> String {
     let total = max(0, Int(seconds))
     let hours = total / 3600
     let minutes = (total % 3600) / 60
     return hours > 0 ? String(format: "%dh%02d", hours, minutes) : String(format: "%d min", minutes)
 }
 
-private func formatWatchHistoryDistance(_ meters: Double) -> String {
-    meters >= 1000 ? String(format: "%.2f km", meters / 1000) : String(format: "%.0f m", meters)
+func formatWatchHistoryDistance(_ meters: Double) -> String {
+    meters >= 1000 ? String(format: "%.1f km", meters / 1000) : String(format: "%.0f m", meters)
 }

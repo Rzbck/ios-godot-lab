@@ -15,6 +15,15 @@ if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyCo
     $PSNativeCommandUseErrorActionPreference = $false
 }
 
+$BuildRelevantPaths = @(
+    'apps/watch-sensor-lab/iphone',
+    'apps/watch-sensor-lab/watch',
+    'apps/watch-sensor-lab/Shared',
+    'apps/watch-sensor-lab/godot',
+    'apps/watch-sensor-lab/GENERATE_APP_ICON.py',
+    '.github/workflows/watch-sensor-lab-bootstrap.yml'
+)
+
 function Assert-NativeSuccess {
     param([Parameter(Mandatory)][string]$What)
     if ($LASTEXITCODE -ne 0) {
@@ -37,20 +46,18 @@ function Get-RepoContainer {
     return $RepoTop
 }
 
-function Get-ExactRuns {
+function Get-BranchRuns {
     param(
         [Parameter(Mandatory)][string]$RepositoryName,
         [Parameter(Mandatory)][string]$WorkflowName,
-        [Parameter(Mandatory)][string]$BranchName,
-        [Parameter(Mandatory)][string]$CommitSha
+        [Parameter(Mandatory)][string]$BranchName
     )
 
     $json = & gh run list `
         --repo $RepositoryName `
         --workflow $WorkflowName `
         --branch $BranchName `
-        --commit $CommitSha `
-        --limit 20 `
+        --limit 100 `
         --json databaseId,headSha,conclusion,status,createdAt,event,displayTitle
     Assert-NativeSuccess 'gh run list'
 
@@ -61,12 +68,58 @@ function Get-ExactRuns {
     return @($json | ConvertFrom-Json)
 }
 
-function Wait-ForExactBuild {
+function Test-CommitAvailable {
+    param([Parameter(Mandatory)][string]$CommitSha)
+
+    & git cat-file -e "$CommitSha^{commit}" 2>$null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Test-CommitIsAncestor {
+    param(
+        [Parameter(Mandatory)][string]$CandidateSha,
+        [Parameter(Mandatory)][string]$HeadSha
+    )
+
+    if (-not (Test-CommitAvailable -CommitSha $CandidateSha)) {
+        return $false
+    }
+
+    & git merge-base --is-ancestor $CandidateSha $HeadSha
+    if ($LASTEXITCODE -eq 0) { return $true }
+    if ($LASTEXITCODE -eq 1) { return $false }
+    throw "git merge-base failed while checking candidate build SHA $CandidateSha."
+}
+
+function Test-BuildInputsEquivalent {
+    param(
+        [Parameter(Mandatory)][string]$CandidateSha,
+        [Parameter(Mandatory)][string]$HeadSha,
+        [Parameter(Mandatory)][string[]]$RelevantPaths
+    )
+
+    if ($CandidateSha -eq $HeadSha) {
+        return $true
+    }
+
+    if (-not (Test-CommitIsAncestor -CandidateSha $CandidateSha -HeadSha $HeadSha)) {
+        return $false
+    }
+
+    $args = @('diff', '--quiet', "$CandidateSha..$HeadSha", '--') + $RelevantPaths
+    & git @args
+    if ($LASTEXITCODE -eq 0) { return $true }
+    if ($LASTEXITCODE -eq 1) { return $false }
+    throw "git diff failed while checking build inputs between $CandidateSha and $HeadSha."
+}
+
+function Wait-ForCompatibleBuild {
     param(
         [Parameter(Mandatory)][string]$RepositoryName,
         [Parameter(Mandatory)][string]$WorkflowName,
         [Parameter(Mandatory)][string]$BranchName,
-        [Parameter(Mandatory)][string]$CommitSha,
+        [Parameter(Mandatory)][string]$HeadSha,
+        [Parameter(Mandatory)][string[]]$RelevantPaths,
         [Parameter(Mandatory)][int]$TimeoutMinutes,
         [switch]$MayTrigger
     )
@@ -75,51 +128,60 @@ function Wait-ForExactBuild {
     $triggeredHere = $false
 
     while ((Get-Date) -lt $deadline) {
-        $runs = @(Get-ExactRuns `
+        $runs = @(Get-BranchRuns `
             -RepositoryName $RepositoryName `
             -WorkflowName $WorkflowName `
-            -BranchName $BranchName `
-            -CommitSha $CommitSha)
+            -BranchName $BranchName)
 
-        $exactRuns = @($runs |
-            Where-Object { $_.headSha -eq $CommitSha } |
-            Sort-Object createdAt -Descending)
+        $compatible = @()
+        foreach ($candidate in ($runs | Sort-Object createdAt -Descending)) {
+            if ([string]::IsNullOrWhiteSpace([string]$candidate.headSha)) { continue }
+            if (Test-BuildInputsEquivalent `
+                -CandidateSha ([string]$candidate.headSha) `
+                -HeadSha $HeadSha `
+                -RelevantPaths $RelevantPaths) {
+                $compatible += $candidate
+            }
+        }
 
-        $success = $exactRuns |
+        $success = $compatible |
             Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' } |
             Select-Object -First 1
 
         if ($null -ne $success) {
-            return $success
+            return [pscustomobject]@{
+                Run = $success
+                BuildSha = [string]$success.headSha
+            }
         }
 
-        $failed = $exactRuns |
+        $failed = $compatible |
             Where-Object {
                 $_.status -eq 'completed' -and
-                $_.conclusion -in @('failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure')
+                $_.conclusion -in @('failure', 'timed_out', 'action_required', 'startup_failure')
             } |
             Select-Object -First 1
 
         if ($null -ne $failed) {
-            throw "Exact Watch Sensor Lab build $($failed.databaseId) finished with conclusion '$($failed.conclusion)' for SHA $CommitSha."
+            throw "Compatible Watch Sensor Lab build $($failed.databaseId) finished with conclusion '$($failed.conclusion)' for SHA $($failed.headSha)."
         }
 
-        $active = $exactRuns |
+        $active = $compatible |
             Where-Object { $_.status -in @('queued', 'in_progress', 'pending', 'requested', 'waiting') } |
             Select-Object -First 1
 
         if ($null -ne $active) {
-            Write-Host ("BUILD       = {0} - {1}" -f $active.databaseId, $active.status) -ForegroundColor DarkCyan
+            Write-Host ("BUILD       = {0} - {1} - {2}" -f $active.databaseId, $active.status, $active.headSha) -ForegroundColor DarkCyan
             Start-Sleep -Seconds 5
             continue
         }
 
         if (-not $MayTrigger) {
-            throw "No successful Watch Sensor Lab build exists for exact SHA $CommitSha."
+            throw "No successful build exists whose build inputs exactly match branch HEAD $HeadSha."
         }
 
         if (-not $triggeredHere) {
-            Write-Host 'No exact-SHA build exists yet. Triggering GitHub Actions...' -ForegroundColor Yellow
+            Write-Host 'No compatible build exists yet. Triggering exact current-HEAD GitHub Actions build...' -ForegroundColor Yellow
             & gh workflow run $WorkflowName `
                 --repo $RepositoryName `
                 --ref $BranchName
@@ -133,7 +195,7 @@ function Wait-ForExactBuild {
         Start-Sleep -Seconds 5
     }
 
-    throw "Timed out after $TimeoutMinutes minute(s) waiting for Watch Sensor Lab exact SHA $CommitSha."
+    throw "Timed out after $TimeoutMinutes minute(s) waiting for a Watch Sensor Lab build compatible with HEAD $HeadSha."
 }
 
 function Test-ArtifactDirectory {
@@ -251,26 +313,39 @@ $head = (& git rev-parse HEAD).Trim()
 Assert-NativeSuccess 'git rev-parse HEAD'
 Write-Host "HEAD AFTER  = $head" -ForegroundColor Green
 
-Write-Host "`nResolving companion build for this exact SHA..." -ForegroundColor DarkCyan
-$run = Wait-ForExactBuild `
+Write-Host "`nResolving companion build with identical build inputs..." -ForegroundColor DarkCyan
+$resolved = Wait-ForCompatibleBuild `
     -RepositoryName $Repository `
     -WorkflowName $Workflow `
     -BranchName $branch `
-    -CommitSha $head `
+    -HeadSha $head `
+    -RelevantPaths $BuildRelevantPaths `
     -TimeoutMinutes $BuildTimeoutMinutes `
     -MayTrigger:(-not $NoAutoBuild)
 
+$run = $resolved.Run
+$buildSha = [string]$resolved.BuildSha
 $runId = [int64]$run.databaseId
-$artifactName = "watch-sensor-lab-companion-$head"
-$shortSha = $head.Substring(0, 12)
+
+if ($buildSha -ne $head) {
+    Write-Host "BRANCH HEAD = $head" -ForegroundColor DarkGray
+    Write-Host "BUILD SHA   = $buildSha" -ForegroundColor Green
+    Write-Host 'BUILD INPUTS= identical; intervening commits do not affect the packaged app' -ForegroundColor Green
+}
+else {
+    Write-Host "BUILD SHA   = $buildSha" -ForegroundColor Green
+}
+
+$artifactName = "watch-sensor-lab-companion-$buildSha"
+$shortSha = $buildSha.Substring(0, 12)
 $repoContainer = Get-RepoContainer -RepoTop $repoTop
 $artifactRoot = Join-Path (Join-Path $repoContainer 'artifacts') 'watch-sensor-lab'
 $finalDir = Join-Path $artifactRoot $shortSha
 
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 
-if (Test-ArtifactDirectory -Directory $finalDir -ExpectedSha $head) {
-    Write-Host "`nExact companion artifact already present and hash-verified." -ForegroundColor Green
+if (Test-ArtifactDirectory -Directory $finalDir -ExpectedSha $buildSha) {
+    Write-Host "`nCompatible exact companion artifact already present and hash-verified." -ForegroundColor Green
 }
 else {
     if (Test-Path -LiteralPath $finalDir) {
@@ -291,8 +366,8 @@ else {
             --dir $tempDir
         Assert-NativeSuccess 'gh run download'
 
-        if (-not (Test-ArtifactDirectory -Directory $tempDir -ExpectedSha $head)) {
-            throw 'Downloaded artifact failed exact-SHA, metadata, companion or SHA-256 validation.'
+        if (-not (Test-ArtifactDirectory -Directory $tempDir -ExpectedSha $buildSha)) {
+            throw 'Downloaded artifact failed exact build-SHA, metadata, companion or SHA-256 validation.'
         }
 
         Move-Item -LiteralPath $tempDir -Destination $finalDir
@@ -314,9 +389,13 @@ $ipaHash = (Get-FileHash -LiteralPath $ipa[0].FullName -Algorithm SHA256).Hash.T
 $latest = [ordered]@{
     repository = $Repository
     branch = $branch
-    git_sha = $head
+    branch_head_sha = $head
+    git_sha = $buildSha
+    build_sha = $buildSha
+    build_inputs_match_branch_head = $true
     short_sha = $shortSha
     workflow_run = $runId
+    workflow_event = [string]$run.event
     artifact = $artifactName
     ipa = $ipa[0].FullName
     ipa_sha256 = $ipaHash
@@ -329,7 +408,8 @@ $latest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $latestJson -Encodi
 $ipa[0].FullName | Set-Content -LiteralPath $latestTxt -Encoding UTF8
 
 Write-Host "`n=== READY FOR ILOADER TEST ===" -ForegroundColor Green
-Write-Host "SHA         = $head"
+Write-Host "HEAD        = $head"
+Write-Host "BUILD SHA   = $buildSha"
 Write-Host "RUN         = $runId"
 Write-Host "IPA         = $($ipa[0].FullName)"
 Write-Host "SHA-256     = $ipaHash"

@@ -2,258 +2,127 @@
 
 Date: 2026-09-10
 
-This file is the authoritative implementation ledger for v0.4. It exists so no field-test feedback or user requirement is lost while the code evolves.
+This is the authoritative v0.4 requirement/validation ledger. A requirement is not complete because it compiles: final closure requires real-device validation, or a proven platform limitation with an accepted alternative.
 
-## Scope contract
-
-All requirements explicitly requested by the user after the first real field walk are part of the v0.4 product scope unless a platform/hardware limitation is proven. A requirement may only be closed in one of these ways:
-
-1. `PHYSICALLY_VALIDATED` on real iPhone/Apple Watch;
-2. `BLOCKED_BY_PLATFORM` with concrete technical evidence and an alternative documented, then explicitly accepted by the user.
-
-Do not silently drop, rename away, or treat a partially implemented foundation as complete.
-
-Status vocabulary:
-
-- `TODO`: not implemented yet.
-- `IMPLEMENTED`: code exists but exact CI has not validated it.
-- `CI_VALIDATED`: exact-SHA CI compiled/packaged it; hardware behavior still unproven.
-- `PHYSICALLY_VALIDATED`: user observed the intended behavior on real hardware.
-- `PARTIAL`: foundation exists but the full acceptance criterion is not met.
-- `BLOCKED_BY_PLATFORM`: only after verified platform limitation; requires documented alternative + user acceptance.
+Status vocabulary: `TODO`, `IMPLEMENTED`, `CI_VALIDATED`, `PHYSICALLY_VALIDATED`, `PARTIAL`, `BLOCKED_BY_PLATFORM`.
 
 ## Immutable regression baseline
 
-- physical field-test app SHA: `1bbd803f491651acb9f4ccb0b2518c4f71d5c55e`
-- app version: `0.3.1 (4)`
+- physical baseline app SHA: `1bbd803f491651acb9f4ccb0b2518c4f71d5c55e`
+- version: `0.3.1 (4)`
 - CI run: `34451272790` — SUCCESS
-- preserved main field session: `1789026745407`
-- preserved PC archive: `E:\_Project\IOS APP\_Analysis\watch-sensor-lab\walk-20260910-111806.zip`
-- baseline must not be deleted or rewritten.
+- preserved session: `1789026745407`
+- archive: `E:\_Project\IOS APP\_Analysis\watch-sensor-lab\walk-20260910-111806.zip`
+- never delete/rewrite this baseline.
 
 ## Current v0.4 line
 
 - repository: `Rzbck/ios-godot-lab`
 - branch: `feat/watch-sensor-v040-20260910`
-- dedicated Windows worktree confirmed: `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-v040`
-- first v0.4 code/CI head: `b8702027f2546189326e747e8c842177120c303c`
-- first v0.4 CI run: `34464673739` — SUCCESS
-- validated summary/segments/Health-context slice SHA: `89e04aa508e978a21627a98cccc4a21e99f64278`
-- CI run: `34467626579` — SUCCESS
-- artifact id: `10148264237`
-- artifact digest: `sha256:aceb8151cd847f103e5dbcdfe4de7a0539f9151ba41ff7e9ca781e176fc9be58`
-- validated Watch-recent-history slice SHA: `af38d7c7fc90f44873bdd4bf00e79960bd2c821c`
-- CI run: `34468156004` — SUCCESS
-- artifact id: `10148457809`
-- artifact digest: `sha256:d2140e14b0750f1d606240adc0b96e8b0cce481e21c800c917b4e4a46a45f992`
-- first hardware candidate SHA: `3efcc2cd313f1fefccb2ad5b011a2322aec2ca37`
-- candidate CI run: `34468523258` — SUCCESS
-- downloaded IPA: `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\3efcc2cd313f\WatchSensorLab-companion-unsigned-3efcc2cd313f.ipa`
-- downloaded IPA SHA-256: `07b8aa7bec9e0716b569f6f5ec925c8299d4d3056405acd10a5451f8f1dc798f`
-- latest CI-validated Auto/summary/segment analytics slice SHA: `cf6b9550a54cb36f1111e94a5a2054384c3a1564`
-- CI run: `34481920623` — SUCCESS
-- artifact id: `10154036552`
-- artifact digest: `sha256:d5e663f41a53eed23357a8d7565dde53c97ba891bbadf6db3783c249c120dbaa`
-- first hardware checkpoint: iPhone launches, Apple Watch launches, existing baseline history remains visible on iPhone after upgrade.
-- field validation of new v0.4 metrics is deferred until the user next goes outside.
-- generic iLoader/watchOS-publication work is a separate chantier and must not contaminate this tracker scope/repo.
+- Windows worktree: `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-sensor-v040`
+- first v0.4 hardware candidate: `3efcc2cd313f1fefccb2ad5b011a2322aec2ca37`, run `34468523258` — SUCCESS; iPhone + Watch launch and history preservation physically validated.
+- analytics milestone: `cf6b9550a54cb36f1111e94a5a2054384c3a1564`, run `34481920623` — SUCCESS.
+- mixed-Auto HealthKit code milestone: `7ed592b7b44473545f516857b2f6ad451b74d70f`, run `34484069701` — SUCCESS.
+- mixed-Auto artifact id: `10154989894`.
+- mixed-Auto artifact digest: `sha256:94dce10d0e3b462f896b840d4dae80e37f5d8b0e43b66557cb1429cfa6d842e1`.
+- `7ed592b7...` compiled iPhone + watchOS, verified HealthKit declarations, assembled companion, packaged exact-SHA IPA and uploaded artifact.
+- mixed-Auto HealthKit runtime behavior is **NOT physically validated yet**.
 
-## Mandatory requirements from field analysis + user feedback
+## Mandatory requirements
 
-### Correctness and sensor evidence
+### Correctness / sensor evidence
 
 - `V040-001` — **Correct HealthKit semantics for Auto** — `CI_VALIDATED / PARTIAL`.
-  - Current v0.4 no longer starts Auto as `.mixedCardio`; it starts with the current effective type (Walking by default).
-  - Current Auto transition events explicitly record the containing HealthKit type and whether it disagrees with the newly detected sport.
-  - Remaining acceptance criterion: if Auto changes Walk -> Run -> Cycle during one session, HealthKit representation must remain semantically correct rather than leaving the entire workout typed as the initial sport.
-  - General mixed outings must use a segment/master model; Apple only permits different child activity types for defined multisport such as `swimBikeRun`, not arbitrary walk/run/cycle children in a normal single-sport workout.
+  - Auto starts with the current effective sport, never fake `.mixedCardio`.
+  - New Watch-side `WatchAutoHealthReconciler` keeps the live workout untouched while recording, then only for genuinely mixed Auto sessions rewrites the saved HealthKit representation into separately typed segment workouts sharing the Watch Tracker session id.
+  - It carries app-owned HR/energy/distance samples, workout events and route points into segment time windows.
+  - Transaction rule: original workout is deleted only after every replacement succeeds; replacement objects are rolled back on failure. If route/workout is not durable yet, reconciliation waits/retries and preserves the original.
+  - Single-sport Auto sessions are left untouched.
+  - Remaining: real-device proof in Health/Fitness for Walk→Run→Walk and Cycle/mixed cases, including route, calories/HR association and failure fallback.
 
-- `V040-002` — **Reject implausible GPS/speed spikes and make max speed trustworthy** — `CI_VALIDATED`, hardware validation pending.
-  - Sport-aware plausibility ceilings and stricter Watch GPS delta filtering exist.
-  - Acceptance: a real walk/run/ride must not reproduce the ~30 km/h walking spike seen in the baseline unless raw evidence justifies it.
-
-- `V040-003` — **Reliable elevation gain/loss** — `CI_VALIDATED`, hardware validation pending.
-  - Watch now prefers `CMAltimeter` relative-altitude changes; filtered GPS altitude is fallback.
-  - Acceptance: compare v0.4 D+/D- to known route/elevation and baseline; no cumulative GPS-noise explosion.
-
-- `V040-004` — **Fix zero gyroscope** — `CI_VALIDATED`, hardware validation pending.
-  - `CMDeviceMotion.rotationRate` is preferred; raw gyro is fallback; source is logged.
-  - Acceptance: real Watch field log contains non-zero plausible rotation data and records the source.
-
+- `V040-002` — **Reject implausible GPS/speed spikes / trustworthy max speed** — `CI_VALIDATED`, hardware validation pending.
+- `V040-003` — **Reliable elevation gain/loss** — `CI_VALIDATED`, hardware validation pending; barometer preferred, filtered GPS fallback.
+- `V040-004` — **Fix zero gyroscope** — `CI_VALIDATED`, hardware validation pending; device-motion rotation rate preferred, raw gyro fallback, source logged.
 - `V040-005` — **Bounded event/diagnostic logging** — `CI_VALIDATED`, hardware validation pending.
-  - START/control requests, phase changes, stale authority, Auto candidates/transitions, HealthKit/mirroring errors and Watch events are logged without high-rate console spam.
-  - Acceptance: next extracted session can reconstruct START/PAUSE/RESUME/STOP, Auto decisions and transport/reconnect failures.
-
 - `V040-006` — **Record Watch GPS for Watch/iPhone comparison** — `CI_VALIDATED`, hardware validation pending.
-  - Watch sends `watch_location` samples with accuracy, native speed, implied speed, accepted/rejected distance delta and activity context.
-  - Acceptance: next corpus supports point/time comparison of Watch vs iPhone GPS and distance.
-
 - `V040-007` — **Physically verify HealthKit workout + route + exact deletion** — `TODO physical test`.
-  - Acceptance: workout appears with correct type, route is visible/coherent, and app deletion removes only Watch Tracker-owned workout/route data.
+- `V040-008` — **Deliberate Auto field tests** — `TODO physical test`: Walk→Run→Walk, separate Cycle, then mixed/multisport.
 
-- `V040-008` — **Deliberate Auto field tests** — `TODO physical test`.
-  - Walk -> Run -> Walk.
-  - Separate Cycle test.
-  - Later mixed/multisport transition tests.
+### Startup / live UI
 
-### Startup and live UI
-
-- `V040-009` — **Remove redundant Watch badge obscuring iPhone map** — `CI_VALIDATED`, hardware/UX validation pending.
-  - Header now contains history access instead of the redundant Watch capsule.
-
-- `V040-010` — **Compact GPS / Watch / Health readiness UI on iPhone** — `CI_VALIDATED`, hardware/UX validation pending.
-
-- `V040-011` — **Stop startup values jumping visibly** — `CI_VALIDATED / PARTIAL`, hardware validation pending.
-  - Initial GPS/altitude/distance/speed display is gated behind acquisition state/placeholders.
-  - Acceptance: real startup looks stable; add further display smoothing only if hardware still visibly jumps.
-
-- `V040-012` — **Real-time active calories on iPhone and Watch** — `CI_VALIDATED`, new-session hardware validation pending.
-  - Baseline v0.3.1 summary does not contain calories, so its history row cannot display a stored calorie value. Do not invent one.
-  - Future enrichment from a confidently matched HealthKit workout may backfill legacy display context.
-
-- `V040-013` — **Horizontal swipe for additional Watch live data pages** — `CI_VALIDATED`, hardware/UX validation pending.
-  - Live metrics page contains a horizontal inner pager while main workout navigation remains vertical.
+- `V040-009` — **Remove redundant Watch badge obscuring iPhone map** — `CI_VALIDATED`, UX validation pending.
+- `V040-010` — **Compact GPS / Watch / Health readiness UI** — `CI_VALIDATED`, UX validation pending.
+- `V040-011` — **Stable startup values/placeholders** — `CI_VALIDATED / PARTIAL`, hardware validation pending.
+- `V040-012` — **Real-time active calories on iPhone + Watch** — `CI_VALIDATED`, hardware validation pending; never invent legacy calories.
+- `V040-013` — **Horizontal Watch live-data pages** — `CI_VALIDATED`, UX validation pending.
 
 ### Rich live/post-session metrics
 
-- `V040-014` — **Cadence / step count / pedestrian pace where available** — `CI_VALIDATED / PARTIAL`.
-  - `CMPedometer` cadence and steps are implemented and exposed.
-  - Remaining: validate hardware availability/cadence quality; expose additional pedestrian pace/derived metrics where useful.
+- `V040-014` — **Cadence / steps / pedestrian pace where available** — `CI_VALIDATED / PARTIAL`; hardware quality/availability pending.
+- `V040-015` — **Walking gait/balance/asymmetry/step length/double support** — `CI_VALIDATED / PARTIAL`; contextual Health data, not fake live sensors; hardware availability pending.
+- `V040-016` — **Respiration-related data** — `CI_VALIDATED / PARTIAL`; contextual Health data only unless a separately labelled estimator is later built.
+- `V040-017` — **Richer HR/running metrics** — `CI_VALIDATED / PARTIAL`; HR average/max + five relative zones/time-in-zone + contextual running metrics exist; hardware validation and pace/speed zones remain.
+- `V040-018` — **Sensor availability/quality indicators** — `CI_VALIDATED / PARTIAL`; GPS accuracy, gyro source, Auto confidence/provenance and segment sample counts exist; unified quality score remains optional.
 
-- `V040-015` — **Walking gait/balance/asymmetry/step length/double support** — `CI_VALIDATED / PARTIAL`, hardware/data-availability validation pending.
-  - Post-session Health context now queries Apple-produced walking speed, step length, asymmetry, double-support and Walking Steadiness when available.
-  - These are explicitly labelled as contextual Health data, not fake live Watch Tracker sensors.
-  - Acceptance: verify real device permissions and which metrics actually exist for the baseline/new sessions.
+### Weather / effort context
 
-- `V040-016` — **Respiration-related data** — `CI_VALIDATED / PARTIAL`.
-  - Post-session Health context can show Apple respiratory-rate samples found around the activity window.
-  - It is explicitly labelled contextual, not workout-live respiration.
-  - Remaining: decide whether a separate experimental workout-time estimator is useful; if implemented it must be clearly labelled estimated/experimental and separately validated.
+- `V040-019` — **Persist environmental context outdoors** — `CI_VALIDATED`, network/hardware validation pending; Open-Meteo provider, coarse snapshots, temperature/apparent temperature/humidity/pressure/wind/gust/direction/code.
+- `V040-020` — **Use weather to interpret effort** — `CI_VALIDATED / PARTIAL`; environmental summary + route-heading/headwind component exist; field validation/tuning pending. Never use wrist temperature as ambient.
 
-- `V040-017` — **Richer heart-rate / running metrics** — `CI_VALIDATED / PARTIAL`.
-  - Current/average/max HR and calories exist.
-  - Post-session Health context queries HR max/recovery and, when available, running speed, running power, stride length, ground contact time and vertical oscillation.
-  - Five relative HR zones with time-in-zone and sample coverage are now computed from recorded HR evidence. A configured personal max HR is used when supplied; otherwise the UI explicitly uses the observed session peak only as a relative reference, not as a physiological max estimate.
-  - Remaining: physical availability/quality checks on compatible hardware and optional pace/speed-zone expansion.
+### History / summaries
 
-- `V040-018` — **Sensor availability/quality indicators** — `CI_VALIDATED / PARTIAL`.
-  - Acquisition placeholders, GPS accuracy, gyro source, Auto confidence/provenance and per-segment telemetry sample counts exist.
-  - Expand to a unified quality/missingness score only if useful after field evidence.
-
-### Weather / environmental effort context
-
-- `V040-019` — **Persist environmental context with every outdoor session** — `CI_VALIDATED`, hardware/network validation pending.
-  - v0.4 model stores provider, timestamp, coordinates, temperature, apparent temperature, humidity, pressure, wind speed, wind direction, gusts and weather code.
-  - Current provider implementation is Open-Meteo to avoid adding an unvalidated WeatherKit entitlement to the iLoader signing path.
-  - Captures are coarse snapshots, not per-GPS-point spam.
-
-- `V040-020` — **Use weather to improve interpretation of effort** — `CI_VALIDATED / PARTIAL`, physical/network validation pending.
-  - Post-session analyzer computes average temperature/apparent temperature/humidity/pressure/wind, peak gust and a descriptive headwind/tailwind component derived from route heading + meteorological wind direction.
-  - The summary explicitly labels this as environmental context, not a medical score.
-  - Remaining: validate real snapshots, tune route/segment correlation and later use environmental context in cross-session comparisons.
-  - Never treat Apple Watch wrist temperature as ambient temperature.
-
-### History and summaries
-
-- `V040-021` — **Persistent activity history on iPhone** — `PHYSICALLY_VALIDATED / PARTIAL`.
-  - Upgrade installation of candidate `3efcc2cd...` preserved and displayed the pre-v0.4 baseline activity on the real iPhone.
-  - Remaining acceptance: create a new v0.4 activity, verify it persists across relaunch/update, then validate detail/route/metrics from the new schema.
-
-- `V040-022` — **Proper post-activity summary** — `CI_VALIDATED / PARTIAL`, hardware/UX validation pending.
-  - A just-finished session is automatically presented after STOP and cannot be dismissed until the detected activity is confirmed/corrected.
-  - The confirmed activity can also be edited later from history without erasing the original detected value/provenance.
-  - Summary/history now include route, distance, active time, pace, average/max HR, calories, D+/D-, max speed, cadence, persistent segments, environmental effort context, contextual Health metrics, explicit pause totals/count/manual-vs-auto intervals, HR time-in-zone, Auto decision provenance and technical trace.
-  - Remaining: real-device UX validation and broader pace/speed-zone work tracked separately by `V040-036`.
-
-- `V040-023` — **Recent activity/history access on Apple Watch** — `CI_VALIDATED`, hardware/sync validation pending.
-  - iPhone publishes compact digests for the 8 most recent sessions through WatchConnectivity queued user info.
-  - Watch persists them locally and exposes an `Activités récentes` screen with sport/date/duration/distance/calories/D+.
-  - Confirmed/corrected iPhone activity is used for newly published recent-history digests.
-  - Acceptance: confirm history arrives after upgrading/opening iPhone and remains viewable on Watch without immediate phone reachability.
-
-- `V040-024` — **Schema/build/algorithm provenance for historical activities** — `CI_VALIDATED`, hardware/migration validation pending.
-  - Acceptance: old summaries decode, new summaries identify schema/app/build/algorithm and remain interpretable after algorithm changes.
-
-- `V040-025` — **Never purge history during normal update/install** — `PHYSICALLY_VALIDATED for first upgrade / PARTIAL`.
-  - Candidate `3efcc2cd...` was installed as an upgrade and the original field-walk history remained visible on the iPhone.
-  - Purge remains explicit only.
-  - Remaining: revalidate on later v0.4 upgrades and confirm no Watch-side history loss/regression.
+- `V040-021` — **Persistent iPhone history** — `PHYSICALLY_VALIDATED / PARTIAL`; first upgrade preserved baseline; new v0.4 session persistence/detail still needs physical validation.
+- `V040-022` — **Proper post-activity summary** — `CI_VALIDATED / PARTIAL`; forced activity confirmation/correction, route/core metrics, pauses, HR zones, Auto provenance, segments, environment, Health context and technical trace exist; UX validation pending.
+- `V040-023` — **Recent history on Watch** — `CI_VALIDATED`, sync/offline persistence hardware validation pending.
+- `V040-024` — **Schema/build/algorithm provenance** — `CI_VALIDATED`, migration validation pending.
+- `V040-025` — **Never purge history during normal update** — `PHYSICALLY_VALIDATED for first upgrade / PARTIAL`; revalidate future upgrades/Watch history.
 
 ### Auto-pause
 
 - `V040-026` — **Optional auto-pause** — `CI_VALIDATED / PARTIAL`.
-  - Global toggle exists and Watch owns execution; manual and automatic pauses remain distinguished.
-  - Watch now exposes per-sport profiles for Walk/Hike/Run/Cycle with per-sport enable flags and configurable pause dwell, plus sport-specific resume dwell in policy.
-  - Auto-pause decisions combine stationary motion, speed and cadence thresholds instead of relying on stationary alone.
-  - Remaining: field-tune thresholds/dwell separately, verify manual Pause always wins, and decide whether the same profile controls should also be mirrored to iPhone.
+  - Watch owns execution; global master enable + per-sport Walk/Hike/Run/Cycle profiles, enable flags and pause dwell exist.
+  - Resume dwell and thresholds are sport-aware; stationary + speed/cadence evidence used; manual/auto pauses distinct.
+  - Remaining: field-tune thresholds/dwell and prove manual Pause precedence.
 
 ### Auto classification / hiking
 
-- `V040-027` — **Conservative Auto Walk/Run/Cycle** — `CI_VALIDATED`, transition hardware tests pending.
-  - Keep confidence/hysteresis; false switches are worse than delayed switches.
+- `V040-027` — **Conservative Auto Walk/Run/Cycle** — `CI_VALIDATED`, hardware transition tests pending.
+- `V040-028` — **Hiking inference** — `CI_VALIDATED / PARTIAL`; conservative app inference from walking + sustained terrain/elevation, clearly not claimed as native Core Motion Hiking; field tuning pending.
+- `V040-029` — **Expose Auto confidence/provenance** — `CI_VALIDATED / PARTIAL`; Watch live + iPhone summary/history distinguish Core Motion from Watch Tracker inference; UX validation pending.
 
-- `V040-028` — **Hiking/randonnée inference** — `CI_VALIDATED / PARTIAL`, hardware/tuning validation pending.
-  - Core Motion walking remains the Apple classification input; Watch Tracker may infer Hiking only after sustained outdoor walking plus meaningful accumulated terrain/elevation evidence.
-  - The inference is deliberately conservative, labelled as Watch Tracker inference rather than an Apple hiking classification, and remains user-correctable after STOP/in history.
-
-- `V040-029` — **Expose Auto confidence/provenance** — `CI_VALIDATED / PARTIAL`, hardware/UX validation pending.
-  - Watch live UI now exposes current Auto effective activity, confidence and provenance.
-  - iPhone post-summary/history reconstruct Auto evidence/candidate/change events from both the primary journal and delayed reliable Watch journal, distinguishing Core Motion classification from Watch Tracker inference.
-
-### Multisport / triathlon / mixed outings
+### Multisport / triathlon / general mixed
 
 - `V040-030` — **First-class session segments** — `CI_VALIDATED / PARTIAL`.
-  - v0.4 derives and persists segment summaries from durable Auto/multisport transition events at session finish, including activity, start/end and distance when cumulative location evidence is available.
-  - Reliable `transferUserInfo` Watch events are persisted by session in `watch_reliable.jsonl`; completed summaries can be rebuilt when delayed transition events arrive after disconnection.
-  - Post-summary/history now derive richer per-segment active time, pause overlap, distance, active energy, D+/D-, average/max HR, max speed and cadence from Watch-authoritative telemetry snapshots, including recovered snapshots where available.
-  - Remaining: physically prove delayed recovery/reconciliation, decide whether richer derived segment metrics should also be cached into the persisted summary schema, and support general mixed-master HealthKit semantics.
+  - Durable segment boundaries, delayed Watch recovery, and per-segment active time/pause/distance/calories/D+/D-/HR/speed/cadence analysis exist.
+  - New mixed-Auto HealthKit reconciliation maps the same master session id to semantically typed HealthKit segment workouts after STOP.
+  - Remaining: physical disconnect/recovery and Health/Fitness verification.
 
 - `V040-031` — **Manual triathlon in one HealthKit `swimBikeRun` session** — `CI_VALIDATED`, hardware validation pending.
-  - Current code supports swim -> transition -> bike -> transition -> run through explicit Watch advancement.
-  - Acceptance: one coherent Health/Fitness workout with segment/transition behavior verified physically.
+- `V040-032` — **Automatic triathlon transitions** — `CI_VALIDATED / PARTIAL`; conservative candidates/dwell + manual controls remain; real swim/bike/run validation pending.
+- `V040-033` — **General mixed outing in one Watch Tracker master session** — `CI_VALIDATED / PARTIAL`.
+  - Internal master session and Auto segments exist.
+  - HealthKit now has a post-STOP transactional mapping to separate correctly typed workouts for arbitrary mixed Auto (for example bike→walk→run→bike), rather than abusing triathlon children.
+  - Remaining: physical proof that Health/Fitness shows correct segment workouts/routes and that failure preserves original data.
 
-- `V040-032` — **Automatic triathlon transitions** — `CI_VALIDATED / PARTIAL`, hardware validation pending.
-  - Watch stages conservative Core Motion candidates with dwell before automatically opening a transition or starting the expected next triathlon segment.
-  - Manual transition controls remain available.
-  - Remaining: real swim/bike/run transition tests, false-positive tuning and proof that automatic transitions preserve one coherent HealthKit `swimBikeRun` workout.
+- `V040-034` — **Automatic mixed-sport transition detection** — `CI_VALIDATED / PARTIAL`.
+  - Conservative Auto Walk/Run/Cycle/Hike transitions already drive first-class segments; the HealthKit mapping now follows those segments after STOP.
+  - Remaining: dedicated field validation, false-positive tuning, explicit mixed-master manual override UX if needed.
 
-- `V040-033` — **General mixed outing in one Watch Tracker master session** — `TODO`.
-  - Example: bike -> walk -> run -> bike.
-  - HealthKit objects must remain semantically correct even if Watch Tracker presents one master activity.
-
-- `V040-034` — **Automatic mixed-sport transition detection** — `PARTIAL`.
-  - Conservative Auto Walk/Run/Cycle/Hike transition detection already produces first-class Watch Tracker segment events and history analytics.
-  - Remaining: correct general mixed-master HealthKit representation, explicit manual override workflow for mixed masters and dedicated field validation.
-
-### Additional product improvements accepted for the roadmap
-
-These are recommended additions discovered during tracker-product research and should be tracked after the mandatory correctness/product work above:
+## Additional accepted roadmap
 
 - `V040-035` — automatic km/mile splits — `TODO`.
-- `V040-036` — HR/pace/speed zones and post-session time-in-zone — `CI_VALIDATED / PARTIAL`.
-  - HR time-in-zone is implemented from recorded evidence with coverage reporting and explicit reference provenance.
-  - Remaining: pace/speed zones and real-device validation.
+- `V040-036` — HR/pace/speed zones — `CI_VALIDATED / PARTIAL`; HR zones done, pace/speed zones pending.
 - `V040-037` — configurable haptic alerts — `TODO`.
-- `V040-038` — rolling pace/speed rather than only instantaneous values — `TODO`.
-- `V040-039` — GPX/TCX/FIT export strategy — `TODO`.
-- `V040-040` — compare a session against previous/baseline activities — `TODO`.
-- `V040-041` — sensor/data-quality score and missingness indicators — `TODO`.
-- `V040-042` — legacy-history HealthKit enrichment — `TODO`.
-  - For old summaries that predate calories/richer fields, optionally attach contextual values only after confidently matching the app-owned HealthKit workout. Never synthesize or guess missing historical values.
+- `V040-038` — rolling pace/speed — `TODO`.
+- `V040-039` — GPX/TCX/FIT export — `TODO`.
+- `V040-040` — cross-session/baseline comparison — `TODO`.
+- `V040-041` — unified sensor/data-quality score — `TODO`.
+- `V040-042` — legacy-history HealthKit enrichment — `TODO`; only from confidently matched app-owned workouts, never guessed values.
 
 ## Definition of v0.4 done
 
-Do not describe v0.4 as finished merely because it compiles.
-
-For the user-requested scope, completion requires:
-
-- every mandatory `V040-001` through `V040-034` either `PHYSICALLY_VALIDATED`, or explicitly `BLOCKED_BY_PLATFORM` with evidence + an accepted alternative;
-- historical baseline `1789026745407` still preserved externally and not silently deleted from the app during upgrade tests;
-- exact-SHA CI artifact/install identity recorded for every physical test build;
-- no regression of Watch-authoritative START/PAUSE/RESUME/STOP synchronization;
-- HealthKit type/route/deletion behavior physically checked;
-- next extracted field corpus compared against the 2026-09-10 baseline for speed, elevation, gyro, GPS continuity and Auto behavior.
+Do not call v0.4 finished merely because it compiles. Completion requires all mandatory `V040-001`…`V040-034` to be physically validated or explicitly blocked by proven platform constraints with an accepted alternative; preserved baseline history; exact-SHA identity for physical builds; no authority/sync regression; HealthKit type/route/deletion checks; and a new extracted field corpus compared quantitatively with baseline `1789026745407`.
 
 ## Update rule
 
-Every meaningful code milestone must update this ledger in the same development cycle. Move statuses forward only with evidence. Never mark `PHYSICALLY_VALIDATED` from CI or code inspection alone.
+Move statuses only from evidence. CI is not physical validation.

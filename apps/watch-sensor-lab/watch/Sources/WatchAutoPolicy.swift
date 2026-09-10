@@ -16,6 +16,7 @@ enum WatchAutoPolicy {
         elevationGainMeters: Double,
         elevationLossMeters: Double
     ) -> WatchAutoDecision? {
+        WatchAutoHealthReconciler.shared.bind(to: SensorModel.shared)
         guard motion.confidence != .low else { return nil }
 
         let confidence = confidenceLabel(motion.confidence)

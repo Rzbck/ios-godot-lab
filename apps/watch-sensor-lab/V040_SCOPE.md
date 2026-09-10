@@ -50,6 +50,10 @@ Status vocabulary:
 - candidate CI run: `34468523258` — SUCCESS
 - downloaded IPA: `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\3efcc2cd313f\WatchSensorLab-companion-unsigned-3efcc2cd313f.ipa`
 - downloaded IPA SHA-256: `07b8aa7bec9e0716b569f6f5ec925c8299d4d3056405acd10a5451f8f1dc798f`
+- latest CI-validated Auto/summary/segment analytics slice SHA: `cf6b9550a54cb36f1111e94a5a2054384c3a1564`
+- CI run: `34481920623` — SUCCESS
+- artifact id: `10154036552`
+- artifact digest: `sha256:d5e663f41a53eed23357a8d7565dde53c97ba891bbadf6db3783c249c120dbaa`
 - first hardware checkpoint: iPhone launches, Apple Watch launches, existing baseline history remains visible on iPhone after upgrade.
 - field validation of new v0.4 metrics is deferred until the user next goes outside.
 - generic iLoader/watchOS-publication work is a separate chantier and must not contaminate this tracker scope/repo.
@@ -60,8 +64,9 @@ Status vocabulary:
 
 - `V040-001` — **Correct HealthKit semantics for Auto** — `CI_VALIDATED / PARTIAL`.
   - Current v0.4 no longer starts Auto as `.mixedCardio`; it starts with the current effective type (Walking by default).
+  - Current Auto transition events explicitly record the containing HealthKit type and whether it disagrees with the newly detected sport.
   - Remaining acceptance criterion: if Auto changes Walk -> Run -> Cycle during one session, HealthKit representation must remain semantically correct rather than leaving the entire workout typed as the initial sport.
-  - General mixed outings must use a segment model.
+  - General mixed outings must use a segment/master model; Apple only permits different child activity types for defined multisport such as `swimBikeRun`, not arbitrary walk/run/cycle children in a normal single-sport workout.
 
 - `V040-002` — **Reject implausible GPS/speed spikes and make max speed trustworthy** — `CI_VALIDATED`, hardware validation pending.
   - Sport-aware plausibility ceilings and stricter Watch GPS delta filtering exist.
@@ -127,12 +132,13 @@ Status vocabulary:
 
 - `V040-017` — **Richer heart-rate / running metrics** — `CI_VALIDATED / PARTIAL`.
   - Current/average/max HR and calories exist.
-  - Post-session Health context now queries HR max/recovery and, when available, running speed, running power, stride length, ground contact time and vertical oscillation.
-  - Remaining: zones/time-in-zone and physical availability/quality checks on compatible hardware.
+  - Post-session Health context queries HR max/recovery and, when available, running speed, running power, stride length, ground contact time and vertical oscillation.
+  - Five relative HR zones with time-in-zone and sample coverage are now computed from recorded HR evidence. A configured personal max HR is used when supplied; otherwise the UI explicitly uses the observed session peak only as a relative reference, not as a physiological max estimate.
+  - Remaining: physical availability/quality checks on compatible hardware and optional pace/speed-zone expansion.
 
 - `V040-018` — **Sensor availability/quality indicators** — `CI_VALIDATED / PARTIAL`.
-  - Acquisition placeholders, GPS accuracy and gyro source exist.
-  - Expand to explicit quality/provenance for metrics used in summaries.
+  - Acquisition placeholders, GPS accuracy, gyro source, Auto confidence/provenance and per-segment telemetry sample counts exist.
+  - Expand to a unified quality/missingness score only if useful after field evidence.
 
 ### Weather / environmental effort context
 
@@ -154,13 +160,15 @@ Status vocabulary:
   - Remaining acceptance: create a new v0.4 activity, verify it persists across relaunch/update, then validate detail/route/metrics from the new schema.
 
 - `V040-022` — **Proper post-activity summary** — `CI_VALIDATED / PARTIAL`, hardware/UX validation pending.
-  - A just-finished session is now automatically presented after STOP.
-  - Summary includes route, distance, active time, pace, average/max HR, calories, D+/D-, max speed, cadence, persistent segments, environmental effort context, contextual Health metrics and technical trace.
-  - Remaining: explicit pause totals/events and zones/time-in-zone; refine presentation after real-device feedback.
+  - A just-finished session is automatically presented after STOP and cannot be dismissed until the detected activity is confirmed/corrected.
+  - The confirmed activity can also be edited later from history without erasing the original detected value/provenance.
+  - Summary/history now include route, distance, active time, pace, average/max HR, calories, D+/D-, max speed, cadence, persistent segments, environmental effort context, contextual Health metrics, explicit pause totals/count/manual-vs-auto intervals, HR time-in-zone, Auto decision provenance and technical trace.
+  - Remaining: real-device UX validation and broader pace/speed-zone work tracked separately by `V040-036`.
 
 - `V040-023` — **Recent activity/history access on Apple Watch** — `CI_VALIDATED`, hardware/sync validation pending.
   - iPhone publishes compact digests for the 8 most recent sessions through WatchConnectivity queued user info.
   - Watch persists them locally and exposes an `Activités récentes` screen with sport/date/duration/distance/calories/D+.
+  - Confirmed/corrected iPhone activity is used for newly published recent-history digests.
   - Acceptance: confirm history arrives after upgrading/opening iPhone and remains viewable on Watch without immediate phone reachability.
 
 - `V040-024` — **Schema/build/algorithm provenance for historical activities** — `CI_VALIDATED`, hardware/migration validation pending.
@@ -174,49 +182,57 @@ Status vocabulary:
 ### Auto-pause
 
 - `V040-026` — **Optional auto-pause** — `CI_VALIDATED / PARTIAL`.
-  - Global toggle exists, Watch owns execution, activity-specific delays exist, hysteresis and manual/auto distinction exist.
-  - Remaining: user-facing settings should become activity-specific rather than one global preference; field-tune thresholds separately for walk/run/cycle; verify manual Pause always wins.
+  - Global toggle exists and Watch owns execution; manual and automatic pauses remain distinguished.
+  - Watch now exposes per-sport profiles for Walk/Hike/Run/Cycle with per-sport enable flags and configurable pause dwell, plus sport-specific resume dwell in policy.
+  - Auto-pause decisions combine stationary motion, speed and cadence thresholds instead of relying on stationary alone.
+  - Remaining: field-tune thresholds/dwell separately, verify manual Pause always wins, and decide whether the same profile controls should also be mirrored to iPhone.
 
 ### Auto classification / hiking
 
 - `V040-027` — **Conservative Auto Walk/Run/Cycle** — `CI_VALIDATED`, transition hardware tests pending.
   - Keep confidence/hysteresis; false switches are worse than delayed switches.
 
-- `V040-028` — **Hiking/randonnée inference** — `TODO`.
-  - Use motion + sustained outdoor walking + terrain/elevation/context; do not pretend Core Motion has a native hiking category.
-  - Early versions may label “Randonnée probable” and ask/allow confirmation.
+- `V040-028` — **Hiking/randonnée inference** — `CI_VALIDATED / PARTIAL`, hardware/tuning validation pending.
+  - Core Motion walking remains the Apple classification input; Watch Tracker may infer Hiking only after sustained outdoor walking plus meaningful accumulated terrain/elevation evidence.
+  - The inference is deliberately conservative, labelled as Watch Tracker inference rather than an Apple hiking classification, and remains user-correctable after STOP/in history.
 
-- `V040-029` — **Expose Auto confidence/provenance** — `TODO / PARTIAL`.
-  - Auto candidate/change events exist internally.
-  - Remaining: user/debug/history representation must distinguish Apple classification from our inferred classifier.
+- `V040-029` — **Expose Auto confidence/provenance** — `CI_VALIDATED / PARTIAL`, hardware/UX validation pending.
+  - Watch live UI now exposes current Auto effective activity, confidence and provenance.
+  - iPhone post-summary/history reconstruct Auto evidence/candidate/change events from both the primary journal and delayed reliable Watch journal, distinguishing Core Motion classification from Watch Tracker inference.
 
 ### Multisport / triathlon / mixed outings
 
 - `V040-030` — **First-class session segments** — `CI_VALIDATED / PARTIAL`.
-  - v0.4 now derives and persists segment summaries from durable Auto/multisport transition events at session finish, including activity, start/end and distance when cumulative location evidence is available.
-  - Auto changes and manual triathlon transitions therefore become visible in the post-session summary/history.
-  - Remaining: guarantee segment-event delivery across Watch/iPhone disconnection, persist richer segment metrics (energy/HR/elevation), and support general mixed-master semantics.
+  - v0.4 derives and persists segment summaries from durable Auto/multisport transition events at session finish, including activity, start/end and distance when cumulative location evidence is available.
+  - Reliable `transferUserInfo` Watch events are persisted by session in `watch_reliable.jsonl`; completed summaries can be rebuilt when delayed transition events arrive after disconnection.
+  - Post-summary/history now derive richer per-segment active time, pause overlap, distance, active energy, D+/D-, average/max HR, max speed and cadence from Watch-authoritative telemetry snapshots, including recovered snapshots where available.
+  - Remaining: physically prove delayed recovery/reconciliation, decide whether richer derived segment metrics should also be cached into the persisted summary schema, and support general mixed-master HealthKit semantics.
 
 - `V040-031` — **Manual triathlon in one HealthKit `swimBikeRun` session** — `CI_VALIDATED`, hardware validation pending.
   - Current code supports swim -> transition -> bike -> transition -> run through explicit Watch advancement.
   - Acceptance: one coherent Health/Fitness workout with segment/transition behavior verified physically.
 
-- `V040-032` — **Automatic triathlon transitions** — `TODO`.
-  - Must come after reliable manual transitions and field evidence.
+- `V040-032` — **Automatic triathlon transitions** — `CI_VALIDATED / PARTIAL`, hardware validation pending.
+  - Watch stages conservative Core Motion candidates with dwell before automatically opening a transition or starting the expected next triathlon segment.
+  - Manual transition controls remain available.
+  - Remaining: real swim/bike/run transition tests, false-positive tuning and proof that automatic transitions preserve one coherent HealthKit `swimBikeRun` workout.
 
 - `V040-033` — **General mixed outing in one Watch Tracker master session** — `TODO`.
   - Example: bike -> walk -> run -> bike.
   - HealthKit objects must remain semantically correct even if Watch Tracker presents one master activity.
 
-- `V040-034` — **Automatic mixed-sport transition detection** — `TODO`.
-  - High confidence/hysteresis required; manual override must always exist.
+- `V040-034` — **Automatic mixed-sport transition detection** — `PARTIAL`.
+  - Conservative Auto Walk/Run/Cycle/Hike transition detection already produces first-class Watch Tracker segment events and history analytics.
+  - Remaining: correct general mixed-master HealthKit representation, explicit manual override workflow for mixed masters and dedicated field validation.
 
 ### Additional product improvements accepted for the roadmap
 
 These are recommended additions discovered during tracker-product research and should be tracked after the mandatory correctness/product work above:
 
 - `V040-035` — automatic km/mile splits — `TODO`.
-- `V040-036` — HR/pace/speed zones and post-session time-in-zone — `TODO`.
+- `V040-036` — HR/pace/speed zones and post-session time-in-zone — `CI_VALIDATED / PARTIAL`.
+  - HR time-in-zone is implemented from recorded evidence with coverage reporting and explicit reference provenance.
+  - Remaining: pace/speed zones and real-device validation.
 - `V040-037` — configurable haptic alerts — `TODO`.
 - `V040-038` — rolling pace/speed rather than only instantaneous values — `TODO`.
 - `V040-039` — GPX/TCX/FIT export strategy — `TODO`.

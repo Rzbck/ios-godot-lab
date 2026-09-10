@@ -103,7 +103,7 @@ final class AppleWorkoutEffortReader {
             // activity and time overlap make the association unambiguous enough.
             let candidates = workouts.filter { workout in
                 guard let kind = ActivityKind(healthKitType: workout.workoutActivityType),
-                      kind == summary.activity else { return false }
+                      kind.rawValue == summary.activity else { return false }
                 let startDelta = abs(workout.startDate.timeIntervalSince(summary.startedAt))
                 let durationDelta = abs(workout.duration - summary.duration)
                 return startDelta <= 30 && durationDelta <= 90

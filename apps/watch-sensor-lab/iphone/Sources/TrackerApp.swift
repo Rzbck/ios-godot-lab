@@ -52,6 +52,7 @@ private enum TrackerAppSection: Hashable {
     case activity
     case progression
     case history
+    case recovery
 }
 
 private struct TrackerRootView: View {
@@ -84,6 +85,10 @@ private struct TrackerRootView: View {
             HistoryEntryView()
                 .tag(TrackerAppSection.history)
                 .tabItem { Label("Historique", systemImage: "clock.arrow.circlepath") }
+
+            TrackerRestoreRecoveryView()
+                .tag(TrackerAppSection.recovery)
+                .tabItem { Label("Récupération", systemImage: "arrow.clockwise.heart.fill") }
         }
         .task {
             WatchReliableRecovery.refreshAllAvailableSummaries()

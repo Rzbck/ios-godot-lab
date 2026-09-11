@@ -154,6 +154,8 @@ struct TrackerCorrelationLabView: View {
     @State private var snapshot: TrackerCorrelationSnapshot?
     @State private var loading = true
     @State private var period: TrackerCorrelationPeriod = .days30
+    @State private var insightPage = "sleep_hrv"
+    @State private var selectedCorrelationX: Double?
 
     private let reader = TrackerCorrelationReader()
 
@@ -164,8 +166,36 @@ struct TrackerCorrelationLabView: View {
                 periodPicker
 
                 if let snapshot {
-                    ForEach(snapshot.insights) { insight in
-                        correlationCard(insight)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("ANALYSES")
+                                .font(.caption.weight(.black))
+                                .foregroundStyle(.secondary)
+
+                            Spacer()
+
+                            Label(
+                                "glisse",
+                                systemImage: "arrow.left.and.right"
+                            )
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.tertiary)
+                        }
+
+                        TabView(selection: $insightPage) {
+                            ForEach(snapshot.insights) { insight in
+                                correlationCard(insight)
+                                    .tag(insight.id)
+                                    .padding(.horizontal, 1)
+                            }
+                        }
+                        .frame(height: 370)
+                        .tabViewStyle(
+                            .page(indexDisplayMode: .automatic)
+                        )
+                        .onChange(of: insightPage) { _, _ in
+                            selectedCorrelationX = nil
+                        }
                     }
                 } else if loading {
                     ProgressView("Croisement des données personnelles…")
@@ -229,7 +259,13 @@ struct TrackerCorrelationLabView: View {
     }
 
     private func correlationCard(_ insight: TrackerCorrelationInsight) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
+        let selected = selectedCorrelationX.flatMap { x in
+            insight.points.min {
+                abs($0.x - x) < abs($1.x - x)
+            }
+        }
+
+        return VStack(alignment: .leading, spacing: 11) {
             HStack {
                 Image(systemName: insight.symbol)
                     .foregroundStyle(.cyan)
@@ -256,12 +292,99 @@ struct TrackerCorrelationLabView: View {
             if insight.points.count >= 3 {
                 Chart(insight.points) { point in
                     PointMark(
-                        x: .value(insight.xLabel, point.x),
-                        y: .value(insight.yLabel, point.y)
+                        x: .value(
+                            insight.xLabel,
+                            point.x
+                        ),
+                        y: .value(
+                            insight.yLabel,
+                            point.y
+                        )
                     )
-                    .foregroundStyle(insight.isReady ? Color.cyan : Color.secondary)
-                    .symbolSize(48)
+                    .foregroundStyle(
+                        insight.isReady
+                            ? Color.cyan
+                            : Color.secondary
+                    )
+                    .symbolSize(
+                        point.id == selected?.id
+                            ? 90
+                            : 48
+                    )
+
+                    if point.id == selected?.id {
+                        RuleMark(
+                            x: .value(
+                                "Sélection",
+                                point.x
+                            )
+                        )
+                        .foregroundStyle(
+                            .white.opacity(0.45)
+                        )
+                        .lineStyle(
+                            StrokeStyle(
+                                lineWidth: 1,
+                                dash: [3, 3]
+                            )
+                        )
+                        .annotation(
+                            position: .top,
+                            spacing: 5
+                        ) {
+                            VStack(
+                                alignment: .leading,
+                                spacing: 2
+                            ) {
+                                Text(
+                                    point.date.formatted(
+                                        date: .abbreviated,
+                                        time: .omitted
+                                    )
+                                )
+                                .font(
+                                    .caption2.weight(.black)
+                                )
+
+                                Text(
+                                    String(
+                                        format: "%.1f %@",
+                                        point.x,
+                                        insight.xUnit
+                                    )
+                                )
+                                .font(
+                                    .caption.weight(.bold)
+                                )
+
+                                Text(
+                                    String(
+                                        format: "%.1f %@",
+                                        point.y,
+                                        insight.yUnit
+                                    )
+                                )
+                                .font(
+                                    .caption.weight(.black)
+                                )
+                                .foregroundStyle(.cyan)
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 6)
+                            .background(
+                                .ultraThinMaterial,
+                                in: RoundedRectangle(
+                                    cornerRadius: 10,
+                                    style: .continuous
+                                )
+                            )
+                            .allowsHitTesting(false)
+                        }
+                    }
                 }
+                .chartXSelection(
+                    value: $selectedCorrelationX
+                )
                 .frame(height: 175)
                 .chartXAxisLabel(insight.xUnit)
                 .chartYAxisLabel(insight.yUnit)

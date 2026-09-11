@@ -39,6 +39,7 @@ struct TrackerSleepLabEntryCard: View {
 struct TrackerSleepLabView: View {
     @State private var snapshot: TrackerRecoverySnapshot?
     @State private var loading = true
+    @State private var selectedSleepDate: Date?
 
     private let reader = TrackerRecoveryIntelligenceReader()
 
@@ -128,37 +129,76 @@ struct TrackerSleepLabView: View {
         .sleepPanel()
     }
 
-    private func contextGrid(snapshot: TrackerRecoverySnapshot, night: TrackerSleepNight) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
-            sleepContextCell(
-                "CONTINUITÉ",
-                "\(Int((night.efficiency * 100).rounded()))%",
-                "temps endormi / fenêtre",
-                "arrow.triangle.2.circlepath",
-                .cyan
-            )
-            sleepContextCell(
-                "RÉVEILS",
-                "\(night.interruptions)",
-                night.interruptions == 1 ? "interruption ≥ 2 min" : "interruptions ≥ 2 min",
-                "eye.fill",
-                .orange
-            )
-            sleepContextCell(
-                "RÉGULARITÉ",
-                snapshot.sleepConsistencyMinutes.map { "±\(Int($0.rounded())) min" } ?? "—",
-                "écart au coucher habituel",
-                "clock.fill",
-                .mint
-            )
-            sleepContextCell(
-                "ÉCART 7 J",
-                snapshot.sleepDeficit7DaysHours.map { $0 > 0.05 ? String(format: "-%.1fh", $0) : "0h" } ?? "—",
-                "cumul vs repère personnel",
-                "calendar.badge.clock",
-                .purple
+    private func contextGrid(
+        snapshot: TrackerRecoverySnapshot,
+        night: TrackerSleepNight
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("REPÈRES DE NUIT")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Label(
+                    "glisse",
+                    systemImage: "arrow.left.and.right"
+                )
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+            }
+
+            TabView {
+                sleepContextCell(
+                    "CONTINUITÉ",
+                    "\(Int((night.efficiency * 100).rounded()))%",
+                    "temps endormi / fenêtre",
+                    "arrow.triangle.2.circlepath",
+                    .cyan
+                )
+
+                sleepContextCell(
+                    "RÉVEILS",
+                    "\(night.interruptions)",
+                    night.interruptions == 1
+                        ? "interruption ≥ 2 min"
+                        : "interruptions ≥ 2 min",
+                    "eye.fill",
+                    .orange
+                )
+
+                sleepContextCell(
+                    "RÉGULARITÉ",
+                    snapshot.sleepConsistencyMinutes.map {
+                        "±\(Int($0.rounded())) min"
+                    } ?? "—",
+                    "écart au coucher habituel",
+                    "clock.fill",
+                    .mint
+                )
+
+                sleepContextCell(
+                    "ÉCART 7 J",
+                    snapshot.sleepDeficit7DaysHours.map {
+                        $0 > 0.05
+                            ? String(
+                                format: "-%.1fh",
+                                $0
+                            )
+                            : "0h"
+                    } ?? "—",
+                    "cumul vs repère personnel",
+                    "calendar.badge.clock",
+                    .purple
+                )
+            }
+            .frame(height: 122)
+            .tabViewStyle(
+                .page(indexDisplayMode: .automatic)
             )
         }
+        .sleepPanel()
     }
 
     private func stageCard(night: TrackerSleepNight) -> some View {
@@ -215,7 +255,19 @@ struct TrackerSleepLabView: View {
     }
 
     private func trendCard(snapshot: TrackerRecoverySnapshot, currentNight: TrackerSleepNight) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let selected = selectedSleepDate.flatMap { date in
+            snapshot.sleepTrend.min {
+                abs(
+                    $0.endedAt.timeIntervalSince(date)
+                )
+                <
+                abs(
+                    $1.endedAt.timeIntervalSince(date)
+                )
+            }
+        }
+
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("14 NUITS")
@@ -232,18 +284,102 @@ struct TrackerSleepLabView: View {
 
             Chart(snapshot.sleepTrend) { item in
                 BarMark(
-                    x: .value("Nuit", item.endedAt, unit: .day),
-                    y: .value("Heures", item.totalSleep / 3600)
+                    x: .value(
+                        "Nuit",
+                        item.endedAt,
+                        unit: .day
+                    ),
+                    y: .value(
+                        "Heures",
+                        item.totalSleep / 3600
+                    )
                 )
-                .foregroundStyle(item.id == currentNight.id ? Color.cyan : Color.indigo.opacity(0.55))
+                .foregroundStyle(
+                    item.id == currentNight.id
+                        ? Color.cyan
+                        : Color.indigo.opacity(0.55)
+                )
                 .cornerRadius(3)
 
+                if item.id == selected?.id {
+                    RuleMark(
+                        x: .value(
+                            "Sélection",
+                            item.endedAt
+                        )
+                    )
+                    .foregroundStyle(
+                        .white.opacity(0.45)
+                    )
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 1,
+                            dash: [3, 3]
+                        )
+                    )
+                    .annotation(
+                        position: .top,
+                        spacing: 5
+                    ) {
+                        VStack(
+                            alignment: .leading,
+                            spacing: 2
+                        ) {
+                            Text(
+                                item.endedAt.formatted(
+                                    date: .abbreviated,
+                                    time: .omitted
+                                )
+                            )
+                            .font(
+                                .caption2.weight(.black)
+                            )
+
+                            Text(
+                                sleepDuration(
+                                    item.totalSleep
+                                )
+                            )
+                            .font(
+                                .caption.weight(.black)
+                            )
+                            .foregroundStyle(.cyan)
+                            .monospacedDigit()
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(
+                            .ultraThinMaterial,
+                            in: RoundedRectangle(
+                                cornerRadius: 10,
+                                style: .continuous
+                            )
+                        )
+                        .allowsHitTesting(false)
+                    }
+                }
+
                 if let baseline = snapshot.sleepBaselineHours {
-                    RuleMark(y: .value("Repère", baseline))
-                        .foregroundStyle(.white.opacity(0.38))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    RuleMark(
+                        y: .value(
+                            "Repère",
+                            baseline
+                        )
+                    )
+                    .foregroundStyle(
+                        .white.opacity(0.38)
+                    )
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 1,
+                            dash: [4, 4]
+                        )
+                    )
                 }
             }
+            .chartXSelection(
+                value: $selectedSleepDate
+            )
             .frame(height: 185)
             .chartYAxis {
                 AxisMarks(position: .leading) { _ in

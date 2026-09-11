@@ -262,35 +262,81 @@ struct TrackerNightVitalsCard: View {
             }
 
             if let snapshot {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                HStack {
+                    Text("\(snapshot.vitals.count) SIGNAUX")
+                        .font(.caption2.weight(.black))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Label(
+                        "glisse",
+                        systemImage: "arrow.left.and.right"
+                    )
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
+                }
+
+                TabView {
                     ForEach(snapshot.vitals) { vital in
-                        VStack(alignment: .leading, spacing: 5) {
+                        VStack(
+                            alignment: .leading,
+                            spacing: 7
+                        ) {
                             HStack {
-                                Image(systemName: vital.symbol).foregroundStyle(vitalAccent(vital.id))
+                                Image(systemName: vital.symbol)
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(
+                                        vitalAccent(vital.id)
+                                    )
+
                                 Spacer()
+
                                 Text("\(vital.samples)x")
-                                    .font(.system(size: 8, weight: .bold))
+                                    .font(
+                                        .caption2.weight(.bold)
+                                    )
                                     .foregroundStyle(.tertiary)
                             }
+
                             Text(vitalText(vital))
-                                .font(.headline.weight(.black))
+                                .font(.title2.weight(.black))
                                 .monospacedDigit()
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.62)
+
                             Text(vital.title.uppercased())
-                                .font(.system(size: 8, weight: .black))
+                                .font(
+                                    .caption.weight(.black)
+                                )
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+
                             Text(vital.source)
-                                .font(.system(size: 8))
+                                .font(.caption2)
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                         }
-                        .frame(maxWidth: .infinity, minHeight: 82, alignment: .leading)
-                        .padding(9)
-                        .background(vitalAccent(vital.id).opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: 104,
+                            alignment: .leading
+                        )
+                        .padding(13)
+                        .background(
+                            vitalAccent(vital.id)
+                                .opacity(0.07),
+                            in: RoundedRectangle(
+                                cornerRadius: 17,
+                                style: .continuous
+                            )
+                        )
+                        .padding(.horizontal, 1)
                     }
                 }
+                .frame(height: 138)
+                .tabViewStyle(
+                    .page(indexDisplayMode: .automatic)
+                )
 
                 HStack {
                     Text(snapshot.sleepStart.formatted(date: .omitted, time: .shortened))

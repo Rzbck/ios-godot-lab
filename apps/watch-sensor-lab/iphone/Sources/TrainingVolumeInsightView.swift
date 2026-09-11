@@ -6,6 +6,7 @@ struct TrainingVolumeInsightView: View {
     @State private var workouts: [HealthWorkoutRecord] = []
     @State private var selectedSportRaw = "all"
     @State private var loading = true
+    @State private var selectedWeekID: Int?
 
     private let reader = HealthWorkoutHistoryReader()
     private let calendar = Calendar.autoupdatingCurrent
@@ -144,29 +145,132 @@ struct TrainingVolumeInsightView: View {
                 )
                 .frame(height: 190)
             } else {
-                Chart(weeklyBars) { bar in
-                    BarMark(
-                        x: .value("Semaine", bar.label),
-                        y: .value("Minutes", bar.minutes)
-                    )
-                    .foregroundStyle(bar.isCurrent ? Color.orange : Color.indigo.opacity(0.72))
-                    .cornerRadius(5)
+                Chart {
+                    ForEach(weeklyBars) { bar in
+                        BarMark(
+                            x: .value(
+                                "Semaine",
+                                bar.id
+                            ),
+                            y: .value(
+                                "Minutes",
+                                bar.minutes
+                            )
+                        )
+                        .foregroundStyle(
+                            bar.isCurrent
+                                ? Color.orange
+                                : Color.indigo.opacity(0.72)
+                        )
+                        .cornerRadius(5)
 
-                    if bar.isCurrent, referenceWeeklyAverage > 0 {
-                        RuleMark(y: .value("Repère", referenceWeeklyAverage / 60))
-                            .foregroundStyle(Color.cyan.opacity(0.9))
-                            .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 4]))
-                            .annotation(position: .top, alignment: .trailing) {
-                                Text("repère 28 j")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.cyan)
+                        if bar.id == selectedWeekBar?.id {
+                            RuleMark(
+                                x: .value(
+                                    "Sélection",
+                                    bar.id
+                                )
+                            )
+                            .foregroundStyle(
+                                .white.opacity(0.45)
+                            )
+                            .lineStyle(
+                                StrokeStyle(
+                                    lineWidth: 1,
+                                    dash: [3, 3]
+                                )
+                            )
+                            .annotation(
+                                position: .top,
+                                spacing: 5
+                            ) {
+                                VStack(
+                                    alignment: .leading,
+                                    spacing: 2
+                                ) {
+                                    Text(bar.label)
+                                        .font(
+                                            .caption2.weight(.black)
+                                        )
+
+                                    Text(
+                                        volumeDuration(
+                                            bar.minutes * 60
+                                        )
+                                    )
+                                    .font(
+                                        .caption.weight(.black)
+                                    )
+                                    .foregroundStyle(
+                                        bar.isCurrent
+                                            ? Color.orange
+                                            : Color.cyan
+                                    )
+                                    .monospacedDigit()
+                                }
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 6)
+                                .background(
+                                    .ultraThinMaterial,
+                                    in: RoundedRectangle(
+                                        cornerRadius: 10,
+                                        style: .continuous
+                                    )
+                                )
+                                .allowsHitTesting(false)
                             }
+                        }
+                    }
+
+                    if referenceWeeklyAverage > 0 {
+                        RuleMark(
+                            y: .value(
+                                "Repère",
+                                referenceWeeklyAverage / 60
+                            )
+                        )
+                        .foregroundStyle(
+                            Color.cyan.opacity(0.9)
+                        )
+                        .lineStyle(
+                            StrokeStyle(
+                                lineWidth: 2,
+                                dash: [5, 4]
+                            )
+                        )
+                    }
+                }
+                .chartXSelection(
+                    value: $selectedWeekID
+                )
+                .chartXAxis {
+                    AxisMarks(
+                        values: [0, 1, 2, 3, 4]
+                    ) { value in
+                        AxisGridLine()
+                            .foregroundStyle(
+                                .white.opacity(0.05)
+                            )
+
+                        AxisValueLabel {
+                            if
+                                let id = value.as(Int.self),
+                                let bar = weeklyBars.first(
+                                    where: { $0.id == id }
+                                )
+                            {
+                                Text(bar.label)
+                            }
+                        }
                     }
                 }
                 .frame(height: 210)
                 .chartYAxis {
                     AxisMarks(position: .leading) { _ in
-                        AxisGridLine().foregroundStyle(.white.opacity(0.07))
+                        AxisGridLine()
+                            .foregroundStyle(
+                                .white.opacity(0.07)
+                            )
                         AxisValueLabel()
                     }
                 }
@@ -332,6 +436,16 @@ struct TrainingVolumeInsightView: View {
             )
         )
         return result
+    }
+
+    private var selectedWeekBar: VolumeWeekBar? {
+        guard let selectedWeekID else {
+            return nil
+        }
+
+        return weeklyBars.first {
+            $0.id == selectedWeekID
+        }
     }
 
     private var sportSlices: [VolumeSportSlice] {

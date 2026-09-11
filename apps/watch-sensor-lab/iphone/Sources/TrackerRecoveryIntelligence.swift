@@ -831,6 +831,8 @@ struct TrackerRecoveryIntelligenceCard: View {
 struct TrackerRecoveryDetailView: View {
     let snapshot: TrackerRecoverySnapshot
 
+    @State private var selectedSleepDate: Date?
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -891,44 +893,108 @@ struct TrackerRecoveryDetailView: View {
 
     private var factorGrid: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("POURQUOI CET INDICE")
-                .font(.caption.weight(.black))
-                .foregroundStyle(.secondary)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
+            HStack {
+                Text("POURQUOI CET INDICE")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Label(
+                    "glisse",
+                    systemImage: "arrow.left.and.right"
+                )
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+            }
+
+            TabView {
                 ForEach(snapshot.factors) { factor in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Image(systemName: factor.symbol).foregroundStyle(factorAccent(factor.score))
-                            Spacer()
-                            if let score = factor.score {
-                                Text("\(Int(score.rounded()))")
-                                    .font(.caption.weight(.black))
-                                    .monospacedDigit()
-                                    .foregroundStyle(factorAccent(factor.score))
-                            }
-                        }
-                        Text(factor.title.uppercased())
-                            .font(.system(size: 9, weight: .black))
-                            .foregroundStyle(.secondary)
-                        Text(factor.value)
-                            .font(.headline.weight(.black))
-                            .monospacedDigit()
-                            .minimumScaleFactor(0.65)
-                            .lineLimit(1)
-                        Text(factor.detail)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(2)
-                        Text(factor.source)
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
-                    .padding(11)
-                    .background(factorAccent(factor.score).opacity(0.07), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                    recoveryFactorCard(factor)
+                        .padding(.horizontal, 1)
                 }
             }
+            .frame(height: 162)
+            .tabViewStyle(
+                .page(indexDisplayMode: .automatic)
+            )
+        }
+    }
+
+    private func recoveryFactorCard(
+        _ factor: TrackerRecoveryFactor
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Image(systemName: factor.symbol)
+                    .foregroundStyle(
+                        factorAccent(factor.score)
+                    )
+
+                Spacer()
+
+                if let score = factor.score {
+                    Text("\(Int(score.rounded()))")
+                        .font(.caption.weight(.black))
+                        .monospacedDigit()
+                        .foregroundStyle(
+                            factorAccent(factor.score)
+                        )
+                }
+            }
+
+            Text(factor.title.uppercased())
+                .font(.system(size: 9, weight: .black))
+                .foregroundStyle(.secondary)
+
+            Text(factor.value)
+                .font(.title3.weight(.black))
+                .monospacedDigit()
+                .minimumScaleFactor(0.65)
+                .lineLimit(1)
+
+            Text(factor.detail)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .lineLimit(2)
+
+            Text(factor.source)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(
+            maxWidth: .infinity,
+            minHeight: 128,
+            alignment: .leading
+        )
+        .padding(13)
+        .background(
+            factorAccent(factor.score).opacity(0.07),
+            in: RoundedRectangle(
+                cornerRadius: 18,
+                style: .continuous
+            )
+        )
+    }
+
+    private var selectedSleepTrendNight: TrackerSleepNight? {
+        guard let selectedSleepDate else {
+            return nil
+        }
+
+        return snapshot.sleepTrend.min {
+            abs(
+                $0.endedAt.timeIntervalSince(
+                    selectedSleepDate
+                )
+            )
+            <
+            abs(
+                $1.endedAt.timeIntervalSince(
+                    selectedSleepDate
+                )
+            )
         }
     }
 
@@ -976,17 +1042,99 @@ struct TrackerRecoveryDetailView: View {
                 if !snapshot.sleepTrend.isEmpty {
                     Chart(snapshot.sleepTrend) { item in
                         BarMark(
-                            x: .value("Nuit", item.endedAt, unit: .day),
-                            y: .value("Heures", item.totalSleep / 3600)
+                            x: .value(
+                                "Nuit",
+                                item.endedAt,
+                                unit: .day
+                            ),
+                            y: .value(
+                                "Heures",
+                                item.totalSleep / 3600
+                            )
                         )
-                        .foregroundStyle(item.id == night.id ? Color.cyan : Color.indigo.opacity(0.55))
+                        .foregroundStyle(
+                            item.id == night.id
+                                ? Color.cyan
+                                : Color.indigo.opacity(0.55)
+                        )
                         .cornerRadius(3)
+
+                        if
+                            item.id
+                                == selectedSleepTrendNight?.id
+                        {
+                            RuleMark(
+                                x: .value(
+                                    "Sélection",
+                                    item.endedAt
+                                )
+                            )
+                            .foregroundStyle(
+                                .white.opacity(0.45)
+                            )
+                            .annotation(
+                                position: .top,
+                                spacing: 4
+                            ) {
+                                VStack(
+                                    alignment: .leading,
+                                    spacing: 2
+                                ) {
+                                    Text(
+                                        item.endedAt.formatted(
+                                            date: .abbreviated,
+                                            time: .omitted
+                                        )
+                                    )
+                                    .font(
+                                        .caption2.weight(.black)
+                                    )
+
+                                    Text(
+                                        recoveryDuration(
+                                            item.totalSleep
+                                        )
+                                    )
+                                    .font(
+                                        .caption.weight(.black)
+                                    )
+                                    .foregroundStyle(.cyan)
+                                    .monospacedDigit()
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(
+                                    .ultraThinMaterial,
+                                    in: RoundedRectangle(
+                                        cornerRadius: 9,
+                                        style: .continuous
+                                    )
+                                )
+                                .allowsHitTesting(false)
+                            }
+                        }
+
                         if let baseline = snapshot.sleepBaselineHours {
-                            RuleMark(y: .value("Repère", baseline))
-                                .foregroundStyle(.white.opacity(0.35))
-                                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                            RuleMark(
+                                y: .value(
+                                    "Repère",
+                                    baseline
+                                )
+                            )
+                            .foregroundStyle(
+                                .white.opacity(0.35)
+                            )
+                            .lineStyle(
+                                StrokeStyle(
+                                    lineWidth: 1,
+                                    dash: [4, 4]
+                                )
+                            )
                         }
                     }
+                    .chartXSelection(
+                        value: $selectedSleepDate
+                    )
                     .frame(height: 150)
                     .chartYAxis {
                         AxisMarks(position: .leading) { _ in

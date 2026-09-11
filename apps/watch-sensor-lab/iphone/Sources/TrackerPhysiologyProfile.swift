@@ -95,7 +95,10 @@ final class TrackerPhysiologyProfileReader {
 
         if let type = HKQuantityType.quantityType(forIdentifier: .vo2Max) {
             group.enter()
-            loadLatest(type: type, unit: HKUnit(from: "ml/kg/min")) { value in
+            let milliliters = HKUnit.literUnit(with: .milli)
+            let kilograms = HKUnit.gramUnit(with: .kilo)
+            let vo2Unit = milliliters.unitDivided(by: kilograms).unitDivided(by: .minute())
+            loadLatest(type: type, unit: vo2Unit) { value in
                 lock.lock(); vo2 = value; lock.unlock(); group.leave()
             }
         }
@@ -142,7 +145,6 @@ final class TrackerPhysiologyProfileReader {
         unit: HKUnit,
         completion: @escaping (TrackerPhysiologyReading?) -> Void
     ) {
-        // HealthKit throws an Objective-C exception if doubleValue(for:) receives an incompatible unit.
         guard type.is(compatibleWith: unit) else {
             completion(nil)
             return

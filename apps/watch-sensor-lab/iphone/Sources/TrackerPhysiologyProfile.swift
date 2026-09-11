@@ -95,6 +95,7 @@ final class TrackerPhysiologyProfileReader {
 
         if let type = HKQuantityType.quantityType(forIdentifier: .vo2Max) {
             group.enter()
+            // Compose mL/kg/min with HKUnit math; parsing this complex unit from a string can raise NSException.
             let milliliters = HKUnit.literUnit(with: .milli)
             let kilograms = HKUnit.gramUnit(with: .kilo)
             let vo2Unit = milliliters.unitDivided(by: kilograms).unitDivided(by: .minute())

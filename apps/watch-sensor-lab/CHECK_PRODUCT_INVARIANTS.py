@@ -18,11 +18,13 @@ iphone_history = read("iphone/Sources/HealthWorkoutHistory.swift")
 iphone_review = read("iphone/Sources/SessionReviewTimeline.swift")
 iphone_model = read("iphone/Sources/TrackerModel.swift")
 iphone_reliable = read("iphone/Sources/WatchReliableRecovery.swift")
+iphone_restore = read("iphone/Sources/TrackerRestoreRecovery.swift")
 restore_packet = read("iphone/Sources/TrackerHealthRestorePacket.swift")
 phone_bridge = read("iphone/Sources/PhoneRecentHistoryBridge.swift")
 
 watch_root = read("watch/Sources/WatchSensorLabApp.swift")
 watch_history = read("watch/Sources/WatchRecentHistory.swift")
+watch_restore = read("watch/Sources/WatchRestoreWorkflow.swift")
 watch_model = read("watch/Sources/SensorModel.swift")
 reconciler = read("watch/Sources/WatchAutoHealthReconciler.swift")
 
@@ -70,6 +72,74 @@ require(
     watch_history,
     "model.workflowCorrectHistoricalActivity(",
     "Action correction Watch"
+)
+
+# La restauration est la fonction critique de l'incident 2026-09-11.
+# Elle doit être réellement atteignable sur LES DEUX appareils.
+require(
+    iphone_root,
+    "TrackerRestoreRecoveryView()",
+    "Route restauration iPhone montée"
+)
+
+require(
+    iphone_root,
+    'Label("Récupération"',
+    "Onglet restauration iPhone visible"
+)
+
+require(
+    iphone_restore,
+    "TrackerRestoreCandidateCard",
+    "Carte restauration iPhone présente"
+)
+
+require(
+    iphone_restore,
+    '"Restaurer dans Santé"',
+    "Action restauration iPhone visible"
+)
+
+require(
+    iphone_restore,
+    "tracker.workflowRestoreHistoricalActivity(",
+    "UI restauration iPhone appelle le workflow"
+)
+
+require(
+    iphone_restore,
+    "restoreHistoricalActivityFromRaw(",
+    "Workflow restauration iPhone appelle le backend raw"
+)
+
+require(
+    watch_root,
+    "WatchRestoreEntryPage().tag(4)",
+    "Route restauration Watch montée"
+)
+
+require(
+    watch_restore,
+    'Text("RÉCUPÉRATION")',
+    "Page restauration Watch visible"
+)
+
+require(
+    watch_restore,
+    '"Restaurer depuis Tracker"',
+    "Action restauration Watch visible"
+)
+
+require(
+    watch_restore,
+    "model.workflowRestoreHistoricalActivity(",
+    "UI restauration Watch appelle le workflow"
+)
+
+require(
+    watch_restore,
+    "requestHistoricalRestore(",
+    "Workflow restauration Watch demande les raw à l'iPhone"
 )
 
 # ------------------------------------------------------------
@@ -149,7 +219,8 @@ else:
         )
 
 # ------------------------------------------------------------
-# D. Les deux appareils doivent appeler le workflow COMMUN.
+# D. Les deux appareils doivent appeler le workflow COMMUN
+#    pour la correction historique.
 # ------------------------------------------------------------
 
 for text, name in [
@@ -161,7 +232,6 @@ for text, name in [
         "workflowCorrectHistoricalActivity",
         f"Workflow commun {name}"
     )
-
 
 # ------------------------------------------------------------
 # E. Incident 2026-09-11 :
@@ -253,7 +323,6 @@ require(
     "recentHistoryBridge.publish(",
     "Échec republie la vérité vers Watch"
 )
-
 
 # ------------------------------------------------------------
 # G. Restauration raw Tracker -> HealthKit.
@@ -378,6 +447,49 @@ else:
             "Restauration raw sans rollback des objets créés"
         )
 
+# ------------------------------------------------------------
+# H. Le chemin de restauration doit rester cohérent de bout en bout.
+# ------------------------------------------------------------
+
+iphone_restore_compact = "".join(iphone_restore.split())
+watch_restore_compact = "".join(watch_restore.split())
+watch_model_compact = "".join(watch_model.split())
+
+require(
+    iphone_restore_compact,
+    "tracker.workflowRestoreHistoricalActivity(",
+    "Chaîne restauration iPhone UI -> workflow"
+)
+
+require(
+    iphone_restore_compact,
+    "restoreHistoricalActivityFromRaw(",
+    "Chaîne restauration iPhone workflow -> raw"
+)
+
+require(
+    watch_restore_compact,
+    "model.workflowRestoreHistoricalActivity(",
+    "Chaîne restauration Watch UI -> workflow"
+)
+
+require(
+    watch_restore_compact,
+    "requestHistoricalRestore(",
+    "Chaîne restauration Watch workflow -> iPhone"
+)
+
+require(
+    watch_model_compact,
+    'message.command="restore_historical_activity"',
+    "Commande restauration Watch -> iPhone"
+)
+
+require(
+    iphone_model,
+    'message.command == "restore_historical_activity"',
+    "Commande restauration reçue par iPhone"
+)
 
 if errors:
     print(
@@ -395,3 +507,6 @@ print(" - mounted iPhone historical correction")
 print(" - mounted Watch historical correction")
 print(" - cross-device correction convergence")
 print(" - HealthKit create/verify/delete ordering")
+print(" - mounted iPhone raw HealthKit restoration")
+print(" - mounted Watch raw HealthKit restoration")
+print(" - end-to-end raw restore command path")

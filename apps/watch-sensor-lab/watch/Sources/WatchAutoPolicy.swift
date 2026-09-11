@@ -43,16 +43,19 @@ enum WatchAutoPolicy {
         speedMps: Double,
         cadenceSPM: Double
     ) -> Bool {
-        guard WatchAutoPauseSettings.isEnabled(for: activity), stationary else { return false }
+        guard WatchAutoPauseSettings.isEnabled(for: activity) else { return false }
+
+        // Core Motion's stationary bit is supporting evidence, not a hard gate.
+        // GPS speed may be the only fresh signal when the user stops outdoors.
         switch activity {
         case .walking, .hiking:
-            return speedMps <= 1.2 && cadenceSPM < 30
+            return speedMps <= 0.45 || (stationary && speedMps <= 0.9 && cadenceSPM < 45)
         case .running, .trackAndField:
-            return speedMps <= 1.5 && cadenceSPM < 55
+            return speedMps <= 0.35 || (stationary && speedMps <= 1.0 && cadenceSPM < 60)
         case .cycling, .handCycling:
-            return speedMps <= 2.0
+            return speedMps <= 0.50 || (stationary && speedMps <= 1.2)
         default:
-            return speedMps <= 1.0
+            return speedMps <= 0.35 || (stationary && speedMps <= 0.8)
         }
     }
 

@@ -21,6 +21,8 @@ $BuildRelevantPaths = @(
     'apps/watch-sensor-lab/Shared',
     'apps/watch-sensor-lab/godot',
     'apps/watch-sensor-lab/GENERATE_APP_ICON.py',
+    'apps/watch-sensor-lab/CHECK_WORKFLOW_PARITY.py',
+    'apps/watch-sensor-lab/CHECK_PRODUCT_INVARIANTS.py',
     '.github/workflows/watch-sensor-lab-bootstrap.yml'
 )
 

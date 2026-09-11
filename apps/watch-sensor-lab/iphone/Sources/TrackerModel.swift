@@ -67,6 +67,8 @@ final class TrackerModel: NSObject, ObservableObject {
     private let defaults = UserDefaults.standard
     private let pedometer = CMPedometer()
     private let weatherRecorder = WorkoutWeatherRecorder()
+    private let reviewStore = ActivityReviewStore()
+    private let recentHistoryBridge = PhoneRecentHistoryBridge()
 
     private var mirroredWorkoutSession: HKWorkoutSession?
     private var startedAt: Date?
@@ -1118,20 +1120,40 @@ extension TrackerModel: WCSessionDelegate {
                                 : "Correction Santé vérifiée."
 
                         if !repairedSession.isEmpty,
-                           !targetRaw.isEmpty,
-                           let existing = ActivityReviewStore()
-                               .load(sessionID: repairedSession) {
+                           !targetRaw.isEmpty {
+
+                            let existing =
+                                self.reviewStore.load(
+                                    sessionID: repairedSession
+                                )
+
+                            let detected =
+                                existing?.detectedActivity
+                                ?? self.store.listSummaries()
+                                    .first(
+                                        where: {
+                                            $0.sessionID
+                                                == repairedSession
+                                        }
+                                    )?.activity
+                                ?? targetRaw
 
                             let updated = ActivityReviewRecord(
                                 sessionID: repairedSession,
-                                detectedActivity:
-                                    existing.detectedActivity,
+                                detectedActivity: detected,
                                 confirmedActivity: targetRaw,
                                 healthKitSyncState:
                                     "replacement_verified"
                             )
 
-                            try? ActivityReviewStore().save(updated)
+                            try? self.reviewStore.save(updated)
+
+                            // Republie immédiatement le nouvel état
+                            // vers l'historique Watch.
+                            self.recentHistoryBridge.publish(
+                                summaries:
+                                    self.store.listSummaries()
+                            )
                         }
 
                     case "health_manual_correction_failed":
@@ -1143,7 +1165,7 @@ extension TrackerModel: WCSessionDelegate {
                             "Correction annulée · \(message)"
 
                         if !repairedSession.isEmpty,
-                           let existing = ActivityReviewStore()
+                           let existing = self.reviewStore
                                .load(sessionID: repairedSession) {
 
                             let updated = ActivityReviewRecord(
@@ -1156,7 +1178,7 @@ extension TrackerModel: WCSessionDelegate {
                                     "replacement_failed_original_preserved"
                             )
 
-                            try? ActivityReviewStore().save(updated)
+                            try? self.reviewStore.save(updated)
                         }
 
                     default:

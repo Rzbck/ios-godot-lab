@@ -67,6 +67,8 @@ final class WatchAutoHealthReconciler: ObservableObject {
     }
 
     @Published private(set) var status = ""
+    @Published private(set) var historicalRepairSessionID = ""
+    @Published private(set) var historicalRepairInProgress = false
 
     private let healthStore = HKHealthStore()
     private let defaults = UserDefaults.standard
@@ -130,8 +132,14 @@ final class WatchAutoHealthReconciler: ObservableObject {
         }
 
         guard historicalRepairTask == nil else {
+            DispatchQueue.main.async {
+                self.status = "Une correction Santé est déjà en cours"
+            }
             return
         }
+
+        historicalRepairSessionID = sessionID
+        historicalRepairInProgress = true
 
         requestHealthAccess()
 
@@ -153,6 +161,10 @@ final class WatchAutoHealthReconciler: ObservableObject {
 
             defer {
                 self.historicalRepairTask = nil
+
+                DispatchQueue.main.async {
+                    self.historicalRepairInProgress = false
+                }
             }
 
             do {
@@ -163,6 +175,14 @@ final class WatchAutoHealthReconciler: ObservableObject {
                     )
 
                 await MainActor.run {
+                    // La représentation locale Watch ne change
+                    // qu'après la relecture/vérification HealthKit.
+                    WatchRecentHistoryStore.shared
+                        .applyConfirmedActivity(
+                            sessionID: sessionID,
+                            activity: targetActivity
+                        )
+
                     self.status =
                         result.alreadyCorrect
                             ? "Santé déjà correcte · \(targetActivity.label)"

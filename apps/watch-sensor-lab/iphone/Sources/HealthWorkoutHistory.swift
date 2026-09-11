@@ -95,6 +95,8 @@ private enum HealthHistoryPeriod: String, CaseIterable, Identifiable {
 }
 
 private struct HealthWorkoutHistoryView: View {
+    @EnvironmentObject private var tracker: TrackerModel
+
     @State private var records: [HealthWorkoutRecord] = []
     @State private var localSummaries: [String: TrackerSummary] = [:]
     @State private var period: HealthHistoryPeriod = .month
@@ -163,6 +165,12 @@ private struct HealthWorkoutHistoryView: View {
             .searchable(text: $searchText, prompt: "Sport ou date")
             .refreshable { refresh() }
             .onAppear { refresh() }
+            .onChange(
+                of: tracker.historicalRepairStatus
+            ) { _, status in
+                guard !status.isEmpty else { return }
+                refresh()
+            }
         }
     }
 
@@ -322,6 +330,12 @@ private struct HealthWorkoutDetailView: View {
                 if let localSummary {
                     TrackerEffortInsightView(summary: localSummary)
                     SessionPauseSummaryView(summary: localSummary)
+
+                    if record.isWatchTrackerWorkout {
+                        ActivityReviewCard(
+                            summary: localSummary
+                        )
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 7) {

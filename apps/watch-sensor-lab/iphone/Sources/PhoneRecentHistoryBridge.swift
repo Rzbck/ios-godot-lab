@@ -135,10 +135,41 @@ final class PhoneRecentHistoryBridge {
         guard WCSession.isSupported() else { return }
 
         let localIDs = Set(summaries.map(\.sessionID))
+
+        var healthBySession: [String: [HealthWorkoutRecord]] = [:]
+
+        for record in healthRecords {
+            if let trackerSessionID = record.trackerSessionID {
+                healthBySession[
+                    trackerSessionID,
+                    default: []
+                ].append(record)
+            }
+        }
+
         var digests: [PhoneRecentActivityDigest] = summaries.map { summary in
-            PhoneRecentActivityDigest(
+            let reviewedActivity =
+                reviewStore.load(
+                    sessionID: summary.sessionID
+                )?.confirmedActivity
+
+            let healthActivity: String? = {
+                let matches =
+                    healthBySession[summary.sessionID] ?? []
+
+                guard matches.count == 1 else {
+                    return nil
+                }
+
+                return matches[0].activity.rawValue
+            }()
+
+            return PhoneRecentActivityDigest(
                 sessionID: summary.sessionID,
-                activity: reviewStore.effectiveActivity(for: summary),
+                activity:
+                    reviewedActivity
+                    ?? healthActivity
+                    ?? summary.activity,
                 startedAt: summary.startedAt.timeIntervalSince1970,
                 duration: summary.duration,
                 distanceMeters: summary.distanceMeters,

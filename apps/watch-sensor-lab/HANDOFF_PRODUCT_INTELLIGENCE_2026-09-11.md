@@ -290,3 +290,28 @@ Migration terrain en attente :
 - activité confirmée par l’utilisateur : `cycling`
 - ne pas considérer la migration validée avant retour
   `health_manual_correction_completed` et vérification matérielle dans Santé.
+
+
+## Invariant monté iPhone / Watch — correction historique
+
+Incident observé après le build `2bf40f0cc5a0e61f117ea7f2e101a0b4a353bd28` :
+la CI de parité pouvait trouver une capacité dans une ancienne vue SwiftUI
+non montée et déclarer la parité valide.
+
+Règle durable :
+- une capacité commune ne compte comme présente que si elle est atteignable
+  depuis le root réellement monté de chaque target ;
+- la correction historique doit être exposée depuis l'Historique iPhone
+  réellement utilisé (`HistoryEntryView -> HealthWorkoutHistoryView`) ;
+- la même correction doit être exposée depuis la route Watch réellement
+  utilisée (`ReadyWatchHomeView -> RÉCENTES -> WatchRecentHistoryView`) ;
+- après succès HealthKit, la correction doit converger sur les deux appareils ;
+- la Watch ne modifie son libellé local qu'après vérification HealthKit ;
+- l'iPhone persiste le résultat même si la correction a été initiée sur Watch ;
+- le digest renvoyé à la Watch utilise la correction utilisateur ou, pour une
+  session Tracker possédant un seul workout HealthKit, le type HealthKit réel ;
+- la suppression de l'ancien workout reste strictement postérieure à la
+  création ET à la relecture/vérification du remplacement.
+
+`CHECK_PRODUCT_INVARIANTS.py` est bloquant en CI et contrôle ces invariants
+sur les routes réellement montées.

@@ -110,6 +110,54 @@ final class WatchRecentHistoryStore: ObservableObject {
         }
     }
 
+    func applyConfirmedActivity(
+        sessionID: String,
+        activity: ActivityKind
+    ) {
+        guard !sessionID.isEmpty, !activity.isAutomatic else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            guard
+                let index = self.activities.firstIndex(
+                    where: { $0.sessionID == sessionID }
+                )
+            else {
+                return
+            }
+
+            let current = self.activities[index]
+
+            self.activities[index] =
+                WatchRecentActivityDigest(
+                    sessionID: current.sessionID,
+                    activity: activity.rawValue,
+                    startedAt: current.startedAt,
+                    duration: current.duration,
+                    distanceMeters: current.distanceMeters,
+                    activeEnergyKcal: current.activeEnergyKcal,
+                    elevationGainMeters: current.elevationGainMeters
+                )
+
+            let persisted = WatchRecentHistoryEnvelopeV6(
+                activities: self.activities,
+                today: self.today,
+                sevenDays: self.sevenDays,
+                twentyEightDays: self.twentyEightDays,
+                daily28: self.daily28,
+                wellness: self.wellness
+            )
+
+            if let encoded = try? JSONEncoder().encode(persisted) {
+                UserDefaults.standard.set(
+                    encoded,
+                    forKey: self.defaultsKey
+                )
+            }
+        }
+    }
+
     @discardableResult
     func ingest(_ userInfo: [String: Any]) -> Bool {
         guard let type = userInfo["type"] as? String,

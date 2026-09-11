@@ -427,3 +427,25 @@ Aucune écriture HealthKit n'a encore été exécutée.
 
 Prochaine validation :
 compilation CI iPhone + Watch du backend de restauration.
+
+
+## CI backend restauration — run 34645669644
+
+SHA testé :
+`87e294e0ac37fffedb4fb86eaca8619704780667`
+
+Résultat :
+FAIL au build iPhone.
+
+Erreur bloquante :
+`invalid redeclaration of session(_:didReceiveUserInfo:)`
+
+Cause :
+le récepteur durable existait déjà dans
+`WatchReliableRecovery.swift`.
+
+Fix suivant :
+réutiliser ce callback pour journaliser ET appeler `receiveWC`,
+avec invariant CI interdisant plus d'un récepteur.
+
+La restauration HealthKit n'a PAS été exécutée.

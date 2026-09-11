@@ -17,6 +17,7 @@ iphone_root = read("iphone/Sources/TrackerApp.swift")
 iphone_history = read("iphone/Sources/HealthWorkoutHistory.swift")
 iphone_review = read("iphone/Sources/SessionReviewTimeline.swift")
 iphone_model = read("iphone/Sources/TrackerModel.swift")
+iphone_reliable = read("iphone/Sources/WatchReliableRecovery.swift")
 restore_packet = read("iphone/Sources/TrackerHealthRestorePacket.swift")
 phone_bridge = read("iphone/Sources/PhoneRecentHistoryBridge.swift")
 
@@ -289,10 +290,30 @@ require(
 )
 
 require(
-    iphone_model,
-    "didReceiveUserInfo userInfo",
+    iphone_reliable,
+    "didReceiveUserInfo",
     "iPhone reçoit les événements Watch durables"
 )
+
+require(
+    iphone_reliable,
+    "WatchReliableRecovery.ingest(userInfo)",
+    "Événement Watch durable journalisé"
+)
+
+require(
+    iphone_reliable,
+    "receiveWC(userInfo)",
+    "Événement Watch durable injecté dans le modèle produit"
+)
+
+if (
+    iphone_model + iphone_reliable
+).count("didReceiveUserInfo") != 1:
+    errors.append(
+        "iPhone doit avoir exactement un récepteur "
+        "WCSession didReceiveUserInfo"
+    )
 
 require(
     watch_model,

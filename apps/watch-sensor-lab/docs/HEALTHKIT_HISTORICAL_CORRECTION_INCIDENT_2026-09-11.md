@@ -325,3 +325,35 @@ cardio Watch. L'écart de durée active reste dans la tolérance prévue.
 
 Ce préflight ne constitue PAS une restauration HealthKit et n'a effectué
 aucune mutation Santé.
+
+
+## CI backend restauration — run 34645669644
+
+SHA :
+`87e294e0ac37fffedb4fb86eaca8619704780667`
+
+Résultat :
+ÉCHEC compilation iPhone.
+
+Cause exacte :
+
+`TrackerModel` déclarait deux fois
+`session(_:didReceiveUserInfo:)`.
+
+Le callback existait déjà dans
+`WatchReliableRecovery.swift` pour persister les paquets
+`transferUserInfo` dans `watch_reliable.jsonl`.
+
+Le backend de restauration en avait ajouté un second dans
+`TrackerModel.swift`.
+
+Correction retenue :
+
+- conserver un seul callback WCSession ;
+- conserver `WatchReliableRecovery.ingest(userInfo)` ;
+- transmettre ensuite le même paquet à `receiveWC(userInfo)` ;
+- rendre `receiveWC` accessible à cette extension ;
+- invariant CI exigeant exactement un `didReceiveUserInfo`
+  côté iPhone.
+
+Aucune mutation HealthKit n'a été effectuée pendant cet échec CI.

@@ -1172,16 +1172,7 @@ extension TrackerModel: WCSessionDelegate {
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }
 
-    // Les événements critiques Watch -> iPhone doivent survivre
-    // à une indisponibilité temporaire de l'iPhone.
-    func session(
-        _ session: WCSession,
-        didReceiveUserInfo userInfo: [String: Any]
-    ) {
-        receiveWC(userInfo)
-    }
-
-    func session(
+     func session(
         _ session: WCSession,
         didFinish fileTransfer: WCSessionFileTransfer,
         error: Error?
@@ -1201,7 +1192,7 @@ extension TrackerModel: WCSessionDelegate {
         }
     }
 
-    private func receiveWC(_ payload: [String: Any]) {
+    func receiveWC(_ payload: [String: Any]) {
         if payload["type"] as? String == "sensor_sample",
            let source = payload["source"] as? String,
            let kind = payload["kind"] as? String,

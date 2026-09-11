@@ -347,17 +347,52 @@ Assert-NativeSuccess 'git rev-parse HEAD'
 Write-Host "HEAD AFTER  = $head" -ForegroundColor Green
 
 Write-Host "`nResolving retained companion artifact with identical build inputs..." -ForegroundColor DarkCyan
-$resolved = Wait-ForCompatibleBuild `
-    -RepositoryName $Repository `
-    -WorkflowName $Workflow `
-    -BranchName $branch `
-    -HeadSha $head `
-    -RelevantPaths $BuildRelevantPaths `
-    -TimeoutMinutes $BuildTimeoutMinutes `
-    -MayTrigger:(-not $NoAutoBuild)
+$resolverOutput = @(
+    Wait-ForCompatibleBuild `
+        -RepositoryName $Repository `
+        -WorkflowName $Workflow `
+        -BranchName $branch `
+        -HeadSha $head `
+        -RelevantPaths $BuildRelevantPaths `
+        -TimeoutMinutes $BuildTimeoutMinutes `
+        -MayTrigger:(-not $NoAutoBuild)
+)
 
-$run = $resolved.Run
-$buildSha = [string]$resolved.BuildSha
+$resolved = @(
+    $resolverOutput | Where-Object {
+        $null -ne $_ -and
+        $null -ne $_.PSObject.Properties['Run'] -and
+        $null -ne $_.PSObject.Properties['BuildSha']
+    }
+) | Select-Object -Last 1
+
+if ($null -ne $resolved) {
+    $run = $resolved.Run
+    $buildSha = [string]$resolved.BuildSha
+}
+else {
+    $run = @(
+        $resolverOutput | Where-Object {
+            $null -ne $_ -and
+            $null -ne $_.PSObject.Properties['databaseId'] -and
+            $null -ne $_.PSObject.Properties['headSha']
+        }
+    ) | Select-Object -Last 1
+
+    if ($null -eq $run) {
+        $types = @(
+            $resolverOutput | ForEach-Object {
+                if ($null -eq $_) { '<null>' }
+                else { $_.GetType().FullName }
+            }
+        ) -join ', '
+
+        throw "Compatible build resolver returned no usable run object. Output types: $types"
+    }
+
+    $buildSha = [string]$run.headSha
+}
+
 $runId = [int64]$run.databaseId
 
 if ($buildSha -ne $head) {

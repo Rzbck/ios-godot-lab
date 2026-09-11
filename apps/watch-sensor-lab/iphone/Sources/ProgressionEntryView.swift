@@ -5,6 +5,7 @@ struct ProgressionEntryView: View {
     @State private var showRecentVolume = false
     @State private var showTrainingLoad = false
     @State private var showRecoveryLab = false
+    @State private var showMatchedActivities = false
 
     var body: some View {
         PerformanceProgressionTodayView()
@@ -31,12 +32,24 @@ struct ProgressionEntryView: View {
                     }
                     .accessibilityLabel("Ouvrir le laboratoire récupération")
                 }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showMatchedActivities = true
+                    } label: {
+                        Image(systemName: "square.stack.3d.up.fill")
+                    }
+                    .accessibilityLabel("Ouvrir les séances similaires")
+                }
             }
             .sheet(isPresented: $showRecentVolume) {
                 TrainingVolumeInsightView()
             }
             .sheet(isPresented: $showTrainingLoad) {
                 TrainingLoadIntelligenceView()
+            }
+            .sheet(isPresented: $showMatchedActivities) {
+                MatchedActivityComparisonView()
             }
             .sheet(isPresented: $showRecoveryLab) {
                 NavigationStack {

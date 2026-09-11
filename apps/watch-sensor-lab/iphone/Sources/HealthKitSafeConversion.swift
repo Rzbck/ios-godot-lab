@@ -4,7 +4,7 @@ import HealthKit
 /// is treated as unavailable data instead of raising NSException.
 extension HKQuantity {
     func trackerDoubleValue(for unit: HKUnit) -> Double? {
-        guard is(compatibleWith: unit) else { return nil }
+        guard self.is(compatibleWith: unit) else { return nil }
         let value = doubleValue(for: unit)
         return value.isFinite ? value : nil
     }

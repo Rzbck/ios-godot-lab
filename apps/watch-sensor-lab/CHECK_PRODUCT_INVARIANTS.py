@@ -454,6 +454,7 @@ else:
 iphone_restore_compact = "".join(iphone_restore.split())
 watch_restore_compact = "".join(watch_restore.split())
 watch_model_compact = "".join(watch_model.split())
+iphone_model_compact = "".join(iphone_model.split())
 
 require(
     iphone_restore_compact,
@@ -481,13 +482,13 @@ require(
 
 require(
     watch_model_compact,
-    'message.command="restore_historical_activity"',
+    'request.command="restore_historical_activity"',
     "Commande restauration Watch -> iPhone"
 )
 
 require(
-    iphone_model,
-    'message.command == "restore_historical_activity"',
+    iphone_model_compact,
+    'message.command=="restore_historical_activity"',
     "Commande restauration reçue par iPhone"
 )
 

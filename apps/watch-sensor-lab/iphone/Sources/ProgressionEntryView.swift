@@ -43,6 +43,7 @@ struct ProgressionEntryView: View {
                     ScrollView {
                         VStack(spacing: 14) {
                             TrackerRecoveryIntelligenceCard()
+                            TrackerSleepLabEntryCard()
                             TrackerNightVitalsCard()
                             TrackerCardioFitnessCard()
                             TrackerPhysiologyProfileCard()

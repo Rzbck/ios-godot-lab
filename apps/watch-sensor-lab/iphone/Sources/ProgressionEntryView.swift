@@ -46,6 +46,7 @@ struct ProgressionEntryView: View {
                             TrackerDailyBriefCard()
                             TrackerSleepLabEntryCard()
                             TrackerCorrelationLabEntryCard()
+                            TrackerBehaviorJournalEntryCard()
                             TrackerNightVitalsCard()
                             TrackerCardioFitnessCard()
                             TrackerPhysiologyProfileCard()

@@ -320,6 +320,52 @@ protocol TrackerSharedWorkflowSurface: AnyObject {
     )
 }
 
+
+// Paquet compact et durable construit depuis les raw Tracker iPhone,
+// puis transféré à la Watch. Les logs motion complets ne traversent
+// jamais WatchConnectivity : seuls les éléments nécessaires à la
+// reconstruction Santé sont transportés.
+struct TrackerHealthRestoreHeartRate: Codable, Equatable {
+    let timestamp: TimeInterval
+    let bpm: Double
+}
+
+struct TrackerHealthRestoreLocation: Codable, Equatable {
+    let timestamp: TimeInterval
+    let latitude: Double
+    let longitude: Double
+    let altitudeMeters: Double
+    let horizontalAccuracyMeters: Double
+    let verticalAccuracyMeters: Double
+    let speedMps: Double?
+}
+
+struct TrackerHealthRestorePause: Codable, Equatable {
+    let startedAt: TimeInterval
+    let endedAt: TimeInterval
+}
+
+struct TrackerHealthRestorePayload: Codable, Equatable {
+    static let currentSchema = 1
+
+    let schema: Int
+    let sessionID: String
+    let targetActivity: String
+    let sourceActivity: String
+    let startedAt: TimeInterval
+    let endedAt: TimeInterval
+    let activeDuration: TimeInterval
+    let distanceMeters: Double
+    let activeEnergyKcal: Double?
+    let heartRates: [TrackerHealthRestoreHeartRate]
+    let locations: [TrackerHealthRestoreLocation]
+    let pauses: [TrackerHealthRestorePause]
+    let pauseProvenance: String
+    let sourceBuildSHA: String?
+    let sourceAlgorithmVersion: String?
+}
+
+
 struct TrackerWireMessage: Codable {
     enum Kind: String, Codable { case authority, request, selection, purge }
 

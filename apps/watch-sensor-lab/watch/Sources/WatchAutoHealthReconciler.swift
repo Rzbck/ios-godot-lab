@@ -49,6 +49,13 @@ final class WatchAutoHealthReconciler: ObservableObject {
         let routePointCount: Int
     }
 
+    private struct HistoricalRestoreResult {
+        let alreadyRestored: Bool
+        let replacementUUID: String
+        let sampleCount: Int
+        let routePointCount: Int
+    }
+
     private enum Outcome {
         case notReady
         case unchanged
@@ -91,6 +98,15 @@ final class WatchAutoHealthReconciler: ObservableObject {
     private let correctionWorkoutUUIDKey =
         "com.rzbck.watchsensorlab.correction_workout_uuid"
 
+    private let rawRestoreKey =
+        "com.rzbck.watchsensorlab.raw_restoration"
+
+    private let rawRestoreSchemaKey =
+        "com.rzbck.watchsensorlab.raw_restoration_schema"
+
+    private let rawRestoreSourceKey =
+        "com.rzbck.watchsensorlab.raw_restoration_source"
+
     private var cancellables = Set<AnyCancellable>()
     private var bound = false
     private var lastSnapshot: Snapshot?
@@ -98,6 +114,7 @@ final class WatchAutoHealthReconciler: ObservableObject {
     private var pendingPlans: [Plan] = []
     private var reconciliationTask: Task<Void, Never>?
     private var historicalRepairTask: Task<Void, Never>?
+    private var historicalRestoreTask: Task<Void, Never>?
 
     private init() {
         pendingPlans = loadPendingPlans()
@@ -251,6 +268,1046 @@ final class WatchAutoHealthReconciler: ObservableObject {
             }
         }
     }
+
+
+    func reportRestorePacketFailure(
+        sessionID: String,
+        targetActivity: String,
+        message: String
+    ) {
+        status =
+            "Restauration refusée · \(message)"
+
+        emit(
+            event:
+                "health_raw_restore_failed",
+            sessionID:
+                sessionID,
+            payload: [
+                "target_activity":
+                    targetActivity,
+                "message":
+                    message,
+            ]
+        )
+    }
+
+    func restoreHistoricalActivity(
+        from payload:
+            TrackerHealthRestorePayload
+    ) {
+        guard
+            payload.schema
+                == TrackerHealthRestorePayload
+                    .currentSchema,
+            !payload.sessionID.isEmpty,
+            let targetActivity =
+                ActivityKind(
+                    rawValue:
+                        payload.targetActivity
+                ),
+            !targetActivity.isAutomatic
+        else {
+            reportRestorePacketFailure(
+                sessionID:
+                    payload.sessionID,
+                targetActivity:
+                    payload.targetActivity,
+                message:
+                    "paquet de restauration invalide"
+            )
+            return
+        }
+
+        guard
+            historicalRepairTask == nil,
+            historicalRestoreTask == nil
+        else {
+            reportRestorePacketFailure(
+                sessionID:
+                    payload.sessionID,
+                targetActivity:
+                    payload.targetActivity,
+                message:
+                    "une mutation Santé est déjà en cours"
+            )
+            return
+        }
+
+        historicalRepairSessionID =
+            payload.sessionID
+
+        historicalRepairInProgress =
+            true
+
+        requestHealthAccess()
+
+        status =
+            "Restauration Santé · \(targetActivity.label)…"
+
+        emit(
+            event:
+                "health_raw_restore_started",
+            sessionID:
+                payload.sessionID,
+            payload: [
+                "target_activity":
+                    targetActivity.rawValue,
+                "heart_rate_count":
+                    payload.heartRates.count,
+                "route_point_count":
+                    payload.locations.count,
+                "pause_count":
+                    payload.pauses.count,
+                "pause_provenance":
+                    payload.pauseProvenance,
+            ]
+        )
+
+        historicalRestoreTask =
+            Task { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                defer {
+                    self.historicalRestoreTask =
+                        nil
+
+                    DispatchQueue.main.async {
+                        self.historicalRepairInProgress =
+                            false
+                    }
+                }
+
+                do {
+                    let result =
+                        try await self
+                            .restoreHistoricalActivityTransaction(
+                                payload:
+                                    payload,
+                                targetActivity:
+                                    targetActivity
+                            )
+
+                    await MainActor.run {
+                        WatchRecentHistoryStore
+                            .shared
+                            .applyConfirmedActivity(
+                                sessionID:
+                                    payload.sessionID,
+                                activity:
+                                    targetActivity
+                            )
+
+                        self.status =
+                            result.alreadyRestored
+                                ? "Santé déjà restaurée · \(targetActivity.label)"
+                                : "Santé restaurée · \(targetActivity.label)"
+                    }
+
+                    self.emit(
+                        event:
+                            "health_raw_restore_completed",
+                        sessionID:
+                            payload.sessionID,
+                        payload: [
+                            "target_activity":
+                                targetActivity.rawValue,
+                            "already_restored":
+                                result.alreadyRestored,
+                            "sample_count":
+                                result.sampleCount,
+                            "route_point_count":
+                                result.routePointCount,
+                            "replacement_uuid":
+                                result.replacementUUID,
+                        ]
+                    )
+                } catch {
+                    await MainActor.run {
+                        self.status =
+                            "Restauration échouée · \(error.localizedDescription)"
+                    }
+
+                    self.emit(
+                        event:
+                            "health_raw_restore_failed",
+                        sessionID:
+                            payload.sessionID,
+                        payload: [
+                            "target_activity":
+                                targetActivity.rawValue,
+                            "message":
+                                error.localizedDescription,
+                        ]
+                    )
+                }
+            }
+    }
+
+    private func restoreHistoricalActivityTransaction(
+        payload: TrackerHealthRestorePayload,
+        targetActivity: ActivityKind
+    ) async throws -> HistoricalRestoreResult {
+        let start =
+            Date(
+                timeIntervalSince1970:
+                    payload.startedAt
+            )
+
+        let end =
+            Date(
+                timeIntervalSince1970:
+                    payload.endedAt
+            )
+
+        guard
+            end > start,
+            payload.activeDuration > 0,
+            payload.distanceMeters > 0
+        else {
+            throw ReconcileError.operation(
+                "données temporelles Tracker invalides"
+            )
+        }
+
+        let existing =
+            (
+                try await sessionWorkouts(
+                    sessionID:
+                        payload.sessionID
+                )
+            ).filter {
+                (
+                    $0.metadata?[
+                        managedKey
+                    ] as? Bool
+                ) == true
+            }
+
+        if let restored =
+            existing.first(
+                where: {
+                    (
+                        $0.metadata?[
+                            rawRestoreKey
+                        ] as? Bool
+                    ) == true
+                    && $0.workoutActivityType
+                        == targetActivity
+                            .healthKitType
+                }
+            ) {
+
+            let routeObjects =
+                try await sessionRouteObjects(
+                    sessionID:
+                        payload.sessionID
+                )
+
+            let restoreRoute =
+                routeObjects.first(
+                    where: {
+                        (
+                            $0.metadata?[
+                                rawRestoreKey
+                            ] as? Bool
+                        ) == true
+                    }
+                )
+
+            try await verifyRawRestoration(
+                payload:
+                    payload,
+                targetActivity:
+                    targetActivity,
+                workoutUUID:
+                    restored.uuid,
+                routeUUID:
+                    restoreRoute?.uuid
+            )
+
+            let restoredSamples =
+                try await associatedQuantitySamples(
+                    for: restored
+                )
+
+            var restoredRoutePointCount = 0
+
+            if let restoreRoute {
+                restoredRoutePointCount =
+                    try await loadLocations(
+                        for: restoreRoute
+                    ).count
+            }
+
+            return HistoricalRestoreResult(
+                alreadyRestored: true,
+                replacementUUID:
+                    restored.uuid.uuidString,
+                sampleCount:
+                    restoredSamples.count,
+                routePointCount:
+                    restoredRoutePointCount
+            )
+        }
+
+        guard existing.isEmpty else {
+            throw ReconcileError.operation(
+                "un workout Tracker existe déjà ; utiliser la correction normale"
+            )
+        }
+
+        let samples =
+            try makeRawRestoreSamples(
+                payload:
+                    payload,
+                activity:
+                    targetActivity
+            )
+
+        let events =
+            makeRawRestoreEvents(
+                payload:
+                    payload
+            )
+
+        let locations =
+            makeRawRestoreLocations(
+                payload:
+                    payload
+            )
+
+        let configuration =
+            HKWorkoutConfiguration()
+
+        configuration.activityType =
+            targetActivity.healthKitType
+
+        configuration.locationType =
+            locations.count >= 2
+                ? .outdoor
+                : .unknown
+
+        let builder =
+            HKWorkoutBuilder(
+                healthStore:
+                    healthStore,
+                configuration:
+                    configuration,
+                device:
+                    nil
+            )
+
+        let routeBuilder =
+            builder.seriesBuilder(
+                for:
+                    HKSeriesType
+                        .workoutRoute()
+            ) as? HKWorkoutRouteBuilder
+
+        var createdWorkout:
+            HKWorkout?
+
+        var createdRoute:
+            HKWorkoutRoute?
+
+        do {
+            try await beginCollection(
+                builder,
+                start:
+                    start
+            )
+
+            try await addMetadata(
+                [
+                    managedKey:
+                        true,
+                    sessionKey:
+                        payload.sessionID,
+                    manualCorrectionKey:
+                        true,
+                    rawRestoreKey:
+                        true,
+                    rawRestoreSchemaKey:
+                        payload.schema,
+                    rawRestoreSourceKey:
+                        "tracker_raw_v1",
+                    correctionTargetKey:
+                        targetActivity.rawValue,
+                    masterActivityKey:
+                        targetActivity.rawValue,
+                    algorithmKey:
+                        payload.sourceAlgorithmVersion
+                        ?? "tracker-raw-restore-v1",
+                    buildKey:
+                        BuildInfo.gitSHA,
+                    "com.rzbck.watchsensorlab.raw_active_duration":
+                        payload.activeDuration,
+                    "com.rzbck.watchsensorlab.raw_distance_m":
+                        payload.distanceMeters,
+                    "com.rzbck.watchsensorlab.raw_pause_provenance":
+                        payload.pauseProvenance,
+                ],
+                to:
+                    builder
+            )
+
+            if !samples.isEmpty {
+                try await addPreparedSamples(
+                    samples,
+                    to:
+                        builder
+                )
+            }
+
+            if !events.isEmpty {
+                try await addEvents(
+                    events,
+                    to:
+                        builder
+                )
+            }
+
+            if let routeBuilder,
+               locations.count >= 2 {
+
+                try await insertRoute(
+                    locations,
+                    into:
+                        routeBuilder
+                )
+            }
+
+            try await endCollection(
+                builder,
+                end:
+                    end
+            )
+
+            guard
+                let workout =
+                    try await finishWorkout(
+                        builder
+                    )
+            else {
+                throw ReconcileError.operation(
+                    "HealthKit n’a pas retourné le workout restauré"
+                )
+            }
+
+            createdWorkout =
+                workout
+
+            if let routeBuilder,
+               locations.count >= 2 {
+
+                createdRoute =
+                    try await finishRoute(
+                        routeBuilder,
+                        workout:
+                            workout,
+                        metadata: [
+                            managedKey:
+                                true,
+                            sessionKey:
+                                payload.sessionID,
+                            rawRestoreKey:
+                                true,
+                            rawRestoreSchemaKey:
+                                payload.schema,
+                            correctionWorkoutUUIDKey:
+                                workout.uuid
+                                    .uuidString,
+                        ]
+                    )
+            }
+
+            // Première relecture.
+            try await verifyRawRestoration(
+                payload:
+                    payload,
+                targetActivity:
+                    targetActivity,
+                workoutUUID:
+                    workout.uuid,
+                routeUUID:
+                    createdRoute?.uuid
+            )
+
+            // Deuxième relecture différée :
+            // un callback de création ne constitue pas
+            // une preuve de durabilité.
+            try await Task.sleep(
+                nanoseconds:
+                    700_000_000
+            )
+
+            try await verifyRawRestoration(
+                payload:
+                    payload,
+                targetActivity:
+                    targetActivity,
+                workoutUUID:
+                    workout.uuid,
+                routeUUID:
+                    createdRoute?.uuid
+            )
+
+            return HistoricalRestoreResult(
+                alreadyRestored:
+                    false,
+                replacementUUID:
+                    workout.uuid.uuidString,
+                sampleCount:
+                    samples.count,
+                routePointCount:
+                    locations.count
+            )
+        } catch {
+            // Restauration : aucune source existante
+            // n'est supprimée. Le rollback porte
+            // exclusivement sur les objets créés ici.
+            var createdObjects:
+                [HKObject] = []
+
+            if let createdRoute {
+                createdObjects.append(
+                    createdRoute
+                )
+            }
+
+            if let createdWorkout {
+                createdObjects.append(
+                    createdWorkout
+                )
+            }
+
+            try? await deleteObjects(
+                createdObjects
+            )
+
+            throw error
+        }
+    }
+
+    private func makeRawRestoreSamples(
+        payload: TrackerHealthRestorePayload,
+        activity: ActivityKind
+    ) throws -> [HKSample] {
+        var samples:
+            [HKSample] = []
+
+        guard
+            let heartRateType =
+                HKQuantityType
+                    .quantityType(
+                        forIdentifier:
+                            .heartRate
+                    )
+        else {
+            throw ReconcileError.operation(
+                "type HealthKit fréquence cardiaque indisponible"
+            )
+        }
+
+        let heartRateUnit =
+            HKUnit(
+                from:
+                    "count/min"
+            )
+
+        for point in payload.heartRates {
+            guard
+                point.bpm > 0,
+                point.bpm < 260,
+                point.timestamp
+                    >= payload.startedAt,
+                point.timestamp
+                    <= payload.endedAt
+            else {
+                continue
+            }
+
+            let date =
+                Date(
+                    timeIntervalSince1970:
+                        point.timestamp
+                )
+
+            samples.append(
+                HKQuantitySample(
+                    type:
+                        heartRateType,
+                    quantity:
+                        HKQuantity(
+                            unit:
+                                heartRateUnit,
+                            doubleValue:
+                                point.bpm
+                        ),
+                    start:
+                        date,
+                    end:
+                        date,
+                    metadata: [
+                        rawRestoreKey:
+                            true,
+                        sessionKey:
+                            payload.sessionID,
+                    ]
+                )
+            )
+        }
+
+        let start =
+            Date(
+                timeIntervalSince1970:
+                    payload.startedAt
+            )
+
+        let end =
+            Date(
+                timeIntervalSince1970:
+                    payload.endedAt
+            )
+
+        if let energy =
+            payload.activeEnergyKcal,
+           energy > 0,
+           let energyType =
+                HKQuantityType
+                    .quantityType(
+                        forIdentifier:
+                            .activeEnergyBurned
+                    ) {
+
+            samples.append(
+                HKQuantitySample(
+                    type:
+                        energyType,
+                    quantity:
+                        HKQuantity(
+                            unit:
+                                .kilocalorie(),
+                            doubleValue:
+                                energy
+                        ),
+                    start:
+                        start,
+                    end:
+                        end,
+                    metadata: [
+                        rawRestoreKey:
+                            true,
+                        sessionKey:
+                            payload.sessionID,
+                    ]
+                )
+            )
+        }
+
+        if payload.distanceMeters > 0,
+           let identifier =
+                restoreDistanceIdentifier(
+                    for:
+                        activity
+                ),
+           let distanceType =
+                HKQuantityType
+                    .quantityType(
+                        forIdentifier:
+                            identifier
+                    ) {
+
+            samples.append(
+                HKQuantitySample(
+                    type:
+                        distanceType,
+                    quantity:
+                        HKQuantity(
+                            unit:
+                                .meter(),
+                            doubleValue:
+                                payload.distanceMeters
+                        ),
+                    start:
+                        start,
+                    end:
+                        end,
+                    metadata: [
+                        rawRestoreKey:
+                            true,
+                        sessionKey:
+                            payload.sessionID,
+                    ]
+                )
+            )
+        }
+
+        guard !samples.isEmpty else {
+            throw ReconcileError.operation(
+                "aucun sample brut restaurable"
+            )
+        }
+
+        return samples
+    }
+
+    private func restoreDistanceIdentifier(
+        for activity: ActivityKind
+    ) -> HKQuantityTypeIdentifier? {
+        switch activity {
+        case .cycling, .handCycling:
+            return .distanceCycling
+
+        case .swimming,
+             .waterFitness,
+             .waterPolo:
+            return .distanceSwimming
+
+        case .walking,
+             .running,
+             .hiking,
+             .trackAndField:
+            return .distanceWalkingRunning
+
+        default:
+            return nil
+        }
+    }
+
+    private func makeRawRestoreEvents(
+        payload: TrackerHealthRestorePayload
+    ) -> [HKWorkoutEvent] {
+        var result:
+            [HKWorkoutEvent] = []
+
+        for pause in payload.pauses.sorted(
+            by: {
+                $0.startedAt
+                    < $1.startedAt
+            }
+        ) {
+            guard
+                pause.startedAt
+                    >= payload.startedAt,
+                pause.startedAt
+                    < payload.endedAt,
+                pause.endedAt
+                    > pause.startedAt,
+                pause.endedAt
+                    <= payload.endedAt
+            else {
+                continue
+            }
+
+            let pauseDate =
+                Date(
+                    timeIntervalSince1970:
+                        pause.startedAt
+                )
+
+            result.append(
+                HKWorkoutEvent(
+                    type:
+                        .pause,
+                    dateInterval:
+                        DateInterval(
+                            start:
+                                pauseDate,
+                            duration:
+                                0
+                        ),
+                    metadata: [
+                        rawRestoreKey:
+                            true
+                    ]
+                )
+            )
+
+            // Si la pause se termine exactement avec
+            // la séance, aucun resume artificiel.
+            if pause.endedAt
+                < payload.endedAt - 0.05 {
+
+                let resumeDate =
+                    Date(
+                        timeIntervalSince1970:
+                            pause.endedAt
+                    )
+
+                result.append(
+                    HKWorkoutEvent(
+                        type:
+                            .resume,
+                        dateInterval:
+                            DateInterval(
+                                start:
+                                    resumeDate,
+                                duration:
+                                    0
+                            ),
+                        metadata: [
+                            rawRestoreKey:
+                                true
+                        ]
+                    )
+                )
+            }
+        }
+
+        return result
+    }
+
+    private func makeRawRestoreLocations(
+        payload: TrackerHealthRestorePayload
+    ) -> [CLLocation] {
+        payload.locations
+            .filter {
+                $0.timestamp
+                    >= payload.startedAt
+                && $0.timestamp
+                    <= payload.endedAt
+                && $0.horizontalAccuracyMeters
+                    >= 0
+                && $0.horizontalAccuracyMeters
+                    <= 50
+                && (-90...90)
+                    .contains(
+                        $0.latitude
+                    )
+                && (-180...180)
+                    .contains(
+                        $0.longitude
+                    )
+            }
+            .sorted {
+                $0.timestamp
+                    < $1.timestamp
+            }
+            .map {
+                CLLocation(
+                    coordinate:
+                        CLLocationCoordinate2D(
+                            latitude:
+                                $0.latitude,
+                            longitude:
+                                $0.longitude
+                        ),
+                    altitude:
+                        $0.altitudeMeters,
+                    horizontalAccuracy:
+                        $0.horizontalAccuracyMeters,
+                    verticalAccuracy:
+                        $0.verticalAccuracyMeters,
+                    course:
+                        -1,
+                    speed:
+                        $0.speedMps ?? -1,
+                    timestamp:
+                        Date(
+                            timeIntervalSince1970:
+                                $0.timestamp
+                        )
+                )
+            }
+    }
+
+    private func verifyRawRestoration(
+        payload: TrackerHealthRestorePayload,
+        targetActivity: ActivityKind,
+        workoutUUID: UUID,
+        routeUUID: UUID?
+    ) async throws {
+        let workouts =
+            try await sessionWorkouts(
+                sessionID:
+                    payload.sessionID
+            )
+
+        guard
+            let workout =
+                workouts.first(
+                    where: {
+                        $0.uuid
+                            == workoutUUID
+                    }
+                ),
+            workout.workoutActivityType
+                == targetActivity
+                    .healthKitType,
+            (
+                workout.metadata?[
+                    managedKey
+                ] as? Bool
+            ) == true,
+            (
+                workout.metadata?[
+                    rawRestoreKey
+                ] as? Bool
+            ) == true,
+            abs(
+                workout.startDate
+                    .timeIntervalSince1970
+                    - payload.startedAt
+            ) <= 1,
+            abs(
+                workout.endDate
+                    .timeIntervalSince1970
+                    - payload.endedAt
+            ) <= 1
+        else {
+            throw ReconcileError.operation(
+                "le workout restauré n’a pas passé la relecture HealthKit"
+            )
+        }
+
+        let samples =
+            try await associatedQuantitySamples(
+                for:
+                    workout
+            )
+
+        let minimumSampleCount =
+            payload.heartRates.count
+            + (
+                payload.activeEnergyKcal
+                    .map { $0 > 0 ? 1 : 0 }
+                ?? 0
+            )
+            + (
+                restoreDistanceIdentifier(
+                    for:
+                        targetActivity
+                ) == nil
+                    ? 0
+                    : 1
+            )
+
+        guard
+            samples.count
+                >= minimumSampleCount
+        else {
+            throw ReconcileError.operation(
+                "des samples restaurés manquent après relecture"
+            )
+        }
+
+        if restoreDistanceIdentifier(
+            for:
+                targetActivity
+        ) != nil,
+           payload.distanceMeters > 1 {
+
+            let restoredDistance =
+                distanceMeters(
+                    in:
+                        [workout]
+                )
+
+            let tolerance =
+                max(
+                    15,
+                    payload.distanceMeters
+                        * 0.04
+                )
+
+            guard
+                abs(
+                    restoredDistance
+                        - payload.distanceMeters
+                ) <= tolerance
+            else {
+                throw ReconcileError.operation(
+                    "distance restaurée incohérente"
+                )
+            }
+        }
+
+        let durationTolerance =
+            max(
+                20,
+                payload.activeDuration
+                    * 0.04
+            )
+
+        guard
+            abs(
+                workout.duration
+                    - payload.activeDuration
+            ) <= durationTolerance
+        else {
+            throw ReconcileError.operation(
+                "durée active restaurée incohérente"
+            )
+        }
+
+        if payload.locations.count >= 2 {
+            guard let routeUUID else {
+                throw ReconcileError.operation(
+                    "parcours restauré absent"
+                )
+            }
+
+            let routes =
+                try await sessionRouteObjects(
+                    sessionID:
+                        payload.sessionID
+                )
+
+            guard
+                let route =
+                    routes.first(
+                        where: {
+                            $0.uuid
+                                == routeUUID
+                            && (
+                                $0.metadata?[
+                                    rawRestoreKey
+                                ] as? Bool
+                            ) == true
+                        }
+                    )
+            else {
+                throw ReconcileError.operation(
+                    "parcours restauré introuvable après relecture"
+                )
+            }
+
+            let restoredLocations =
+                try await loadLocations(
+                    for:
+                        route
+                )
+
+            guard
+                restoredLocations.count
+                    >= payload.locations.count
+            else {
+                throw ReconcileError.operation(
+                    "points GPS restaurés incomplets"
+                )
+            }
+        }
+    }
+
+    private func addPreparedSamples(
+        _ samples: [HKSample],
+        to builder: HKWorkoutBuilder
+    ) async throws {
+        try await checkedOperation {
+            completion in
+
+            builder.add(
+                samples,
+                completion:
+                    completion
+            )
+        }
+    }
+
 
     private func requestHealthAccess() {
         guard HKHealthStore.isHealthDataAvailable() else { return }

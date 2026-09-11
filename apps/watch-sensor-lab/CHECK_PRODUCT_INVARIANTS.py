@@ -17,10 +17,12 @@ iphone_root = read("iphone/Sources/TrackerApp.swift")
 iphone_history = read("iphone/Sources/HealthWorkoutHistory.swift")
 iphone_review = read("iphone/Sources/SessionReviewTimeline.swift")
 iphone_model = read("iphone/Sources/TrackerModel.swift")
+restore_packet = read("iphone/Sources/TrackerHealthRestorePacket.swift")
 phone_bridge = read("iphone/Sources/PhoneRecentHistoryBridge.swift")
 
 watch_root = read("watch/Sources/WatchSensorLabApp.swift")
 watch_history = read("watch/Sources/WatchRecentHistory.swift")
+watch_model = read("watch/Sources/SensorModel.swift")
 reconciler = read("watch/Sources/WatchAutoHealthReconciler.swift")
 
 # ------------------------------------------------------------
@@ -250,6 +252,111 @@ require(
     "recentHistoryBridge.publish(",
     "Échec republie la vérité vers Watch"
 )
+
+
+# ------------------------------------------------------------
+# G. Restauration raw Tracker -> HealthKit.
+# ------------------------------------------------------------
+
+require(
+    restore_packet,
+    '"watch_location"',
+    "Restauration privilégie le GPS Watch"
+)
+
+require(
+    restore_packet,
+    '"heart_rate"',
+    "Restauration conserve la fréquence cardiaque"
+)
+
+require(
+    restore_packet,
+    '"manual_pause"',
+    "Restauration utilise les pauses Watch explicites"
+)
+
+require(
+    restore_packet,
+    "reconstructedActive",
+    "Restauration vérifie la durée active avant transfert"
+)
+
+require(
+    iphone_model,
+    "session.transferFile(",
+    "iPhone transfère la restauration comme fichier"
+)
+
+require(
+    iphone_model,
+    "didReceiveUserInfo userInfo",
+    "iPhone reçoit les événements Watch durables"
+)
+
+require(
+    watch_model,
+    "didReceive file: WCSessionFile",
+    "Watch reçoit le paquet de restauration"
+)
+
+require(
+    reconciler,
+    "restoreHistoricalActivityTransaction(",
+    "Transaction restauration raw présente"
+)
+
+require(
+    reconciler,
+    "verifyRawRestoration(",
+    "Restauration relue dans HealthKit"
+)
+
+require(
+    reconciler,
+    "700_000_000",
+    "Restauration possède une seconde relecture différée"
+)
+
+restore_marker = (
+    "private func restoreHistoricalActivityTransaction("
+)
+
+restore_start = reconciler.find(restore_marker)
+
+if restore_start < 0:
+    errors.append(
+        "Transaction restauration raw absente"
+    )
+else:
+    restore_tx = reconciler[restore_start:]
+
+    next_marker = restore_tx.find(
+        "private func makeRawRestoreSamples("
+    )
+
+    if next_marker >= 0:
+        restore_tx = restore_tx[:next_marker]
+
+    if "deleteObjects(sourceWorkouts)" in restore_tx:
+        errors.append(
+            "Restauration raw ne doit jamais supprimer "
+            "un workout source"
+        )
+
+    if "deleteObjects(existing)" in restore_tx:
+        errors.append(
+            "Restauration raw ne doit jamais supprimer "
+            "un workout existant"
+        )
+
+    compact_restore_tx = "".join(restore_tx.split())
+
+    if "deleteObjects(createdObjects)" not in compact_restore_tx:
+        errors.append(
+            "Restauration raw sans rollback des objets créés"
+        )
+
 
 if errors:
     print(

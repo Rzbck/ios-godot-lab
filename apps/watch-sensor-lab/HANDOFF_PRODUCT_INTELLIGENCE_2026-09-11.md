@@ -375,3 +375,55 @@ Le candidat doit imposer :
 - reconvergence Watch après échec.
 
 La restauration de `1789141684582 -> cycling` reste la prochaine étape après validation de ce durcissement.
+
+
+## Backend restauration HealthKit depuis raw — candidat
+
+Parent :
+`d7ff89738464bf02c865947d29200d2da9bcebfe`
+
+Objectif :
+restaurer une session Tracker disparue de HealthKit sans dépendre d'un
+ancien workout HealthKit.
+
+Architecture candidate :
+
+- raw complets restent sur iPhone ;
+- paquet compact construit depuis `Documents/Sessions/<sessionID>` ;
+- `WCSession.transferFile` iPhone -> Watch ;
+- Watch seule écrit HealthKit ;
+- nouveaux HR/distance/énergie créés depuis les raw ;
+- route reconstruite depuis `watch_location` ;
+- événements pause/reprise reconstruits depuis les événements Watch ;
+- validation durée active avant transfert ;
+- refus si un workout Tracker existe déjà ;
+- double relecture HealthKit après création ;
+- rollback uniquement des objets nouvellement créés en cas d'échec ;
+- événements `health_raw_restore_*` durables vers iPhone.
+
+État :
+NON commité / NON poussé / NON compilé CI / NON installé.
+
+Étape suivante après CI :
+monter l'action de restauration dans les vraies UI iPhone ET Watch,
+puis produire un artifact exact-SHA et restaurer physiquement
+`1789141684582 -> cycling`.
+
+## Préflight raw réel — session 1789141684582
+
+Validation locale du candidat de restauration :
+
+- HR Watch : `354`
+- GPS Watch valide : `344`
+- GPS iPhone valide : `515`
+- pauses reconstruites : `4`
+- durée active summary : `838.864 s`
+- durée active reconstruite : `859.899 s`
+- delta : `+21.036 s`
+- tolérance : `33.555 s`
+- résultat : `PREFLIGHT RAW RESTORE: OK`
+
+Aucune écriture HealthKit n'a encore été exécutée.
+
+Prochaine validation :
+compilation CI iPhone + Watch du backend de restauration.

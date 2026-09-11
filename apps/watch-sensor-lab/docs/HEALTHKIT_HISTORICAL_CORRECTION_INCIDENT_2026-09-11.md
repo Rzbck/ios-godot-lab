@@ -251,3 +251,77 @@ Important :
 
 ces changements ne restaurent PAS encore la session `1789141684582`.
 La restauration restera une opération séparée et idempotente à partir des raw Tracker.
+
+
+## Backend restauration raw — candidat
+
+État :
+NON commité / NON poussé / NON compilé CI / NON installé.
+
+Architecture :
+
+1. l'iPhone reste la source durable des raw Tracker ;
+2. un paquet compact contient uniquement :
+   - summary ;
+   - GPS Watch ;
+   - fréquence cardiaque Watch ;
+   - pauses/reprises Watch ;
+   - distance et énergie ;
+3. le paquet est transféré à la Watch avec
+   `WCSession.transferFile` ;
+4. la Watch reste l'unique écrivain HealthKit ;
+5. la restauration refuse d'écrire si un workout Tracker existe déjà
+   pour le même session ID ;
+6. aucune donnée HealthKit existante n'est supprimée par le chemin
+   de restauration ;
+7. en cas d'échec, seuls les objets nouvellement créés sont rollbackés ;
+8. le workout et la route sont relus deux fois avant l'événement
+   `health_raw_restore_completed`.
+
+Sécurité durée :
+
+les pauses sont reconstruites d'abord depuis `manual_pause`,
+`manual_resume`, `auto_pause`, `auto_resume`.
+Les changements de phase ne servent que de fallback.
+Le paquet est refusé si la durée active reconstruite ne correspond pas
+au `summary.json` dans la tolérance prévue.
+
+Session incidente toujours ciblée après validation du backend :
+
+`1789141684582 -> cycling`
+
+Ce backend n'est PAS encore une validation matérielle et ne déclenche
+aucune restauration par lui-même.
+
+## Préflight raw réel — session 1789141684582
+
+Préflight réalisé directement sur le snapshot incident gelé avant toute
+nouvelle écriture HealthKit.
+
+Résultats :
+
+- session : `1789141684582`
+- cible future : `cycling`
+- début : `2026-09-11T15:48:04Z`
+- fin : `2026-09-11T16:28:25Z`
+- durée murale : `2421.0 s`
+- durée active summary : `838.864 s`
+- fréquence cardiaque Watch exploitable : `354` samples
+- GPS Watch valide : `344` points
+- GPS iPhone valide : `515` points
+- événements pause/reprise retenus : `7`
+- intervalles de pause reconstruits : `4`
+- durée totale reconstruite des pauses : `1561.101 s`
+- durée active reconstruite : `859.899 s`
+- écart avec summary : `+21.036 s`
+- tolérance de sécurité : `33.555 s`
+
+Conclusion :
+
+`PREFLIGHT RAW RESTORE: OK`
+
+Le backend privilégie les `344` points GPS Watch et les `354` samples
+cardio Watch. L'écart de durée active reste dans la tolérance prévue.
+
+Ce préflight ne constitue PAS une restauration HealthKit et n'a effectué
+aucune mutation Santé.

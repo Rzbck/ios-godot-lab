@@ -481,6 +481,43 @@ final class SensorModel: NSObject, ObservableObject {
         )
     }
 
+    func requestHistoricalRestore(
+        sessionID targetSessionID: String,
+        activity: ActivityKind
+    ) {
+        guard !running else {
+            sessionStatus =
+                "Termine la séance avant une restauration Santé"
+            return
+        }
+
+        guard
+            !targetSessionID.isEmpty,
+            !activity.isAutomatic
+        else {
+            sessionStatus =
+                "Restauration Santé invalide"
+            return
+        }
+
+        var request =
+            makeMessage(kind: .request)
+
+        request.command =
+            "restore_historical_activity"
+
+        request.sessionID =
+            targetSessionID
+
+        request.finalActivityOverride =
+            activity.rawValue
+
+        sendWC(request)
+
+        sessionStatus =
+            "Restauration demandée à l’iPhone…"
+    }
+
     func deleteAllTestData() {
         guard !running else {
             sessionStatus = "Termine la session avant d’effacer"
@@ -1806,6 +1843,80 @@ extension SensorModel: WCSessionDelegate {
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }
+
+    func session(
+        _ session: WCSession,
+        didReceive file: WCSessionFile
+    ) {
+        guard
+            file.metadata?["type"]
+                as? String
+                == "tracker_health_restore_v1"
+        else {
+            return
+        }
+
+        let metadataSessionID =
+            file.metadata?["session_id"]
+                as? String ?? ""
+
+        let metadataTarget =
+            file.metadata?["target_activity"]
+                as? String ?? ""
+
+        do {
+            let data =
+                try Data(
+                    contentsOf:
+                        file.fileURL
+                )
+
+            let payload =
+                try JSONDecoder()
+                    .decode(
+                        TrackerHealthRestorePayload.self,
+                        from: data
+                    )
+
+            guard
+                payload.sessionID
+                    == metadataSessionID,
+                payload.targetActivity
+                    == metadataTarget
+            else {
+                throw NSError(
+                    domain:
+                        "TrackerHealthRestore",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "métadonnées du paquet incohérentes"
+                    ]
+                )
+            }
+
+            DispatchQueue.main.async {
+                WatchAutoHealthReconciler
+                    .shared
+                    .restoreHistoricalActivity(
+                        from: payload
+                    )
+            }
+        } catch {
+            DispatchQueue.main.async {
+                WatchAutoHealthReconciler
+                    .shared
+                    .reportRestorePacketFailure(
+                        sessionID:
+                            metadataSessionID,
+                        targetActivity:
+                            metadataTarget,
+                        message:
+                            error.localizedDescription
+                    )
+            }
+        }
+    }
 
     private func receiveWC(_ payload: [String: Any]) {
         if payload["type"] as? String == "tracker_preferences_v4" {

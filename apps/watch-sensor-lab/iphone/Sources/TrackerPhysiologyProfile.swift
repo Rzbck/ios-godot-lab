@@ -95,7 +95,7 @@ final class TrackerPhysiologyProfileReader {
 
         if let type = HKQuantityType.quantityType(forIdentifier: .vo2Max) {
             group.enter()
-            loadLatest(type: type, unit: HKUnit(from: "ml/kg*min")) { value in
+            loadLatest(type: type, unit: HKUnit(from: "ml/kg/min")) { value in
                 lock.lock(); vo2 = value; lock.unlock(); group.leave()
             }
         }
@@ -142,6 +142,11 @@ final class TrackerPhysiologyProfileReader {
         unit: HKUnit,
         completion: @escaping (TrackerPhysiologyReading?) -> Void
     ) {
+        guard type.is(compatibleWith: unit) else {
+            completion(nil)
+            return
+        }
+
         let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
         let query = HKSampleQuery(
             sampleType: type,
@@ -149,7 +154,8 @@ final class TrackerPhysiologyProfileReader {
             limit: 1,
             sortDescriptors: [sort]
         ) { _, samples, _ in
-            guard let sample = samples?.first as? HKQuantitySample else {
+            guard let sample = samples?.first as? HKQuantitySample,
+                  sample.quantity.is(compatibleWith: unit) else {
                 completion(nil)
                 return
             }

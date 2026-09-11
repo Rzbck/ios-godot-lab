@@ -1161,8 +1161,14 @@ extension TrackerModel: WCSessionDelegate {
                             sample["message"] as? String
                                 ?? "échec inconnu"
 
+                        let originalPreserved =
+                            sample["original_preserved"] as? Bool
+                                ?? false
+
                         self.historicalRepairStatus =
-                            "Correction annulée · \(message)"
+                            originalPreserved
+                                ? "Correction annulée · \(message)"
+                                : "Correction échouée · \(message)"
 
                         if !repairedSession.isEmpty,
                            let existing = self.reviewStore
@@ -1175,10 +1181,19 @@ extension TrackerModel: WCSessionDelegate {
                                 confirmedActivity:
                                     existing.confirmedActivity,
                                 healthKitSyncState:
-                                    "replacement_failed_original_preserved"
+                                    originalPreserved
+                                        ? "replacement_failed_original_preserved"
+                                        : "replacement_failed_source_missing"
                             )
 
                             try? self.reviewStore.save(updated)
+
+                            // Un échec doit également faire reconverger
+                            // l'historique Watch vers la vérité HealthKit/raw.
+                            self.recentHistoryBridge.publish(
+                                summaries:
+                                    self.store.listSummaries()
+                            )
                         }
 
                     default:

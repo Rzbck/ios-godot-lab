@@ -159,6 +159,98 @@ for text, name in [
         f"Workflow commun {name}"
     )
 
+
+# ------------------------------------------------------------
+# E. Incident 2026-09-11 :
+#    une demande utilisateur n'est PAS une vérité HealthKit.
+# ------------------------------------------------------------
+
+require(
+    phone_bridge,
+    'healthKitSyncState == "replacement_verified"',
+    "Digest Watch refuse replacement_requested"
+)
+
+require(
+    iphone_review,
+    'review.healthKitSyncState == "replacement_verified"',
+    "ActivityReviewStore refuse une correction non vérifiée"
+)
+
+require(
+    reconciler,
+    "cloneQuantitySamples(",
+    "Replacement HealthKit clone les quantity samples"
+)
+
+require(
+    reconciler,
+    '"com.rzbck.watchsensorlab.reconstructed_sample"',
+    "Samples reconstruits traçables"
+)
+
+require(
+    reconciler,
+    "var shareTypes: Set<HKSampleType>",
+    "Autorisation écriture quantity samples"
+)
+
+# ------------------------------------------------------------
+# F. Une validation AVANT suppression ne suffit pas.
+#    Il faut une seconde relecture APRES suppression.
+# ------------------------------------------------------------
+
+if start >= 0:
+    tx = reconciler[start:]
+
+    delete_original = tx.find(
+        "try await deleteObjects(sourceWorkouts)"
+    )
+
+    post_delete = tx.find(
+        "var postDeleteWorkouts"
+    )
+
+    durable_samples = tx.find(
+        "let postDeleteSamples"
+    )
+
+    if min(
+        delete_original,
+        post_delete,
+        durable_samples,
+    ) < 0:
+        errors.append(
+            "Transaction HealthKit sans vérification finale "
+            "post-suppression"
+        )
+    elif not (
+        delete_original
+        < post_delete
+        < durable_samples
+    ):
+        errors.append(
+            "Ordre invalide de la relecture finale HealthKit"
+        )
+
+require(
+    reconciler,
+    "let postDeleteAutoWorkouts",
+    "Réconciliation Auto relue après suppression"
+)
+
+require(
+    iphone_model,
+    '"replacement_failed_source_missing"',
+    "Échec distingue source absente et original conservé"
+)
+
+require(
+    iphone_model,
+    "recentHistoryBridge.publish(",
+    "Échec republie la vérité vers Watch"
+)
+
 if errors:
     print(
         "TRACKER PRODUCT INVARIANTS: FAIL",

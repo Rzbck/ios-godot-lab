@@ -148,10 +148,15 @@ final class PhoneRecentHistoryBridge {
         }
 
         var digests: [PhoneRecentActivityDigest] = summaries.map { summary in
-            let reviewedActivity =
+            let review =
                 reviewStore.load(
                     sessionID: summary.sessionID
-                )?.confirmedActivity
+                )
+
+            let reviewedActivity =
+                review?.healthKitSyncState == "replacement_verified"
+                    ? review?.confirmedActivity
+                    : nil
 
             let healthActivity: String? = {
                 let matches =

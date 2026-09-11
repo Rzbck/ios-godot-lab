@@ -59,7 +59,14 @@ struct ActivityReviewStore {
     }
 
     func effectiveActivity(for summary: TrackerSummary) -> String {
-        load(sessionID: summary.sessionID)?.confirmedActivity ?? summary.activity
+        guard
+            let review = load(sessionID: summary.sessionID),
+            review.healthKitSyncState == "replacement_verified"
+        else {
+            return summary.activity
+        }
+
+        return review.confirmedActivity
     }
 
     private func reviewURL(sessionID: String, createRoot: Bool = false) -> URL? {

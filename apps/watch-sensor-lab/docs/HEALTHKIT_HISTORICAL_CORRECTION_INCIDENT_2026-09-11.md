@@ -228,3 +228,26 @@ Tout futur chantier de mutation historique HealthKit doit ajouter :
 - preuve de relecture HealthKit après mutation ;
 - invariant automatisé lorsque vérifiable statiquement ;
 - validation matérielle distincte de la CI.
+
+
+## Durcissement candidat après incident
+
+État : code local candidat, NON encore compilé par CI et NON validé matériellement.
+
+Correctifs introduits :
+
+- `replacement_requested` ne peut plus alimenter l'activité historique synchronisée ;
+- seule une correction `replacement_verified` peut changer la vérité affichée ;
+- un échec republie immédiatement l'état réel vers la Watch ;
+- `original_preserved` est calculé d'après une relecture HealthKit réelle ;
+- les anciens `HKQuantitySample` ne sont plus réutilisés directement ;
+- chaque remplacement reçoit de nouveaux `HKQuantitySample` traçables ;
+- les types quantité nécessaires sont demandés en écriture ;
+- correction historique : relecture obligatoire après suppression de la source ;
+- réconciliation Auto : relecture obligatoire après suppression du conteneur original ;
+- ces règles deviennent des invariants bloquants dans `CHECK_PRODUCT_INVARIANTS.py`.
+
+Important :
+
+ces changements ne restaurent PAS encore la session `1789141684582`.
+La restauration restera une opération séparée et idempotente à partir des raw Tracker.

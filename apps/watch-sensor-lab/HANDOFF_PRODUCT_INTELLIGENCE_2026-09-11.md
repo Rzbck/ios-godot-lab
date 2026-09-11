@@ -354,3 +354,24 @@ Prochaine étape exacte :
 4. construire un restaurateur idempotent depuis Tracker raw ;
 5. restaurer physiquement la séance en Vélo ;
 6. vérifier Santé + iPhone + Watch après redémarrage.
+
+
+## Durcissement post-incident HealthKit — candidat local
+
+Parent de travail :
+`2052dc1ffe16a6102ee03661352c4c18550fadfa`
+
+État au moment de l'écriture :
+NON commité / NON poussé / NON compilé CI / NON installé.
+
+Le candidat doit imposer :
+
+- vérité historique seulement sur `replacement_verified` ;
+- nouvel échantillon HealthKit indépendant pour chaque sample reconstruit ;
+- autorisations d'écriture quantity samples ;
+- relecture finale HealthKit après suppression ;
+- vérification équivalente pour la segmentation Auto ;
+- `original_preserved` calculé d'après HealthKit ;
+- reconvergence Watch après échec.
+
+La restauration de `1789141684582 -> cycling` reste la prochaine étape après validation de ce durcissement.

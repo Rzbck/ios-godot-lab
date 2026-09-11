@@ -208,9 +208,32 @@ final class WatchAutoHealthReconciler: ObservableObject {
                     ]
                 )
             } catch {
+                let remainingManaged =
+                    (
+                        (
+                            try? await self.sessionWorkouts(
+                                sessionID: sessionID
+                            )
+                        ) ?? []
+                    ).filter {
+                        ($0.metadata?[self.managedKey] as? Bool)
+                            == true
+                    }
+
+                let originalPreserved =
+                    remainingManaged.contains {
+                        (
+                            $0.metadata?[
+                                self.manualCorrectionKey
+                            ] as? Bool
+                        ) != true
+                    }
+
                 await MainActor.run {
                     self.status =
-                        "Correction annulée · original conservé"
+                        originalPreserved
+                            ? "Correction annulée · original conservé"
+                            : "Correction échouée · source Santé absente"
                 }
 
                 self.emit(
@@ -222,7 +245,7 @@ final class WatchAutoHealthReconciler: ObservableObject {
                         "message":
                             error.localizedDescription,
                         "original_preserved":
-                            true,
+                            originalPreserved,
                     ]
                 )
             }
@@ -243,7 +266,29 @@ final class WatchAutoHealthReconciler: ObservableObject {
                 readTypes.insert(type)
             }
         }
-        let shareTypes: Set<HKSampleType> = [HKObjectType.workoutType(), HKSeriesType.workoutRoute()]
+        var shareTypes: Set<HKSampleType> = [
+            HKObjectType.workoutType(),
+            HKSeriesType.workoutRoute(),
+        ]
+
+        // Les remplacements et restaurations créent leurs propres
+        // quantity samples : ils doivent donc être explicitement
+        // autorisés en écriture.
+        for identifier in [
+            HKQuantityTypeIdentifier.heartRate,
+            .activeEnergyBurned,
+            .distanceWalkingRunning,
+            .distanceCycling,
+            .distanceSwimming,
+        ] {
+            if let type =
+                HKQuantityType.quantityType(
+                    forIdentifier: identifier
+                ) {
+                shareTypes.insert(type)
+            }
+        }
+
         healthStore.requestAuthorization(toShare: shareTypes, read: readTypes) { [weak self] success, error in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -475,6 +520,50 @@ final class WatchAutoHealthReconciler: ObservableObject {
 
         if !originalRoutes.isEmpty {
             try? await deleteObjects(originalRoutes)
+        }
+
+        let postDeleteAutoWorkouts =
+            try await sessionWorkouts(
+                sessionID: plan.sessionID
+            )
+
+        let durableWorkoutIDs =
+            Set(postDeleteAutoWorkouts.map { $0.uuid })
+
+        let expectedWorkoutIDs =
+            Set(createdWorkouts.map { $0.uuid })
+
+        guard
+            expectedWorkoutIDs.isSubset(
+                of: durableWorkoutIDs
+            )
+        else {
+            throw ReconcileError.operation(
+                "un segment reconstruit n’a pas survécu à la suppression du conteneur original"
+            )
+        }
+
+        if !createdRoutes.isEmpty {
+            let postDeleteAutoRoutes =
+                try await sessionRouteObjects(
+                    sessionID: plan.sessionID
+                )
+
+            let durableRouteIDs =
+                Set(postDeleteAutoRoutes.map { $0.uuid })
+
+            let expectedRouteIDs =
+                Set(createdRoutes.map { $0.uuid })
+
+            guard
+                expectedRouteIDs.isSubset(
+                    of: durableRouteIDs
+                )
+            else {
+                throw ReconcileError.operation(
+                    "un parcours reconstruit n’a pas survécu à la suppression du parcours original"
+                )
+            }
         }
 
         emit(
@@ -793,6 +882,108 @@ final class WatchAutoHealthReconciler: ObservableObject {
         // Si HealthKit les a déjà retirées avec le workout, l'erreur est ignorée.
         if !sourceRoutes.isEmpty {
             try? await deleteObjects(sourceRoutes)
+        }
+
+        // RELECTURE FINALE APRÈS SUPPRESSION.
+        //
+        // La première vérification prouve seulement que le remplacement
+        // existait AVANT la suppression de la source. On doit maintenant
+        // prouver qu'il a survécu à cette suppression.
+        var postDeleteWorkouts: [HKWorkout] = []
+
+        for attempt in 0..<4 {
+            postDeleteWorkouts =
+                try await sessionWorkouts(
+                    sessionID: sessionID
+                )
+
+            if postDeleteWorkouts.contains(
+                where: {
+                    $0.uuid == created.workout.uuid
+                }
+            ) {
+                break
+            }
+
+            if attempt < 3 {
+                try await Task.sleep(
+                    nanoseconds: 350_000_000
+                )
+            }
+        }
+
+        guard
+            let durableReplacement =
+                postDeleteWorkouts.first(
+                    where: {
+                        $0.uuid == created.workout.uuid
+                    }
+                ),
+            durableReplacement.workoutActivityType
+                == targetActivity.healthKitType,
+            (
+                durableReplacement.metadata?[
+                    manualCorrectionKey
+                ] as? Bool
+            ) == true
+        else {
+            throw ReconcileError.operation(
+                "le remplacement n’existe plus après suppression de la source"
+            )
+        }
+
+        let sourceUUIDs =
+            Set(sourceWorkouts.map { $0.uuid })
+
+        guard
+            !postDeleteWorkouts.contains(
+                where: {
+                    sourceUUIDs.contains($0.uuid)
+                }
+            )
+        else {
+            throw ReconcileError.operation(
+                "une source HealthKit subsiste après la suppression"
+            )
+        }
+
+        let postDeleteSamples =
+            try await associatedQuantitySamples(
+                for: durableReplacement
+            )
+
+        guard
+            postDeleteSamples.count
+                >= sourceSamples.count
+        else {
+            throw ReconcileError.operation(
+                "les samples du remplacement ne sont pas durables après suppression"
+            )
+        }
+
+        if routeLocations.count >= 2 {
+            let postDeleteRoutes =
+                try await sessionRouteObjects(
+                    sessionID: sessionID
+                )
+
+            guard
+                let expectedRoute = created.route,
+                postDeleteRoutes.contains(
+                    where: {
+                        $0.uuid == expectedRoute.uuid
+                            && (
+                                $0.metadata?[
+                                    manualCorrectionKey
+                                ] as? Bool
+                            ) == true
+                    }
+                )
+            else {
+                throw ReconcileError.operation(
+                    "la route corrigée n’est plus présente après suppression"
+                )
+            }
         }
 
         return HistoricalRepairResult(
@@ -1167,8 +1358,47 @@ final class WatchAutoHealthReconciler: ObservableObject {
         try await checkedOperation { completion in builder.addMetadata(metadata, completion: completion) }
     }
 
-    private func addSamples(_ samples: [HKSample], to builder: HKWorkoutBuilder) async throws {
-        try await checkedOperation { completion in builder.add(samples, completion: completion) }
+    private func addSamples(
+        _ samples: [HKSample],
+        to builder: HKWorkoutBuilder
+    ) async throws {
+        let independentSamples =
+            try cloneQuantitySamples(samples)
+
+        try await checkedOperation { completion in
+            builder.add(
+                independentSamples,
+                completion: completion
+            )
+        }
+    }
+
+    private func cloneQuantitySamples(
+        _ samples: [HKSample]
+    ) throws -> [HKSample] {
+        try samples.map { sample in
+            guard
+                let quantitySample =
+                    sample as? HKQuantitySample
+            else {
+                throw ReconcileError.operation(
+                    "sample HealthKit non quantitatif impossible à cloner"
+                )
+            }
+
+            return HKQuantitySample(
+                type: quantitySample.quantityType,
+                quantity: quantitySample.quantity,
+                start: quantitySample.startDate,
+                end: quantitySample.endDate,
+                metadata: [
+                    "com.rzbck.watchsensorlab.reconstructed_sample":
+                        true,
+                    "com.rzbck.watchsensorlab.source_sample_uuid":
+                        quantitySample.uuid.uuidString,
+                ]
+            )
+        }
     }
 
     private func addEvents(_ events: [HKWorkoutEvent], to builder: HKWorkoutBuilder) async throws {

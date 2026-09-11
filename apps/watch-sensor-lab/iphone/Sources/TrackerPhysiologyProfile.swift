@@ -142,6 +142,7 @@ final class TrackerPhysiologyProfileReader {
         unit: HKUnit,
         completion: @escaping (TrackerPhysiologyReading?) -> Void
     ) {
+        // HealthKit throws an Objective-C exception if doubleValue(for:) receives an incompatible unit.
         guard type.is(compatibleWith: unit) else {
             completion(nil)
             return

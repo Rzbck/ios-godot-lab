@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 
+# Device artifact request: raw restore UI + end-to-end invariants passed CI.
 root = Path(__file__).resolve().parent
 
 def read(relative: str) -> str:

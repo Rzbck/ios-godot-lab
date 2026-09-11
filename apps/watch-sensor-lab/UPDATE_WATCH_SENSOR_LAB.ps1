@@ -68,6 +68,28 @@ function Get-BranchRuns {
     return @($json | ConvertFrom-Json)
 }
 
+function Test-RunHasExpectedArtifact {
+    param(
+        [Parameter(Mandatory)][string]$RepositoryName,
+        [Parameter(Mandatory)][Int64]$RunId,
+        [Parameter(Mandatory)][string]$BuildSha
+    )
+
+    $artifactName = "watch-sensor-lab-companion-$BuildSha"
+    $json = & gh api "repos/$RepositoryName/actions/runs/$RunId/artifacts?per_page=100"
+    Assert-NativeSuccess "gh api artifacts for run $RunId"
+
+    if ([string]::IsNullOrWhiteSpace(($json -join ''))) {
+        return $false
+    }
+
+    $payload = $json | ConvertFrom-Json
+    $matches = @($payload.artifacts | Where-Object {
+        [string]$_.name -eq $artifactName -and $_.expired -ne $true
+    })
+    return ($matches.Count -gt 0)
+}
+
 function Test-CommitAvailable {
     param([Parameter(Mandatory)][string]$CommitSha)
 
@@ -144,9 +166,20 @@ function Wait-ForCompatibleBuild {
             }
         }
 
-        $success = $compatible |
+        $success = $null
+        $successfulRuns = @($compatible |
             Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' } |
-            Select-Object -First 1
+            Select-Object -First 12)
+
+        foreach ($candidate in $successfulRuns) {
+            if (Test-RunHasExpectedArtifact `
+                -RepositoryName $RepositoryName `
+                -RunId ([Int64]$candidate.databaseId) `
+                -BuildSha ([string]$candidate.headSha)) {
+                $success = $candidate
+                break
+            }
+        }
 
         if ($null -ne $success) {
             return [pscustomobject]@{
@@ -177,11 +210,11 @@ function Wait-ForCompatibleBuild {
         }
 
         if (-not $MayTrigger) {
-            throw "No successful build exists whose build inputs exactly match branch HEAD $HeadSha."
+            throw "No retained device artifact exists whose build inputs exactly match branch HEAD $HeadSha."
         }
 
         if (-not $triggeredHere) {
-            Write-Host 'No compatible build exists yet. Triggering exact current-HEAD GitHub Actions build...' -ForegroundColor Yellow
+            Write-Host 'No retained compatible device artifact exists. Triggering exact current-HEAD device build...' -ForegroundColor Yellow
             & gh workflow run $WorkflowName `
                 --repo $RepositoryName `
                 --ref $BranchName
@@ -191,11 +224,11 @@ function Wait-ForCompatibleBuild {
             continue
         }
 
-        Write-Host 'Waiting for GitHub Actions to register the dispatched run...' -ForegroundColor DarkCyan
+        Write-Host 'Waiting for GitHub Actions to register the dispatched device-artifact run...' -ForegroundColor DarkCyan
         Start-Sleep -Seconds 5
     }
 
-    throw "Timed out after $TimeoutMinutes minute(s) waiting for a Watch Sensor Lab build compatible with HEAD $HeadSha."
+    throw "Timed out after $TimeoutMinutes minute(s) waiting for a retained Watch Sensor Lab artifact compatible with HEAD $HeadSha."
 }
 
 function Test-ArtifactDirectory {
@@ -313,7 +346,7 @@ $head = (& git rev-parse HEAD).Trim()
 Assert-NativeSuccess 'git rev-parse HEAD'
 Write-Host "HEAD AFTER  = $head" -ForegroundColor Green
 
-Write-Host "`nResolving companion build with identical build inputs..." -ForegroundColor DarkCyan
+Write-Host "`nResolving retained companion artifact with identical build inputs..." -ForegroundColor DarkCyan
 $resolved = Wait-ForCompatibleBuild `
     -RepositoryName $Repository `
     -WorkflowName $Workflow `
@@ -356,7 +389,7 @@ else {
     New-Item -ItemType Directory -Path $tempDir | Out-Null
 
     try {
-        Write-Host "`nDownloading exact companion artifact..." -ForegroundColor DarkCyan
+        Write-Host "`nDownloading exact retained companion artifact..." -ForegroundColor DarkCyan
         Write-Host "RUN         = $runId"
         Write-Host "ARTIFACT    = $artifactName"
 
@@ -393,7 +426,6 @@ $latest = [ordered]@{
     git_sha = $buildSha
     build_sha = $buildSha
     build_inputs_match_branch_head = $true
-    short_sha = $shortSha
     workflow_run = $runId
     workflow_event = [string]$run.event
     artifact = $artifactName

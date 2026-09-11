@@ -292,14 +292,19 @@ jobs:
           cat "$OUT/BUILD-METADATA.json"
           cat "$IPA_PATH.sha256"
 
-      - name: Upload companion artifact
+      - name: Upload device-candidate artifact
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[device-artifact]')) }}
         id: upload_companion
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: watch-sensor-lab-companion-${{ github.sha }}
-          path: build/watch-sensor-lab-companion/
+          path: |
+            build/watch-sensor-lab-companion/*.ipa
+            build/watch-sensor-lab-companion/*.ipa.sha256
+            build/watch-sensor-lab-companion/BUILD-METADATA.json
+            build/watch-sensor-lab-companion/SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 2
           compression-level: 0
 
       - name: Publish exact-SHA summary
@@ -320,8 +325,14 @@ jobs:
             echo "- Event: \`${GITHUB_EVENT_NAME}\`"
             echo "- Ref: \`${GITHUB_REF}\`"
             echo "- IPA SHA-256: \`${IPA_SHA256}\`"
-            echo "- Artifact ID: \`${ARTIFACT_ID}\`"
-            echo "- Artifact digest: \`${ARTIFACT_DIGEST}\`"
-            echo "- Artifact: ${ARTIFACT_URL}"
+            if [ -n "${ARTIFACT_ID:-}" ]; then
+              echo "- Artifact ID: \`${ARTIFACT_ID}\`"
+              echo "- Artifact digest: \`${ARTIFACT_DIGEST}\`"
+              echo "- Artifact: ${ARTIFACT_URL}"
+              echo '- Retention: **2 days**'
+            else
+              echo '- Artifact: **not uploaded (CI-only build)**'
+              echo '- To retain an installable candidate: use `[device-artifact]` in the push commit message or `workflow_dispatch`.'
+            fi
             echo '- Hardware validation: **NOT performed by CI**'
           } >> "$GITHUB_STEP_SUMMARY"

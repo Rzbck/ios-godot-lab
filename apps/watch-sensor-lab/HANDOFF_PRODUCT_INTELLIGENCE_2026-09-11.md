@@ -315,3 +315,42 @@ Règle durable :
 
 `CHECK_PRODUCT_INVARIANTS.py` est bloquant en CI et contrôle ces invariants
 sur les routes réellement montées.
+
+## Incident HealthKit historique — disparition du workout 1789141684582
+
+Document détaillé :
+`docs/HEALTHKIT_HISTORICAL_CORRECTION_INCIDENT_2026-09-11.md`
+
+État établi :
+
+- workout original enregistré en `walking` ;
+- UUID original :
+  `CBC8097B-4C5A-4851-804A-84E8F5716177` ;
+- raw Tracker toujours présents ;
+- workout HealthKit actuellement absent ;
+- tentative observée de correction vers `cycling` échoue avec
+  `aucun workout Watch Tracker correspondant à cette session` ;
+- l'instant exact et la cause exacte de la disparition précédente
+  ne sont PAS encore prouvés ;
+- `replacement_requested` ne doit jamais être présenté comme une
+  correction HealthKit réussie ;
+- une correction n'est réussie qu'après relecture HealthKit finale
+  post-suppression ;
+- cible de restauration :
+  `1789141684582 -> cycling`.
+
+Sauvegarde gelée :
+
+- ZIP SHA-256 :
+  `269AB9E727AA62BCC202594DE33F994902B936C555D0C407DCC2BA56D01C45B0`
+- manifest SHA-256 :
+  `7FF9907FB8BE4FFC42892F512090FEF65233ED3AFF05865063A59B701FA4EB86`
+
+Prochaine étape exacte :
+
+1. durcir le moteur transactionnel ;
+2. empêcher la convergence UI sur `replacement_requested` ;
+3. ajouter les invariants CI correspondants ;
+4. construire un restaurateur idempotent depuis Tracker raw ;
+5. restaurer physiquement la séance en Vélo ;
+6. vérifier Santé + iPhone + Watch après redémarrage.

@@ -18,43 +18,51 @@ Current product priorities:
 - maps/terrain and sport-aware live UI;
 - no opaque or fabricated health values.
 
-## Repository / branch
+## Repository / branch / resume point
 
 - repository: `Rzbck/ios-godot-lab`
 - app: `apps/watch-sensor-lab`
 - active branch: `feat/watch-sensor-product-shell-maps-20260910`
-- exact latest build-producing code SHA: `61689574162c063f845c7c75c14ac1ce95236406`
-- latest docs-only branch HEAD before this HANDOFF update: `ab0f66635b552c7510b8c4ddc3d96d81411aa94f`
+- exact latest CI-validated build-producing code SHA: `0a012414e6ba5e25a13f0f2fb80d816546b3155a`
+- parent comparison implementation SHA: `1ab087fe0718a3c5e6d278ded0c85d3fb6ecacf4`
 - parent tooling/storage-policy commits:
   - `244d53c713efd32658673167eef8021710c35488` — candidate-only GitHub artifacts
   - `b76e0651dce7baad2a5d68ffdc3862be7d3a6bc7` — updater resolves only retained device artifacts
+- local Windows worktree path was **not re-verified in this chat**; before any local command, resolve it from `git worktree list`, then verify branch, `git status`, and exact HEAD.
 
-This HANDOFF update is docs-only. On resume, verify actual branch HEAD and use Git diff/build-input equivalence before reusing the build checkpoint.
+This HANDOFF update is docs-only. On resume, verify actual branch HEAD. Do not confuse a later docs-only HEAD with the latest CI-validated build SHA above; compare build inputs before reusing the checkpoint.
 
 ## Latest CI checkpoint
 
 - workflow: `.github/workflows/watch-sensor-lab-bootstrap.yml`
-- build SHA: `61689574162c063f845c7c75c14ac1ce95236406`
-- run: `34566090256`
-- job: `103158434696`
+- build SHA: `0a012414e6ba5e25a13f0f2fb80d816546b3155a`
+- commit: `feat(tracker): expose similar sessions in progression`
+- run: `34566730079`
+- job: `103160274613`
 - conclusion: **SUCCESS**
-- iPhone build: SUCCESS
-- watchOS build: SUCCESS
-- HealthKit declaration checks: SUCCESS
-- combined iPhone + embedded Watch assembly: SUCCESS
-- exact-SHA packaging: SUCCESS
+- iPhone build: **SUCCESS**
+- watchOS build: **SUCCESS**
+- HealthKit declaration checks: **SUCCESS**
+- combined iPhone + embedded Watch assembly: **SUCCESS**
+- exact-SHA packaging: **SUCCESS**
 - device artifact upload: **SKIPPED by design**
 - workflow artifacts for this run: **0**
 - hardware validation: **NOT performed**
 
-Do not describe this checkpoint as installed or physically validated.
+The parent implementation SHA `1ab087fe0718a3c5e6d278ded0c85d3fb6ecacf4` is also CI-valid:
+- run `34566476368`
+- job `103159529999`
+- iPhone + Watch + HealthKit + packaging: SUCCESS
+- artifact upload: SKIPPED
+
+Do not describe either checkpoint as installed or physically validated.
 
 ## GitHub Actions storage policy
 
 Problem observed 2026-09-11:
 - 50 Watch Sensor Lab artifacts consumed about 255.42 MB;
 - user cleaned 44 redundant artifacts;
-- 6 important checkpoints remain, about 12.25 MB total.
+- 6 important checkpoints remained, about 12.25 MB total after cleanup.
 
 Current policy:
 - normal build-relevant push still runs full iPhone + Watch CI;
@@ -68,7 +76,9 @@ Current policy:
 Verified behavior:
 - run `34564308303` on `244d53c7...`: SUCCESS, upload skipped, 0 artifacts;
 - run `34565274225` on `a741407f...`: SUCCESS, upload skipped, 0 artifacts;
-- run `34566090256` on `61689574...`: SUCCESS, upload skipped, 0 artifacts.
+- run `34566090256` on `61689574...`: SUCCESS, upload skipped, 0 artifacts;
+- run `34566476368` on `1ab087fe...`: SUCCESS, upload skipped;
+- run `34566730079` on `0a012414...`: SUCCESS, upload skipped, 0 artifacts.
 
 `UPDATE_WATCH_SENSOR_LAB.ps1` distinguishes branch HEAD from BUILD SHA and searches for an actual retained artifact. If no compatible artifact exists and auto-build is permitted, it can dispatch a deliberate device build. Never silently treat a green no-artifact CI run as an installable IPA.
 
@@ -76,18 +86,18 @@ Verified behavior:
 
 ### Today Command Center + Daily Brief
 
-`TodayCommandCenterView.swift` remains the Today entry surface and now places `TrackerDailyBriefCard()` directly under the Today hero.
+`TodayCommandCenterView.swift` places `TrackerDailyBriefCard()` directly under the Today hero.
 
-`TrackerDailyBrief.swift`:
-- short Today headline based on readable personal signals;
+`TrackerDailyBrief.swift` provides:
+- a short Today headline based on readable personal signals;
 - factor-level cards for recovery, sleep, workload context, HRV and resting HR when available;
 - comparison to personal recent baseline where available;
 - explicit confidence and provenance;
 - missing values remain missing;
-- detail view explains why the brief reached its wording;
+- detail explaining why the brief reached its wording;
 - no causal or medical language.
 
-Today hierarchy is now:
+Today hierarchy:
 1. Today/activity hero;
 2. Daily Brief;
 3. Tracker Recovery;
@@ -98,65 +108,54 @@ Today hierarchy is now:
 8. Health signals;
 9. progression/history actions.
 
-### Recovery / sleep
+### Recovery / sleep / night vitals
 
 `TrackerRecoveryIntelligence.swift`:
 - personal-baseline recovery intelligence;
 - sleep duration, bedtime consistency and continuity;
 - HRV, resting HR, respiratory rate and sleeping wrist temperature context;
 - recent 7-day workout-volume pressure versus previous reference window;
-- confidence/coverage is explicit;
+- explicit confidence/coverage;
 - missing factors reduce confidence instead of becoming zero;
 - no injury prediction or medical diagnosis.
 
 `TrackerNightVitals.swift`:
-- finds latest sufficiently documented sleep window;
-- reads median overnight HR, HRV, respiratory rate, wrist temperature and oxygen saturation when accessible;
-- stores source and sample count for each signal;
-- labels values as context, not diagnosis.
+- latest sufficiently documented sleep window;
+- median overnight HR, HRV, respiratory rate, wrist temperature and oxygen saturation when accessible;
+- source and sample count retained;
+- values labelled as context, not diagnosis.
 
 `TrackerSleepLabView.swift`:
 - latest night duration versus personal sleep baseline;
-- sleep-window continuity;
-- interruptions;
+- continuity and interruptions;
 - bedtime regularity;
 - accumulated 7-day sleep shortfall versus personal baseline;
 - Core / Deep / REM breakdown when available;
 - 14-night duration trend with personal baseline;
-- embeds Vitals Nuit;
-- explicitly explains why Tracker does not create a second Apple Sleep Score.
+- embedded Vitals Nuit;
+- explicitly does not create a second Apple Sleep Score.
 
-Apple 2026 research note:
-- Apple provides an official Sleep Score in current OS/product behavior;
-- Apple DTS states there is currently no public HealthKit API to read Apple Sleep Score;
-- Tracker therefore must not market its own Recovery/Sleep analysis as Apple Sleep Score or silently recreate it;
-- Tracker Recovery stays multi-signal: sleep + personal baselines + HRV/RHR + night vitals + training context + confidence.
+Apple 2026 guardrail retained:
+- Apple provides an official Sleep Score in current product behavior;
+- there is currently no public HealthKit API for Tracker to read that Apple Sleep Score;
+- Tracker Recovery remains its own transparent multi-signal analysis and must not be marketed as Apple Sleep Score.
 
 ### Physiology / cardio
 
-`TrackerPhysiologyProfile.swift`:
-- age from Health date of birth;
-- body mass;
-- height;
-- VO2 max;
-- one-minute heart-rate recovery;
-- adult age-based HRmax estimate only as fallback (`208 - 0.7 * age`), never as guaranteed personal max;
-- provenance and freshness retained.
+`TrackerPhysiologyProfile.swift` reads/contextualizes age, body mass, height, VO2 max and one-minute heart-rate recovery. Adult age-based HRmax estimate (`208 - 0.7 * age`) is fallback context only, never a guaranteed personal maximum.
 
-`TrackerCardioFitnessLab.swift`:
-- VO2 max / HR recovery / resting HR / weight trends;
-- long-range chart periods and source/date context.
+`TrackerCardioFitnessLab.swift` exposes VO2 max / HR recovery / resting HR / weight trends with long-range charts and source/date context.
 
 Heart-rate reference hierarchy:
 1. configured/personal HRmax;
 2. adult age estimate when appropriate;
 3. workout peak only as last-resort context.
 
-Age/weight are contextual inputs only. They do not directly penalize Recovery. Apple VO2 max is already relative to body mass (`mL/kg/min`) and must not be reweighted by body mass again.
+Age/weight are contextual inputs only and do not directly penalize Recovery. Apple VO2 max is already relative to body mass (`mL/kg/min`) and must not be reweighted by body mass again.
 
 ### Effort provenance
 
-`AppleWorkoutEffortReader.swift` + `TrackerEffortInsight.swift` separate:
+`AppleWorkoutEffortReader.swift` + `TrackerEffortInsight.swift` keep separate:
 - Apple perceived workout effort;
 - Apple estimated workout effort;
 - Tracker local estimated effort;
@@ -168,73 +167,62 @@ These values never overwrite one another silently.
 
 `TrainingLoadIntelligenceView.swift` presents four independent axes rather than one opaque combined number:
 1. all-accessible Apple Health workout volume: recent 7 days vs weekly average of previous 28 days;
-2. session-RPE internal load for Tracker sessions where user explicitly entered perceived effort, calculated as active minutes × RPE;
+2. session-RPE internal load for Tracker sessions with explicit user RPE, calculated as active minutes × RPE;
 3. Tracker estimated effort trend for local Tracker sessions;
 4. current Tracker Recovery context.
 
-Behavior:
-- sport filter;
-- recent daily-volume chart;
-- sRPE daily chart when coverage exists;
-- Tracker effort trend;
-- per-session provenance;
-- explicit RPE coverage;
-- missing RPE is never substituted by Tracker estimation;
-- volume ratio is descriptive context only;
-- no ACWR-based injury prediction.
+It includes sport filtering, recent daily volume, sRPE when coverage exists, Tracker effort trend, per-session provenance and explicit RPE coverage. Missing RPE is never replaced by a Tracker estimate. Volume ratios are descriptive context only; no ACWR injury prediction.
 
 ### Correlation Lab
 
-`TrackerCorrelationLab.swift` implements guarded personal associations:
+`TrackerCorrelationLab.swift` currently supports guarded personal associations:
 - sleep duration vs next-day HRV;
 - sleep duration vs next-day resting HR;
 - previous-day workout minutes vs following sleep duration.
 
 Rules:
-- raw pair count `n` is visible;
-- minimum 10 paired observations before relationship wording;
-- Pearson `r` shown as an association coefficient;
-- no cause/effect language;
-- no diagnostic interpretation;
-- first version uses the recent Recovery sleep history and should later expand to 30/60/90-day histories after UX validation.
+- raw paired count `n` is visible;
+- minimum 10 pairs before relationship wording;
+- Pearson `r` is shown as an association coefficient;
+- no cause/effect or diagnostic language;
+- current first version uses recent Recovery sleep history; 30/60/90-day analytical histories remain future work.
 
 ### Local behavior / experiment journal
 
-`TrackerBehaviorJournal.swift` collects local explicit tags such as:
-- late caffeine;
-- alcohol;
-- late meal;
-- late screen;
-- meditation/breathing;
-- sauna/heat;
-- mobility/stretching;
-- good hydration;
-- nap;
-- perceived high stress;
-- travel;
-- feeling sick.
+`TrackerBehaviorJournal.swift` collects local explicit tags such as late caffeine, alcohol, late meal/screen, meditation, sauna/heat, mobility/stretching, hydration, nap, high perceived stress, travel and feeling sick.
 
 Rules:
 - local storage only in current implementation;
 - optional short note;
-- tags do not write to Apple Health;
-- tags do not modify Recovery or training-load scores;
-- collect first, analyze later;
-- future behavior-impact analysis must require sufficient observations in both yes/no groups and display sample sizes.
+- no write to Apple Health;
+- tags do not alter Recovery or training-load scores;
+- future behavior-impact analysis must require enough observations in both yes/no groups and show sample sizes.
 
-Benchmark guardrails:
-- WHOOP requires repeated yes/no entries before behavior impacts;
-- Oura requires meaningful recent baseline coverage for Discoveries;
-- Tracker follows the same conservative philosophy rather than showing instant pseudo-insights.
+### Matched activity comparison — CI validated
+
+`MatchedActivityComparisonView.swift` was added at `1ab087fe0718a3c5e6d278ded0c85d3fb6ecacf4` and exposed from `ProgressionEntryView.swift` at `0a012414e6ba5e25a13f0f2fb80d816546b3155a`.
+
+Current behavior:
+- uses local Tracker sessions only;
+- same effective sport is mandatory;
+- if useful distance exists, matching prioritizes distance, then duration, with elevation as a nuance;
+- otherwise matching prioritizes duration, with heart rate only as a nuance when available;
+- minimum displayed similarity is 55%;
+- reference session can be changed from the view;
+- comparison keeps dimensions separate: pace/speed, average HR, Tracker effort, elevation gain, energy, cadence and weather context when available;
+- no global “better/worse” score;
+- matching score is only for finding comparable sessions and does not affect health, recovery or effort scores;
+- future route fingerprinting is intentionally deferred until it can be made trustworthy.
+
+Progression now exposes:
+- Volume récent;
+- Charge multi-source;
+- Récupération lab;
+- Séances similaires.
 
 ### iPhone Recovery Lab
 
-`ProgressionEntryView.swift` now exposes:
-- Volume récent;
-- Charge multi-source;
-- Récupération lab.
-
-Recovery lab contains:
+Recovery Lab contains:
 - Tracker Recovery Intelligence;
 - Daily Brief;
 - Sleep Lab;
@@ -244,7 +232,7 @@ Recovery lab contains:
 - Cardio Fitness;
 - Physiological Profile.
 
-### Watch wellness sync
+### Watch wellness sync / Status depth
 
 `PhoneRecentHistoryBridge.swift` attaches a compact wellness digest to the existing recent-history v6 transfer rather than creating a competing WatchConnectivity channel.
 
@@ -258,11 +246,11 @@ Digest includes when available:
 - wrist temperature;
 - oxygen saturation;
 - VO2 max;
-- 1-minute HR recovery.
+- one-minute HR recovery.
 
 `WatchRecentHistory.swift` persists the optional wellness payload while remaining backward-compatible with older v6/v5/v4 history caches.
 
-`WatchStatusDepthView.swift` Status depth vertical pages:
+`WatchStatusDepthView.swift` vertical Status pages:
 1. Devices;
 2. Health/GPS sensors;
 3. Recovery;
@@ -271,26 +259,24 @@ Digest includes when available:
 
 Global Watch major-function navigation remains horizontal; Status uses vertical/Crown depth.
 
-## External benchmark / current research
+## External benchmark / retained guardrails
 
 Research file:
 `apps/watch-sensor-lab/RESEARCH_PRODUCT_BENCHMARK_2026-09-11.md`
 
-It records current Apple / Garmin / Strava / WHOOP / Oura product patterns, scientific/product guardrails, and future modules.
-
-Important retained conclusions:
+Retained conclusions:
 - do not create a fake cardiovascular-age feature from VO2 max alone; Oura CVA uses estimated pulse-wave velocity from PPG waveform;
 - do not claim a workload ratio predicts injury;
 - do not infer road/trail/gravel without trustworthy map/source data;
 - personal discoveries require sufficient data and visible sample sizes;
-- current Apple WorkoutKit is a possible future Plans module for structured workouts/pacers/triathlon, but must not silently replace current Watch workout authority;
-- Apple documents HealthKit access to hypertension notification events on supported new OS versions; if ever integrated, keep this medically sensitive context separate from sport-readiness scoring.
+- WorkoutKit is a possible future structured Plans module but must not silently replace current Watch workout authority;
+- medically sensitive HealthKit context such as hypertension notification events must stay separate from sport-readiness scoring.
 
 ## Apple Fitness/Forme source icon
 
 Current iPhone project explicitly uses `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` and a normal universal 1024×1024 iOS AppIcon PNG.
 
-The old user-observed white/missing source icon in Fitness/Forme is NOT declared fixed. Current iOS 26 developer-forum reports show similar Fitness source-icon rendering issues in other apps. Do not modify the icon asset blindly. Verify a newly recorded workout from a future device candidate for:
+The previously observed white/missing source icon in Fitness/Forme is **NOT declared fixed**. Do not modify the icon asset blindly. A future device candidate must verify a newly recorded workout for:
 - activity type;
 - source app name;
 - source icon.
@@ -311,6 +297,7 @@ Still present:
 
 ## What is NOT yet physically validated
 
+None of the following should be described as device-validated yet:
 - current Today Command Center and Daily Brief;
 - Recovery Lab;
 - Sleep Lab;
@@ -319,6 +306,7 @@ Still present:
 - night vitals display;
 - physiology/cardio lab;
 - multi-source training load;
+- Matched Activity / Séances similaires UI and real-session matching;
 - wellness digest arriving/persisting/rendering on a real Watch;
 - Watch Recovery/Cardio status pages fitting all real Watch sizes;
 - active Watch four-page redesign;
@@ -328,33 +316,39 @@ Still present:
 - new workout type/source icon in Apple Fitness/Forme;
 - current combined code on physical iPhone/Watch.
 
-## Next work that does not require hardware first
+## Next exact step — deliberate device candidate
 
-1. Matched-activity comparison:
-   - same sport;
-   - similar distance/duration;
-   - later route fingerprint;
-   - compare pace/speed, HR, effort, elevation and environment context.
-2. Extend analytical history to 30/60/90 days for Correlation Lab.
-3. Behavior-impact engine only after enough journal history exists; preserve yes/no sample-count gates.
-4. Research/implement transparent Fitness / Fatigue / Form only when enough load history is available.
-5. Continue sport-specific metric/detail cards and trustworthy map/terrain-source research.
+The analytical tranche is now mature enough that the next high-value step is **one deliberate real-device candidate before adding another major UI layer**.
+
+Normal CI must remain artifact-free. When the user explicitly chooses to make the candidate:
+1. create one deliberate `[device-artifact]` build or manual workflow dispatch on the intended branch/ref;
+2. record the exact candidate BUILD SHA and artifact metadata;
+3. use `UPDATE_WATCH_SENSOR_LAB.ps1` from the **verified correct dedicated worktree**;
+4. verify the downloaded IPA corresponds exactly to the intended BUILD SHA and record its SHA-256;
+5. install with the already-validated iLoader workflow;
+6. test iPhone Today / Recovery / Load / Journal / Séances similaires;
+7. test Watch idle / Status depth / wellness sync and layout;
+8. record one short real WALK;
+9. inspect active iPhone/Watch screens and Apple Fitness/Forme activity type, source name and source icon;
+10. record hardware results and any regression in this HANDOFF.
+
+A generated artifact is not an installation; an installation is not physical behavior validation.
+
+## Subsequent work after the device checkpoint
+
+1. Extend analytical history to 30/60/90 days for Correlation Lab.
+2. Add behavior-impact analysis only after enough journal history exists; preserve yes/no sample-count gates.
+3. Research/implement transparent Fitness / Fatigue / Form only when enough load history is available.
+4. Continue sport-specific metric/detail cards and trustworthy map/terrain-source research.
+5. Add route fingerprinting to matched activities only when the route match can be made reliable and explainable.
 6. Evaluate WorkoutKit as a separate structured Plans module after existing active-workout UX is physically validated.
 
-Do not alter active workout authority/recorder semantics during these analytical UI tasks.
+## Do not modify casually
 
-## Next deliberate device candidate
+- Watch workout authority / HealthKit workout ownership;
+- recorder/session semantics already validated;
+- explicit Apple / Tracker / user effort provenance;
+- existing exact-SHA GitHub Actions + `UPDATE_WATCH_SENSOR_LAB.ps1` + iLoader deployment pipeline;
+- artifact-free normal CI policy.
 
-Normal CI must remain artifact-free.
-
-When the analytical tranche is mature enough for real-device inspection:
-- create one deliberate `[device-artifact]` build or manual workflow dispatch;
-- verify exact BUILD SHA and artifact metadata;
-- use `UPDATE_WATCH_SENSOR_LAB.ps1` from the correct dedicated worktree;
-- install with the already-validated iLoader workflow;
-- test iPhone Today/Recovery/Load/Journal first;
-- then Watch idle/depth/wellness sync;
-- then one short real WALK;
-- then active screens and Apple Fitness/Forme source type/name/icon.
-
-No merge to main, release, or promotion without explicit user approval.
+No merge to `main`, release, promotion, destructive Git operation, or cross-app propagation without explicit user approval.

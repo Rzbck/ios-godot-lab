@@ -112,7 +112,6 @@ final class TrackerModel: NSObject, ObservableObject {
     }
 
     func setAutoPauseEnabled(_ enabled: Bool) {
-        guard !isActive else { return }
         autoPauseEnabled = enabled
         defaults.set(enabled, forKey: "tracker.autoPauseEnabled")
         sendPreferences()
@@ -124,7 +123,6 @@ final class TrackerModel: NSObject, ObservableObject {
         pauseDwell: Double? = nil,
         resumeDwell: Double? = nil
     ) {
-        guard !isActive else { return }
         var value = autoPauseProfiles[profile] ?? profile.defaultPreference
         if let enabled { value.enabled = enabled }
         if let pauseDwell {

@@ -268,6 +268,5 @@ private struct AutoPauseProfileSettingsView: View {
         }
         .navigationTitle(profile.label)
         .navigationBarTitleDisplayMode(.inline)
-        .disabled(tracker.isActive)
     }
 }

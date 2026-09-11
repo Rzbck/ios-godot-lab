@@ -391,6 +391,22 @@ private struct LiveActivityProductView: View {
                 )
             }
 
+            Toggle(
+                isOn: Binding(
+                    get: { tracker.autoPauseEnabled },
+                    set: { tracker.setAutoPauseEnabled($0) }
+                )
+            ) {
+                Label("Pause automatique", systemImage: "pause.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .tint(.mint)
+            .padding(12)
+            .background(
+                .white.opacity(0.055),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("ÉTAT")
                     .font(.caption2.weight(.black))

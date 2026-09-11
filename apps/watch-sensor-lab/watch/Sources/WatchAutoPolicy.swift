@@ -27,23 +27,12 @@ enum WatchAutoPolicy {
             return WatchAutoDecision(activity: .cycling, confidence: confidence, provenance: "Core Motion · vélo", dwellSeconds: 9)
         }
         if motion.walking {
-            let verticalTravel = elevationGainMeters + elevationLossMeters
-            let terrainRatio = distanceMeters > 300 ? verticalTravel / distanceMeters : 0
-            let hikingEvidence = elapsedSeconds >= 10 * 60
-                && distanceMeters >= 700
-                && verticalTravel >= 45
-                && terrainRatio >= 0.035
-
-            if hikingEvidence {
-                let inferredConfidence = motion.confidence == .high && terrainRatio >= 0.05 ? "élevée" : "moyenne"
-                return WatchAutoDecision(
-                    activity: .hiking,
-                    confidence: inferredConfidence,
-                    provenance: "Inférence Watch Tracker · marche + terrain/dénivelé",
-                    dwellSeconds: 30
-                )
-            }
-            return WatchAutoDecision(activity: .walking, confidence: confidence, provenance: "Core Motion · marche", dwellSeconds: 8)
+            return WatchAutoDecision(
+                activity: .walking,
+                confidence: confidence,
+                provenance: "Core Motion · marche",
+                dwellSeconds: 8
+            )
         }
         return nil
     }

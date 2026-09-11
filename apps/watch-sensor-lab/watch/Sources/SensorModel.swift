@@ -130,7 +130,7 @@ final class SensorModel: NSObject, ObservableObject {
         selectionRevision = Self.revisionNow()
         autoConfidence = activity.isAutomatic ? "—" : "manuel"
         autoProvenance = activity.isAutomatic ? "En attente" : "Choix utilisateur"
-        sessionStatus = activity.isAutomatic ? "Auto · marche/course/vélo/randonnée" : activity.label
+        sessionStatus = activity.isAutomatic ? "Auto · marche/course/vélo" : activity.label
         sendWC(makeMessage(kind: .selection))
     }
 
@@ -1288,8 +1288,6 @@ final class SensorModel: NSObject, ObservableObject {
     }
 
     private func handlePreferences(_ payload: [String: Any]) {
-        guard !running else { return }
-
         if let enabled = payload["auto_pause_enabled"] as? Bool {
             autoPauseEnabled = enabled
             defaults.set(enabled, forKey: "tracker.autoPauseEnabled")
@@ -1342,6 +1340,20 @@ final class SensorModel: NSObject, ObservableObject {
             pauseKey: WatchAutoPauseSettings.cyclePauseDwellKey,
             resumeKey: WatchAutoPauseSettings.cycleResumeDwellKey
         )
+
+        cancelPendingAutoPause()
+        cancelPendingAutoResume()
+
+        if !autoPauseEnabled, phase == .paused, autoPaused {
+            authorityRevision += 1
+            resumeCore(reason: "auto")
+            autoPaused = false
+            sendAuthority(force: true)
+        } else if autoPauseEnabled, phase == .active {
+            stageAutoPauseIfNeeded()
+        } else if autoPauseEnabled, phase == .paused, autoPaused {
+            stageAutoResumeIfNeeded()
+        }
     }
 
     private func applyPurgeIfNeeded(_ purgeID: String) {

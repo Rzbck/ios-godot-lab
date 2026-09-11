@@ -44,7 +44,7 @@ private struct IdleActivityExperienceView: View {
                     Text(tracker.selectedActivity.label)
                         .font(.title.weight(.bold))
                     if tracker.selectedActivity.isAutomatic {
-                        Text("Auto laisse la Watch identifier prudemment marche, course, vélo ou randonnée probable.")
+                        Text("Auto laisse la Watch identifier prudemment marche, course ou vélo. La randonnée reste un choix manuel tant qu’aucune source de terrain fiable ne la confirme.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }

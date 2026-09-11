@@ -26,68 +26,28 @@ struct TrackerCorrelationInsight: Identifiable, Equatable {
 
 struct TrackerCorrelationSnapshot: Equatable {
     let insights: [TrackerCorrelationInsight]
+    let windowDays: Int
     let generatedAt: Date
 }
 
 final class TrackerCorrelationReader {
-    private let recoveryReader = TrackerRecoveryIntelligenceReader()
-    private let healthReader = HealthProgressionReader()
-    private let workoutReader = HealthWorkoutHistoryReader()
-    private let calendar = Calendar.autoupdatingCurrent
+    private let historyReader = TrackerCorrelationHistoryReader()
 
-    func load(completion: @escaping (TrackerCorrelationSnapshot) -> Void) {
-        let group = DispatchGroup()
-        var recovery: TrackerRecoverySnapshot?
-        var health = HealthProgressionData.empty
-        var workouts: [HealthWorkoutRecord] = []
-
-        group.enter()
-        recoveryReader.load { value in
-            recovery = value
-            group.leave()
-        }
-
-        group.enter()
-        healthReader.load { value in
-            health = value
-            group.leave()
-        }
-
-        group.enter()
-        workoutReader.loadAll { value in
-            workouts = value
-            group.leave()
-        }
-
-        group.notify(queue: .main) {
+    func load(days: Int, completion: @escaping (TrackerCorrelationSnapshot) -> Void) {
+        let boundedDays = min(90, max(30, days))
+        historyReader.load(days: boundedDays) { history in
             completion(
                 TrackerCorrelationSnapshot(
-                    insights: self.makeInsights(
-                        recovery: recovery,
-                        health: health,
-                        workouts: workouts
-                    ),
+                    insights: Self.makeInsights(history: history),
+                    windowDays: boundedDays,
                     generatedAt: Date()
                 )
             )
         }
     }
 
-    private func makeInsights(
-        recovery: TrackerRecoverySnapshot?,
-        health: HealthProgressionData,
-        workouts: [HealthWorkoutRecord]
-    ) -> [TrackerCorrelationInsight] {
-        guard let recovery else {
-            return Self.emptyInsights()
-        }
-
-        let sleep = recovery.sleepTrend
-        let hrvPoints = pairSleepWithHealth(sleep: sleep, health: health.hrvTrend)
-        let restingPoints = pairSleepWithHealth(sleep: sleep, health: health.restingHeartRateTrend)
-        let trainingSleepPoints = pairTrainingWithSleep(sleep: sleep, workouts: workouts)
-
-        return [
+    private static func makeInsights(history: TrackerCorrelationHistorySnapshot) -> [TrackerCorrelationInsight] {
+        [
             TrackerCorrelationInsight(
                 id: "sleep_hrv",
                 title: "Sommeil ↔ VFC",
@@ -95,8 +55,8 @@ final class TrackerCorrelationReader {
                 yLabel: "VFC lendemain",
                 xUnit: "h",
                 yUnit: "ms",
-                points: hrvPoints,
-                correlation: Self.pearson(hrvPoints),
+                points: history.sleepHRVPoints,
+                correlation: pearson(history.sleepHRVPoints),
                 minimumSamples: 10,
                 note: "Associe la durée de chaque nuit à la VFC Apple Health du jour où la nuit se termine.",
                 symbol: "waveform.path.ecg"
@@ -108,8 +68,8 @@ final class TrackerCorrelationReader {
                 yLabel: "FC repos lendemain",
                 xUnit: "h",
                 yUnit: "bpm",
-                points: restingPoints,
-                correlation: Self.pearson(restingPoints),
+                points: history.sleepRestingHeartRatePoints,
+                correlation: pearson(history.sleepRestingHeartRatePoints),
                 minimumSamples: 10,
                 note: "Compare la durée de sommeil à la FC au repos lisible le jour suivant.",
                 symbol: "heart.fill"
@@ -121,53 +81,13 @@ final class TrackerCorrelationReader {
                 yLabel: "Sommeil nuit suivante",
                 xUnit: "min",
                 yUnit: "h",
-                points: trainingSleepPoints,
-                correlation: Self.pearson(trainingSleepPoints),
+                points: history.trainingSleepPoints,
+                correlation: pearson(history.trainingSleepPoints),
                 minimumSamples: 10,
                 note: "Compare le volume d’entraînement du jour civil précédent à la durée de la nuit suivante.",
                 symbol: "figure.run"
             ),
         ]
-    }
-
-    private func pairSleepWithHealth(
-        sleep: [TrackerSleepNight],
-        health: [HealthTrendPoint]
-    ) -> [TrackerCorrelationPoint] {
-        sleep.compactMap { night in
-            let targetDay = calendar.startOfDay(for: night.endedAt)
-            guard let value = health.first(where: {
-                calendar.isDate($0.date, inSameDayAs: targetDay)
-            }) else { return nil }
-            return TrackerCorrelationPoint(
-                date: targetDay,
-                x: night.totalSleep / 3600,
-                y: value.value
-            )
-        }
-        .sorted { $0.date < $1.date }
-    }
-
-    private func pairTrainingWithSleep(
-        sleep: [TrackerSleepNight],
-        workouts: [HealthWorkoutRecord]
-    ) -> [TrackerCorrelationPoint] {
-        sleep.compactMap { night in
-            let sleepDay = calendar.startOfDay(for: night.endedAt)
-            guard let previousDay = calendar.date(byAdding: .day, value: -1, to: sleepDay) else {
-                return nil
-            }
-            let previousEnd = sleepDay
-            let minutes = workouts
-                .filter { $0.startedAt >= previousDay && $0.startedAt < previousEnd }
-                .reduce(0.0) { $0 + $1.duration } / 60
-            return TrackerCorrelationPoint(
-                date: sleepDay,
-                x: minutes,
-                y: night.totalSleep / 3600
-            )
-        }
-        .sorted { $0.date < $1.date }
     }
 
     private static func pearson(_ points: [TrackerCorrelationPoint]) -> Double? {
@@ -184,26 +104,6 @@ final class TrackerCorrelationReader {
         guard denominator > 0 else { return nil }
         let value = numerator / denominator
         return value.isFinite ? min(1, max(-1, value)) : nil
-    }
-
-    private static func emptyInsights() -> [TrackerCorrelationInsight] {
-        [
-            TrackerCorrelationInsight(
-                id: "sleep_hrv", title: "Sommeil ↔ VFC", xLabel: "Sommeil", yLabel: "VFC lendemain",
-                xUnit: "h", yUnit: "ms", points: [], correlation: nil, minimumSamples: 10,
-                note: "Repères de sommeil et VFC en construction.", symbol: "waveform.path.ecg"
-            ),
-            TrackerCorrelationInsight(
-                id: "sleep_rhr", title: "Sommeil ↔ FC repos", xLabel: "Sommeil", yLabel: "FC repos lendemain",
-                xUnit: "h", yUnit: "bpm", points: [], correlation: nil, minimumSamples: 10,
-                note: "Repères de sommeil et FC au repos en construction.", symbol: "heart.fill"
-            ),
-            TrackerCorrelationInsight(
-                id: "training_sleep", title: "Entraînement ↔ Sommeil", xLabel: "Minutes veille", yLabel: "Sommeil nuit suivante",
-                xUnit: "min", yUnit: "h", points: [], correlation: nil, minimumSamples: 10,
-                note: "Historique entraînement/sommeil en construction.", symbol: "figure.run"
-            ),
-        ]
     }
 }
 
@@ -225,7 +125,7 @@ struct TrackerCorrelationLabEntryCard: View {
                     Text("Découvrir tes associations personnelles")
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.primary)
-                    Text("Minimum 10 paires · n et r visibles · jamais de causalité affirmée")
+                    Text("30 / 60 / 90 j · min 10 paires · n et r visibles")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -241,9 +141,19 @@ struct TrackerCorrelationLabEntryCard: View {
     }
 }
 
+private enum TrackerCorrelationPeriod: Int, CaseIterable, Identifiable {
+    case days30 = 30
+    case days60 = 60
+    case days90 = 90
+
+    var id: Int { rawValue }
+    var label: String { "\(rawValue) j" }
+}
+
 struct TrackerCorrelationLabView: View {
     @State private var snapshot: TrackerCorrelationSnapshot?
     @State private var loading = true
+    @State private var period: TrackerCorrelationPeriod = .days30
 
     private let reader = TrackerCorrelationReader()
 
@@ -251,6 +161,8 @@ struct TrackerCorrelationLabView: View {
         ScrollView {
             LazyVStack(spacing: 14) {
                 intro
+                periodPicker
+
                 if let snapshot {
                     ForEach(snapshot.insights) { insight in
                         correlationCard(insight)
@@ -259,6 +171,7 @@ struct TrackerCorrelationLabView: View {
                     ProgressView("Croisement des données personnelles…")
                         .frame(maxWidth: .infinity, minHeight: 220)
                 }
+
                 methodology
             }
             .padding(16)
@@ -276,6 +189,7 @@ struct TrackerCorrelationLabView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { refresh() }
         .task { refresh() }
+        .onChange(of: period) { _, _ in refresh() }
     }
 
     private var intro: some View {
@@ -286,6 +200,30 @@ struct TrackerCorrelationLabView: View {
             Text("Tracker croise uniquement les données Apple Health accessibles à l’app et n’affiche une interprétation qu’après un minimum de paires. Une corrélation décrit une association : elle ne prouve pas qu’un facteur cause l’autre.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        .correlationPanel()
+    }
+
+    private var periodPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("FENÊTRE D’ANALYSE")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if loading {
+                    ProgressView().controlSize(.mini)
+                }
+            }
+            Picker("Fenêtre d’analyse", selection: $period) {
+                ForEach(TrackerCorrelationPeriod.allCases) { item in
+                    Text(item.label).tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
+            Text("La fenêtre change les paires réellement analysées et recalcule r ; elle ne dilue pas un résultat 30 jours dans un historique plus long.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .correlationPanel()
     }
@@ -356,10 +294,10 @@ struct TrackerCorrelationLabView: View {
             Label("Garde-fous", systemImage: "checkmark.shield.fill")
                 .font(.headline.weight(.bold))
                 .foregroundStyle(.mint)
-            Text("Le coefficient r mesure une association linéaire de -1 à +1. Tracker affiche le nombre de paires et exige ici au moins 10 observations avant de qualifier la relation. Aucun résultat n’est présenté comme une preuve de causalité, un diagnostic ou une recommandation médicale.")
+            Text("Le coefficient r mesure une association linéaire de -1 à +1. Tracker affiche le nombre de paires et exige au moins 10 observations avant de qualifier la relation. Aucun résultat n’est présenté comme une preuve de causalité, un diagnostic ou une recommandation médicale.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("Cette première version utilise jusqu’aux 14 nuits actuellement disponibles dans le moteur de récupération ; les analyses longues seront étendues après validation produit.")
+            Text("Les fenêtres 30 / 60 / 90 jours relisent directement sommeil, VFC, FC au repos et historique d’entraînement disponibles dans Apple Health. Les doublons de sommeil multi-sources sont réduits en conservant, pour une nuit donnée, la source offrant la nuit la mieux documentée.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -369,7 +307,7 @@ struct TrackerCorrelationLabView: View {
 
     private func refresh() {
         loading = true
-        reader.load { value in
+        reader.load(days: period.rawValue) { value in
             snapshot = value
             loading = false
         }

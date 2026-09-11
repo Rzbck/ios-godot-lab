@@ -64,35 +64,9 @@ final class HealthWorkoutHistoryReader {
 }
 
 struct HistoryEntryView: View {
-    private enum Source: String, CaseIterable, Identifiable {
-        case health
-        case tracker
-
-        var id: String { rawValue }
-        var label: String { self == .health ? "Santé" : "Tracker" }
-    }
-
-    @State private var source: Source = .health
-
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Source", selection: $source) {
-                ForEach(Source.allCases) { item in
-                    Text(item.label).tag(item)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
-
-            if source == .health {
-                HealthWorkoutHistoryView()
-            } else {
-                ActivityHistoryView()
-            }
-        }
-        .preferredColorScheme(.dark)
+        HealthWorkoutHistoryView()
+            .preferredColorScheme(.dark)
     }
 }
 
@@ -122,11 +96,13 @@ private enum HealthHistoryPeriod: String, CaseIterable, Identifiable {
 
 private struct HealthWorkoutHistoryView: View {
     @State private var records: [HealthWorkoutRecord] = []
+    @State private var localSummaries: [String: TrackerSummary] = [:]
     @State private var period: HealthHistoryPeriod = .month
     @State private var searchText = ""
     @State private var loading = true
 
     private let reader = HealthWorkoutHistoryReader()
+    private let localStore = NativeSessionStore()
 
     var body: some View {
         NavigationStack {
@@ -157,7 +133,7 @@ private struct HealthWorkoutHistoryView: View {
                             .pickerStyle(.segmented)
 
                             HStack {
-                                Label("Toutes les apps Santé", systemImage: "heart.text.square.fill")
+                                Label("Toutes les activités", systemImage: "figure.mixed.cardio")
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 Spacer()
@@ -168,7 +144,10 @@ private struct HealthWorkoutHistoryView: View {
 
                             ForEach(filteredRecords) { record in
                                 NavigationLink {
-                                    HealthWorkoutDetailView(record: record)
+                                    HealthWorkoutDetailView(
+                                        record: record,
+                                        localSummary: localSummary(for: record)
+                                    )
                                 } label: {
                                     HealthWorkoutRow(record: record)
                                 }
@@ -180,8 +159,8 @@ private struct HealthWorkoutHistoryView: View {
                     }
                 }
             }
-            .navigationTitle("Historique Santé")
-            .searchable(text: $searchText, prompt: "Sport, app ou date")
+            .navigationTitle("Historique")
+            .searchable(text: $searchText, prompt: "Sport ou date")
             .refreshable { refresh() }
             .onAppear { refresh() }
         }
@@ -194,17 +173,28 @@ private struct HealthWorkoutHistoryView: View {
             guard !query.isEmpty else { return true }
             let date = record.startedAt.formatted(date: .abbreviated, time: .shortened)
             return record.activity.label.localizedCaseInsensitiveContains(query)
-                || record.sourceName.localizedCaseInsensitiveContains(query)
                 || date.localizedCaseInsensitiveContains(query)
         }
     }
 
     private func refresh() {
         loading = true
+
+        var byID: [String: TrackerSummary] = [:]
+        for summary in localStore.listSummaries() {
+            byID[summary.sessionID] = summary
+        }
+        localSummaries = byID
+
         reader.loadAll { values in
             records = values
             loading = false
         }
+    }
+
+    private func localSummary(for record: HealthWorkoutRecord) -> TrackerSummary? {
+        guard let sessionID = record.trackerSessionID else { return nil }
+        return localSummaries[sessionID]
     }
 }
 
@@ -261,11 +251,9 @@ private struct HealthWorkoutRow: View {
 
                 Spacer()
 
-                if record.isWatchTrackerWorkout {
-                    Text("TRACKER")
-                        .font(.system(size: 8, weight: .black))
-                        .foregroundStyle(.mint)
-                }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tertiary)
             }
 
             HStack(spacing: 16) {
@@ -277,9 +265,8 @@ private struct HealthWorkoutRow: View {
                 )
             }
 
-            Label(record.sourceName, systemImage: "square.stack.3d.up.fill")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            // La provenance n'est pas utilisée comme catégorie visuelle :
+            // toutes les séances partagent le même historique.
         }
         .padding(14)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -288,6 +275,7 @@ private struct HealthWorkoutRow: View {
 
 private struct HealthWorkoutDetailView: View {
     let record: HealthWorkoutRecord
+    let localSummary: TrackerSummary?
 
     var body: some View {
         ScrollView {
@@ -311,17 +299,28 @@ private struct HealthWorkoutDetailView: View {
                     HealthDetailMetric(title: "DISTANCE", value: healthDistance(record.distanceMeters), symbol: "point.topleft.down.to.point.bottomright.curvepath")
                     HealthDetailMetric(title: "DURÉE", value: healthDuration(record.duration), symbol: "timer")
                     HealthDetailMetric(title: "ÉNERGIE", value: record.activeEnergyKcal.map { String(format: "%.0f kcal", $0) } ?? "—", symbol: "flame.fill")
-                    HealthDetailMetric(title: "SOURCE", value: record.sourceName, symbol: "heart.text.square.fill")
+                    HealthDetailMetric(
+                        title: "FIN",
+                        value: record.endedAt.formatted(date: .omitted, time: .shortened),
+                        symbol: "flag.checkered"
+                    )
+                }
+
+                if let localSummary {
+                    TrackerEffortInsightView(summary: localSummary)
+                    SessionPauseSummaryView(summary: localSummary)
                 }
 
                 VStack(alignment: .leading, spacing: 7) {
-                    Label("Provenance Santé", systemImage: "info.circle.fill")
+                    Label("Données de séance", systemImage: "info.circle.fill")
                         .font(.headline)
-                    Text(record.isWatchTrackerWorkout
-                         ? "Cette séance existe aussi dans Watch Tracker. Ouvre l’onglet Tracker pour ses détails enrichis, son parcours et sa trace technique."
-                         : "Cette séance provient de Santé et peut avoir été enregistrée par Apple Fitness ou une autre app autorisée.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        localSummary == nil
+                            ? "Cette fiche utilise les données d’entraînement accessibles dans Santé."
+                            : "Cette fiche réunit les données Santé et les détails locaux disponibles pour la même séance."
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
                 .padding(14)
                 .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))

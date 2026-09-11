@@ -74,6 +74,12 @@ private struct ComparisonSeriesPointV2: Identifiable {
     var id: Int { index }
 }
 
+private struct AllHistoryPointV2: Identifiable {
+    let date: Date
+    let value: Double
+    var id: Date { date }
+}
+
 private struct SportSliceV2: Identifiable {
     let activity: ActivityKind
     let duration: TimeInterval
@@ -242,6 +248,7 @@ struct PerformanceProgressionTodayView: View {
         let current = aggregate(records(in: b.currentStart...b.currentEnd))
         let previous = aggregate(previousRecords(bounds: b))
         let points = comparisonPoints(bounds: b, metric: metric)
+        let allPoints = range == .all ? allHistoryPoints(metric: metric) : []
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -268,10 +275,74 @@ struct PerformanceProgressionTodayView: View {
             }
 
             if range == .all {
-                Text("Choisis Aujourd’hui, 7 j, 1 mois, 6 mois ou 1 an pour superposer la période actuelle et la période précédente.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 12)
+                if allPoints.isEmpty {
+                    ContentUnavailableView(
+                        "Pas encore de courbe",
+                        systemImage: "chart.xyaxis.line"
+                    )
+                    .frame(height: 170)
+                } else {
+                    HStack {
+                        legendDot(.cyan, "Historique")
+                        Spacer()
+                        Text("\(allPoints.count) mois")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Chart(allPoints) { point in
+                        AreaMark(
+                            x: .value("Mois", point.date),
+                            y: .value("Valeur", point.value)
+                        )
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.cyan.opacity(0.22), .cyan.opacity(0.01)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+
+                        LineMark(
+                            x: .value("Mois", point.date),
+                            y: .value("Valeur", point.value)
+                        )
+                        .foregroundStyle(.cyan)
+                        .lineStyle(
+                            StrokeStyle(
+                                lineWidth: 2.5,
+                                lineCap: .round,
+                                lineJoin: .round
+                            )
+                        )
+
+                        PointMark(
+                            x: .value("Mois", point.date),
+                            y: .value("Valeur", point.value)
+                        )
+                        .foregroundStyle(.cyan)
+                        .symbolSize(18)
+                    }
+                    .frame(height: 185)
+                    .chartYScale(domain: 0...allHistoryUpperBound(allPoints))
+                    .chartXAxis {
+                        AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                            AxisGridLine().foregroundStyle(.white.opacity(0.04))
+                            AxisTick().foregroundStyle(.secondary)
+                            AxisValueLabel()
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
+                            AxisGridLine().foregroundStyle(.white.opacity(0.07))
+                            AxisValueLabel()
+                        }
+                    }
+                }
+
+                Text("Historique mensuel complet pour le filtre et la métrique sélectionnés.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 14) {
                     legendDot(.cyan, "Actuel")
@@ -289,19 +360,17 @@ struct PerformanceProgressionTodayView: View {
                             LineMark(x: .value("Étape", point.index), y: .value("Avant", old))
                                 .foregroundStyle(Color.secondary.opacity(0.72))
                                 .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 4]))
-                                .interpolationMethod(.catmullRom)
                         }
                         if let now = point.current {
                             AreaMark(x: .value("Étape", point.index), y: .value("Actuel", now))
                                 .foregroundStyle(LinearGradient(colors: [.cyan.opacity(0.25), .cyan.opacity(0.01)], startPoint: .top, endPoint: .bottom))
-                                .interpolationMethod(.catmullRom)
                             LineMark(x: .value("Étape", point.index), y: .value("Actuel", now))
                                 .foregroundStyle(Color.cyan)
                                 .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
-                                .interpolationMethod(.catmullRom)
                         }
                     }
-                    .frame(height: 230)
+                    .frame(height: 185)
+                    .chartYScale(domain: 0...comparisonUpperBound(points))
                     .chartXAxis {
                         AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                             AxisGridLine().foregroundStyle(.white.opacity(0.04))
@@ -378,22 +447,61 @@ struct PerformanceProgressionTodayView: View {
     @ViewBuilder
     private var sportComposition: some View {
         let slices = sportSlices
-        if !slices.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("RÉPARTITION DES SPORTS")
-                    .font(.caption.weight(.black))
-                    .foregroundStyle(.secondary)
+        let totalDuration = slices.reduce(0) { $0 + $1.duration }
 
-                Chart(slices) { slice in
-                    BarMark(
-                        x: .value("Temps", slice.duration / 60),
-                        y: .value("Sport", slice.activity.label)
-                    )
-                    .foregroundStyle(sportAccentV2(slice.activity))
-                    .cornerRadius(5)
+        if !slices.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("RÉPARTITION DES SPORTS")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(slices.count) sport\(slices.count > 1 ? "s" : "")")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
-                .frame(height: CGFloat(max(110, min(230, slices.count * 36))))
-                .chartXAxisLabel("minutes")
+
+                ForEach(slices) { slice in
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(spacing: 9) {
+                            Image(systemName: slice.activity.symbol)
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(sportAccentV2(slice.activity))
+                                .frame(width: 24)
+
+                            Text(slice.activity.label)
+                                .font(.subheadline.weight(.bold))
+
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text(progressionDurationV2(slice.duration))
+                                    .font(.subheadline.weight(.bold))
+                                    .monospacedDigit()
+
+                                if totalDuration > 0 {
+                                    Text(String(
+                                        format: "%.0f%%",
+                                        (slice.duration / totalDuration) * 100
+                                    ))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
+                        ProgressView(
+                            value: max(0, slice.duration),
+                            total: max(1, totalDuration)
+                        )
+                        .tint(sportAccentV2(slice.activity))
+                    }
+                    .padding(.vertical, 4)
+
+                    if slice.id != slices.last?.id {
+                        Divider().opacity(0.18)
+                    }
+                }
             }
             .performanceCardV2()
         }
@@ -625,6 +733,53 @@ struct PerformanceProgressionTodayView: View {
         return output
     }
 
+    private func allHistoryPoints(metric: PerformanceMetricV2) -> [AllHistoryPointV2] {
+        let records = filteredWorkouts.sorted { $0.startedAt < $1.startedAt }
+        guard let firstDate = records.first?.startedAt else { return [] }
+
+        let calendar = Calendar.autoupdatingCurrent
+        var cursor = calendar.dateInterval(of: .month, for: firstDate)?.start ?? firstDate
+        let end = Date()
+        var output: [AllHistoryPointV2] = []
+
+        while cursor <= end {
+            guard let next = calendar.date(byAdding: .month, value: 1, to: cursor) else {
+                break
+            }
+
+            let chunk = records.filter {
+                $0.startedAt >= cursor && $0.startedAt < next
+            }
+
+            let value: Double
+            switch metric {
+            case .duration:
+                value = chunk.reduce(0) { $0 + $1.duration } / 60
+            case .distance:
+                value = chunk.reduce(0) { $0 + $1.distanceMeters } / 1000
+            case .sessions:
+                value = Double(chunk.count)
+            }
+
+            output.append(AllHistoryPointV2(date: cursor, value: max(0, value)))
+            cursor = next
+
+            if output.count >= 240 { break }
+        }
+
+        return output
+    }
+
+    private func comparisonUpperBound(_ points: [ComparisonSeriesPointV2]) -> Double {
+        let current = points.compactMap(\.current).max() ?? 0
+        let previous = points.compactMap(\.previous).max() ?? 0
+        return max(1, max(current, previous) * 1.12)
+    }
+
+    private func allHistoryUpperBound(_ points: [AllHistoryPointV2]) -> Double {
+        max(1, (points.map(\.value).max() ?? 0) * 1.15)
+    }
+
     private func comparisonBadge(current: PerformanceAggregateV2, previous: PerformanceAggregateV2, metric: PerformanceMetricV2) -> some View {
         let pair: (Double, Double)
         switch metric {
@@ -702,7 +857,15 @@ private struct ProgressionDrillCardV2: View {
         }
         .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
         .padding(12)
-        .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(accent.opacity(0.10))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 8, x: 0, y: 4)
     }
 }
 
@@ -728,7 +891,15 @@ private struct HealthDrillTileV2: View {
         }
         .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
         .padding(12)
-        .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(accent.opacity(0.09))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.26), radius: 7, x: 0, y: 4)
     }
 }
 
@@ -801,7 +972,6 @@ private struct HealthSignalDetailV2: View {
                             .foregroundStyle(LinearGradient(colors: [accent.opacity(0.25), accent.opacity(0.01)], startPoint: .top, endPoint: .bottom))
                         LineMark(x: .value("Jour", point.date), y: .value("Valeur", point.value))
                             .foregroundStyle(accent)
-                            .interpolationMethod(.catmullRom)
                     }
                     .frame(height: 240)
                 }
@@ -862,7 +1032,15 @@ private extension View {
     func performanceCardV2() -> some View {
         frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
-            .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(.white.opacity(0.055))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(.white.opacity(0.075), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.30), radius: 10, x: 0, y: 5)
     }
 }
 

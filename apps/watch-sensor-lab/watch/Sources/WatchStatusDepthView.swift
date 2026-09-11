@@ -8,18 +8,28 @@ struct WatchStatusDepthView: View {
         NavigationStack {
             TabView {
                 devicePage
-                .containerBackground(for: .tabView) { Color.clear }
-                .tag(0)
-                .accessibilityLabel("État des appareils")
+                    .containerBackground(for: .tabView) { Color.clear }
+                    .tag(0)
+                    .accessibilityLabel("État des appareils")
 
                 healthPage
                     .containerBackground(for: .tabView) { Color.clear }
                     .tag(1)
                     .accessibilityLabel("État Santé et GPS")
 
-                loadPage
+                recoveryPage
                     .containerBackground(for: .tabView) { Color.clear }
                     .tag(2)
+                    .accessibilityLabel("Récupération et sommeil")
+
+                cardioPage
+                    .containerBackground(for: .tabView) { Color.clear }
+                    .tag(3)
+                    .accessibilityLabel("Cardio et signaux nocturnes")
+
+                loadPage
+                    .containerBackground(for: .tabView) { Color.clear }
+                    .tag(4)
                     .accessibilityLabel("Charge récente")
             }
             .tabViewStyle(.verticalPage)
@@ -99,11 +109,153 @@ struct WatchStatusDepthView: View {
                 )
             }
 
-            Text("↓ Charge")
+            Text("↓ Récupération")
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 4)
+    }
+
+    @ViewBuilder
+    private var recoveryPage: some View {
+        if let wellness = history.wellness {
+            VStack(spacing: 7) {
+                HStack {
+                    Text("RÉCUPÉRATION")
+                        .font(.system(size: 9, weight: .black))
+                        .foregroundStyle(.cyan)
+                    Spacer()
+                    Text("\(Int(wellness.recoveryConfidence.rounded()))% conf.")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 10) {
+                    recoveryGauge(wellness)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(wellness.recoveryLabel)
+                            .font(.headline.weight(.black))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.68)
+                        Text("Indice personnel · Health")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 7) {
+                    statusCell(
+                        "Sommeil",
+                        wellness.sleepSeconds.map(compactStatusDuration) ?? "—",
+                        "bed.double.fill",
+                        .indigo
+                    )
+                    statusCell(
+                        "VFC nuit",
+                        wellness.nightHRVMilliseconds.map { String(format: "%.0f ms", $0) } ?? "—",
+                        "waveform.path.ecg",
+                        .purple
+                    )
+                }
+
+                HStack(spacing: 7) {
+                    statusCell(
+                        "Continuité",
+                        wellness.sleepEfficiency.map { String(format: "%.0f%%", $0 * 100) } ?? "—",
+                        "moon.stars.fill",
+                        .cyan
+                    )
+                    statusCell(
+                        "Écart 7j",
+                        wellness.sleepDeficit7DaysHours.map { $0 > 0.05 ? String(format: "-%.1fh", $0) : "0h" } ?? "—",
+                        "chart.bar.fill",
+                        .orange
+                    )
+                }
+            }
+            .padding(.horizontal, 4)
+        } else {
+            wellnessEmptyPage(
+                title: "RÉCUPÉRATION",
+                detail: "Ouvre l’app iPhone pour synchroniser les données Santé résumées.",
+                symbol: "sparkles",
+                accent: .cyan
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var cardioPage: some View {
+        if let wellness = history.wellness {
+            VStack(spacing: 8) {
+                HStack {
+                    Text("CARDIO · NUIT")
+                        .font(.system(size: 9, weight: .black))
+                        .foregroundStyle(.pink)
+                    Spacer()
+                    Image(systemName: "heart.text.square.fill")
+                        .foregroundStyle(.pink)
+                }
+
+                HStack(spacing: 7) {
+                    statusCell(
+                        "VO₂ max",
+                        wellness.vo2Max.map { String(format: "%.1f", $0) } ?? "—",
+                        "lungs.fill",
+                        .orange
+                    )
+                    statusCell(
+                        "Récup FC",
+                        wellness.heartRateRecoveryOneMinuteBPM.map { String(format: "%.0f bpm", $0) } ?? "—",
+                        "heart.circle.fill",
+                        .pink
+                    )
+                }
+
+                HStack(spacing: 7) {
+                    statusCell(
+                        "FC nuit",
+                        wellness.nightHeartRateBPM.map { String(format: "%.0f bpm", $0) } ?? "—",
+                        "heart.fill",
+                        .pink
+                    )
+                    statusCell(
+                        "Respiration",
+                        wellness.nightRespiratoryRate.map { String(format: "%.1f/min", $0) } ?? "—",
+                        "lungs.fill",
+                        .cyan
+                    )
+                }
+
+                HStack(spacing: 7) {
+                    statusCell(
+                        "Oxygène",
+                        wellness.oxygenSaturationPercent.map { String(format: "%.0f%%", $0) } ?? "—",
+                        "drop.fill",
+                        .blue
+                    )
+                    statusCell(
+                        "Temp. nuit",
+                        wellness.wristTemperatureCelsius.map { String(format: "%.2f°", $0) } ?? "—",
+                        "thermometer.medium",
+                        .orange
+                    )
+                }
+
+                Text("Contexte personnel · pas un diagnostic")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 4)
+        } else {
+            wellnessEmptyPage(
+                title: "CARDIO · NUIT",
+                detail: "Les signaux apparaissent après synchronisation depuis l’iPhone.",
+                symbol: "heart.text.square",
+                accent: .pink
+            )
+        }
     }
 
     private var loadPage: some View {
@@ -150,6 +302,45 @@ struct WatchStatusDepthView: View {
                 .font(.system(size: 8))
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func recoveryGauge(_ wellness: WatchWellnessDigest) -> some View {
+        let score = wellness.recoveryScore
+        return ZStack {
+            Circle().stroke(.white.opacity(0.08), lineWidth: 7)
+            if let score {
+                Circle()
+                    .trim(from: 0, to: min(1, max(0, score / 100)))
+                    .stroke(recoveryWatchAccent(score), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Text("\(Int(score.rounded()))")
+                    .font(.headline.weight(.black))
+                    .monospacedDigit()
+            } else {
+                Image(systemName: "ellipsis")
+                    .font(.headline.weight(.black))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 66, height: 66)
+    }
+
+    private func wellnessEmptyPage(title: String, detail: String, symbol: String, accent: Color) -> some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(accent)
+                Spacer()
+            }
+            StatusHero(
+                title: "Données en attente",
+                detail: detail,
+                symbol: symbol,
+                accent: accent
+            )
         }
         .padding(.horizontal, 4)
     }
@@ -239,4 +430,13 @@ private func compactStatusDuration(_ seconds: TimeInterval) -> String {
     let minutes = max(0, Int(seconds / 60))
     if minutes >= 60 { return String(format: "%dh%02d", minutes / 60, minutes % 60) }
     return "\(minutes)m"
+}
+
+private func recoveryWatchAccent(_ score: Double) -> Color {
+    switch score {
+    case 85...: return .mint
+    case 70...: return .cyan
+    case 55...: return .orange
+    default: return .pink
+    }
 }

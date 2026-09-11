@@ -238,12 +238,49 @@ struct TrackerCardioFitnessCard: View {
     }
 }
 
+private enum CardioLabMetric: String, CaseIterable, Identifiable {
+    case vo2
+    case recovery
+    case resting
+    case weight
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .vo2: return "VO₂"
+        case .recovery: return "Récup."
+        case .resting: return "FC repos"
+        case .weight: return "Poids"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .vo2: return "lungs.fill"
+        case .recovery: return "heart.circle.fill"
+        case .resting: return "heart.fill"
+        case .weight: return "scalemass.fill"
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .vo2: return .orange
+        case .recovery: return .pink
+        case .resting: return .cyan
+        case .weight: return .mint
+        }
+    }
+}
+
 struct TrackerCardioFitnessLabView: View {
     let initialSnapshot: TrackerCardioFitnessSnapshot?
 
     @State private var snapshot: TrackerCardioFitnessSnapshot?
     @State private var loading = false
     @State private var range: CardioLabRange = .sixMonths
+    @State private var metricPage: CardioLabMetric = .vo2
 
     private let reader = TrackerCardioFitnessReader()
 
@@ -252,10 +289,7 @@ struct TrackerCardioFitnessLabView: View {
             VStack(alignment: .leading, spacing: 14) {
                 hero
                 rangePicker
-                vo2Section
-                recoverySection
-                restingHeartRateSection
-                weightSection
+                metricStack
                 interpretationCard
             }
             .padding(16)
@@ -318,56 +352,132 @@ struct TrackerCardioFitnessLabView: View {
         .pickerStyle(.segmented)
     }
 
-    @ViewBuilder
-    private var vo2Section: some View {
-        trendSection(
-            title: "VO₂ MAX",
-            subtitle: "Apple Health · capacité cardio relative",
-            symbol: "lungs.fill",
-            accent: .orange,
-            points: filtered(snapshot?.vo2Max ?? []),
-            unit: "mL/kg/min",
-            digits: 1
-        )
+    private var metricStack: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("INDICATEURS")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Label(
+                    "glisse",
+                    systemImage: "arrow.left.and.right"
+                )
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+            }
+
+            HStack(spacing: 6) {
+                ForEach(CardioLabMetric.allCases) { candidate in
+                    Button {
+                        withAnimation(.snappy) {
+                            metricPage = candidate
+                        }
+                    } label: {
+                        Label(
+                            candidate.label,
+                            systemImage: candidate.symbol
+                        )
+                        .font(.system(size: 10, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                        .foregroundStyle(
+                            metricPage == candidate
+                                ? Color.black
+                                : Color.primary
+                        )
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(
+                            metricPage == candidate
+                                ? candidate.accent
+                                : Color.white.opacity(0.07),
+                            in: Capsule()
+                        )
+                    }
+                    .buttonStyle(TrackerDepthButtonStyle())
+                }
+            }
+
+            TabView(selection: $metricPage) {
+                cardioPage(.vo2)
+                    .tag(CardioLabMetric.vo2)
+
+                cardioPage(.recovery)
+                    .tag(CardioLabMetric.recovery)
+
+                cardioPage(.resting)
+                    .tag(CardioLabMetric.resting)
+
+                cardioPage(.weight)
+                    .tag(CardioLabMetric.weight)
+            }
+            .frame(height: 245)
+            .tabViewStyle(
+                .page(indexDisplayMode: .never)
+            )
+        }
     }
 
     @ViewBuilder
-    private var recoverySection: some View {
-        trendSection(
-            title: "RÉCUPÉRATION FC · 1 MIN",
-            subtitle: "Baisse de fréquence cardiaque après l’exercice",
-            symbol: "heart.circle.fill",
-            accent: .pink,
-            points: filtered(snapshot?.heartRateRecovery ?? []),
-            unit: "bpm",
-            digits: 0
-        )
-    }
+    private func cardioPage(
+        _ page: CardioLabMetric
+    ) -> some View {
+        switch page {
+        case .vo2:
+            CardioInspectableTrendPanel(
+                title: "VO₂ MAX",
+                subtitle: "Apple Health · capacité cardio relative",
+                symbol: "lungs.fill",
+                accent: .orange,
+                points: filtered(snapshot?.vo2Max ?? []),
+                unit: "mL/kg/min",
+                digits: 1,
+                loading: loading
+            )
 
-    @ViewBuilder
-    private var restingHeartRateSection: some View {
-        trendSection(
-            title: "FC AU REPOS",
-            subtitle: "Tendance personnelle · pas de seuil diagnostic",
-            symbol: "heart.fill",
-            accent: .cyan,
-            points: filtered(snapshot?.restingHeartRate ?? []),
-            unit: "bpm",
-            digits: 0
-        )
-    }
+        case .recovery:
+            CardioInspectableTrendPanel(
+                title: "RÉCUPÉRATION FC · 1 MIN",
+                subtitle: "Baisse de fréquence cardiaque après l’exercice",
+                symbol: "heart.circle.fill",
+                accent: .pink,
+                points: filtered(
+                    snapshot?.heartRateRecovery ?? []
+                ),
+                unit: "bpm",
+                digits: 0,
+                loading: loading
+            )
 
-    @ViewBuilder
-    private var weightSection: some View {
-        trendSection(
-            title: "POIDS",
-            subtitle: "Contexte corporel · séparé de la récupération",
-            symbol: "scalemass.fill",
-            accent: .mint,
-            points: filtered(snapshot?.bodyMass ?? []),
-            unit: "kg",
-            digits: 1
-        )
+        case .resting:
+            CardioInspectableTrendPanel(
+                title: "FC AU REPOS",
+                subtitle: "Tendance personnelle · pas de seuil diagnostic",
+                symbol: "heart.fill",
+                accent: .cyan,
+                points: filtered(
+                    snapshot?.restingHeartRate ?? []
+                ),
+                unit: "bpm",
+                digits: 0,
+                loading: loading
+            )
+
+        case .weight:
+            CardioInspectableTrendPanel(
+                title: "POIDS",
+                subtitle: "Contexte corporel · séparé de la récupération",
+                symbol: "scalemass.fill",
+                accent: .mint,
+                points: filtered(snapshot?.bodyMass ?? []),
+                unit: "kg",
+                digits: 1,
+                loading: loading
+            )
+        }
     }
 
     private var interpretationCard: some View {
@@ -384,89 +494,6 @@ struct TrackerCardioFitnessLabView: View {
         }
         .padding(15)
         .background(.mint.opacity(0.07), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-    }
-
-    @ViewBuilder
-    private func trendSection(
-        title: String,
-        subtitle: String,
-        symbol: String,
-        accent: Color,
-        points: [TrackerCardioTrendPoint],
-        unit: String,
-        digits: Int
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label(title, systemImage: symbol)
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(accent)
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if let latest = points.last {
-                    Text(format(latest.value, digits: digits, unit: unit))
-                        .font(.headline.weight(.black))
-                        .monospacedDigit()
-                }
-            }
-
-            if points.count >= 2 {
-                Chart(points) { point in
-                    LineMark(
-                        x: .value("Date", point.date),
-                        y: .value(title, point.value)
-                    )
-                    .foregroundStyle(accent)
-
-                    AreaMark(
-                        x: .value("Date", point.date),
-                        y: .value(title, point.value)
-                    )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [accent.opacity(0.20), accent.opacity(0.01)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                }
-                .frame(height: 150)
-                .chartYAxis {
-                    AxisMarks(position: .leading) { _ in
-                        AxisGridLine().foregroundStyle(.white.opacity(0.05))
-                        AxisValueLabel()
-                    }
-                }
-                .accessibilityLabel("Graphique \(title), \(points.count) points sur \(range.label)")
-            } else if loading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, minHeight: 80)
-            } else {
-                ContentUnavailableView(
-                    "Pas assez de données",
-                    systemImage: symbol,
-                    description: Text("La courbe apparaît quand au moins deux valeurs Apple Health sont lisibles sur cette période.")
-                )
-                .frame(minHeight: 100)
-            }
-
-            if let latest = points.last {
-                HStack {
-                    Text(latest.date.formatted(date: .abbreviated, time: .omitted))
-                    Spacer()
-                    Text(latest.source)
-                        .lineLimit(1)
-                }
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(15)
-        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private func filtered(_ points: [TrackerCardioTrendPoint]) -> [TrackerCardioTrendPoint] {
@@ -508,6 +535,215 @@ struct TrackerCardioFitnessLabView: View {
             snapshot = value
             loading = false
         }
+    }
+}
+
+
+private struct CardioInspectableTrendPanel: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let accent: Color
+    let points: [TrackerCardioTrendPoint]
+    let unit: String
+    let digits: Int
+    let loading: Bool
+
+    @State private var selectedDate: Date?
+
+    private var selectedPoint: TrackerCardioTrendPoint? {
+        guard let selectedDate else {
+            return nil
+        }
+
+        return points.min {
+            abs(
+                $0.date.timeIntervalSince(selectedDate)
+            )
+            <
+            abs(
+                $1.date.timeIntervalSince(selectedDate)
+            )
+        }
+    }
+
+    private var displayedPoint: TrackerCardioTrendPoint? {
+        selectedPoint ?? points.last
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(title, systemImage: symbol)
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(accent)
+
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if let point = displayedPoint {
+                    Text(format(point.value))
+                        .font(.headline.weight(.black))
+                        .monospacedDigit()
+                }
+            }
+
+            if points.count >= 2 {
+                Chart(points) { point in
+                    LineMark(
+                        x: .value("Date", point.date),
+                        y: .value(title, point.value)
+                    )
+                    .foregroundStyle(accent)
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 2.5,
+                            lineCap: .round,
+                            lineJoin: .round
+                        )
+                    )
+
+                    PointMark(
+                        x: .value("Date", point.date),
+                        y: .value(title, point.value)
+                    )
+                    .foregroundStyle(accent)
+                    .symbolSize(
+                        point.id == selectedPoint?.id
+                            ? 75
+                            : 18
+                    )
+
+                    if point.id == selectedPoint?.id {
+                        RuleMark(
+                            x: .value(
+                                "Sélection",
+                                point.date
+                            )
+                        )
+                        .foregroundStyle(
+                            .white.opacity(0.45)
+                        )
+                        .lineStyle(
+                            StrokeStyle(
+                                lineWidth: 1,
+                                dash: [3, 3]
+                            )
+                        )
+                        .annotation(
+                            position: .top,
+                            spacing: 5
+                        ) {
+                            VStack(
+                                alignment: .leading,
+                                spacing: 2
+                            ) {
+                                Text(
+                                    point.date.formatted(
+                                        date: .abbreviated,
+                                        time: .omitted
+                                    )
+                                )
+                                .font(
+                                    .caption2.weight(.black)
+                                )
+
+                                Text(format(point.value))
+                                    .font(
+                                        .caption.weight(.black)
+                                    )
+                                    .foregroundStyle(accent)
+                                    .monospacedDigit()
+
+                                Text(point.source)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(
+                                        .secondary
+                                    )
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 6)
+                            .background(
+                                .ultraThinMaterial,
+                                in: RoundedRectangle(
+                                    cornerRadius: 10,
+                                    style: .continuous
+                                )
+                            )
+                            .allowsHitTesting(false)
+                        }
+                    }
+                }
+                .chartXSelection(value: $selectedDate)
+                .chartYAxis {
+                    AxisMarks(position: .leading) { _ in
+                        AxisGridLine()
+                            .foregroundStyle(
+                                .white.opacity(0.06)
+                            )
+                        AxisValueLabel()
+                    }
+                }
+                .frame(height: 150)
+
+            } else if loading {
+                ProgressView()
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: 120
+                    )
+            } else {
+                ContentUnavailableView(
+                    "Pas assez de données",
+                    systemImage: symbol
+                )
+                .frame(minHeight: 120)
+            }
+
+            if let point = displayedPoint {
+                HStack {
+                    Text(
+                        point.date.formatted(
+                            date: .abbreviated,
+                            time: .omitted
+                        )
+                    )
+
+                    Spacer()
+
+                    Text(point.source)
+                        .lineLimit(1)
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(15)
+        .background(
+            .white.opacity(0.05),
+            in: RoundedRectangle(
+                cornerRadius: 20,
+                style: .continuous
+            )
+        )
+    }
+
+    private func format(_ value: Double) -> String {
+        let number: String
+
+        if digits == 0 {
+            number = String(format: "%.0f", value)
+        } else {
+            number = String(format: "%.1f", value)
+        }
+
+        return "\(number) \(unit)"
     }
 }
 

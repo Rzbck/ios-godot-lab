@@ -770,14 +770,12 @@ private struct TodayCommandHealthDetail: View {
                 .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
                 if points.count >= 2 {
-                    Chart(points) { point in
-                        LineMark(x: .value("Date", point.date), y: .value(title, point.value))
-                            .foregroundStyle(accent)
-
-                        PointMark(x: .value("Date", point.date), y: .value(title, point.value))
-                            .foregroundStyle(accent)
-                    }
-                    .frame(height: 230)
+                    TrackerInspectableHealthChart(
+                        title: title,
+                        points: points,
+                        accent: accent,
+                        height: 230
+                    )
                     .padding(14)
                     .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .accessibilityLabel("Évolution de \(title) sur les données Apple Health lisibles")

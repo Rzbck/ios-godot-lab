@@ -435,14 +435,12 @@ private struct TodayHealthDetailView: View {
             VStack(spacing: 14) {
                 TodayDetailHero(title: title, value: value, subtitle: subtitle, symbol: symbol, accent: accent)
                 if !points.isEmpty {
-                    Chart(points) { point in
-                        LineMark(x: .value("Date", point.date), y: .value(title, point.value))
-                            .foregroundStyle(accent)
-
-                        PointMark(x: .value("Date", point.date), y: .value(title, point.value))
-                            .foregroundStyle(accent)
-                    }
-                    .frame(height: 240)
+                    TrackerInspectableHealthChart(
+                        title: title,
+                        points: points,
+                        accent: accent,
+                        height: 240
+                    )
                     .padding(14)
                     .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 } else {

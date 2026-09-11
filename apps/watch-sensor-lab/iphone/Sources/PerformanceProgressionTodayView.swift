@@ -1380,13 +1380,12 @@ private struct HealthSignalDetailV2: View {
                     Text("Pas encore assez de points historiques lisibles pour tracer une courbe détaillée.")
                         .font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 20)
                 } else {
-                    Chart(points) { point in
-                        AreaMark(x: .value("Jour", point.date), y: .value("Valeur", point.value))
-                            .foregroundStyle(LinearGradient(colors: [accent.opacity(0.25), accent.opacity(0.01)], startPoint: .top, endPoint: .bottom))
-                        LineMark(x: .value("Jour", point.date), y: .value("Valeur", point.value))
-                            .foregroundStyle(accent)
-                    }
-                    .frame(height: 240)
+                    TrackerInspectableHealthChart(
+                        title: title,
+                        points: points,
+                        accent: accent,
+                        height: 240
+                    )
                 }
 
                 Text("Source : Apple Health. Une donnée absente peut signifier qu’elle n’est pas produite ou qu’elle n’est pas partagée avec Watch Tracker.")

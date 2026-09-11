@@ -1,6 +1,42 @@
 import Charts
 import SwiftUI
 
+private enum TrainingLoadPage: String, CaseIterable, Identifiable {
+    case volume
+    case srpe
+    case tracker
+    case recovery
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .volume: return "Volume"
+        case .srpe: return "sRPE"
+        case .tracker: return "Tracker"
+        case .recovery: return "Récup."
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .volume: return "clock.fill"
+        case .srpe: return "person.fill.checkmark"
+        case .tracker: return "scope"
+        case .recovery: return "sparkles"
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .volume: return .cyan
+        case .srpe: return .purple
+        case .tracker: return .orange
+        case .recovery: return .mint
+        }
+    }
+}
+
 struct TrainingLoadIntelligenceView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var healthWorkouts: [HealthWorkoutRecord] = []
@@ -8,6 +44,10 @@ struct TrainingLoadIntelligenceView: View {
     @State private var recovery: TrackerRecoverySnapshot?
     @State private var selectedSportRaw = "all"
     @State private var loading = true
+    @State private var page: TrainingLoadPage = .volume
+    @State private var selectedVolumeDate: Date?
+    @State private var selectedSrpeDate: Date?
+    @State private var selectedEffortDate: Date?
 
     private let healthReader = HealthWorkoutHistoryReader()
     private let recoveryReader = TrackerRecoveryIntelligenceReader()
@@ -20,10 +60,7 @@ struct TrainingLoadIntelligenceView: View {
             ScrollView {
                 LazyVStack(spacing: 14) {
                     hero
-                    volumePanel
-                    srpePanel
-                    trackerIntensityPanel
-                    recoveryPanel
+                    loadStack
                     recentSessions
                     methodology
                 }
@@ -75,24 +112,147 @@ struct TrainingLoadIntelligenceView: View {
                     .background(.purple.opacity(0.13), in: Circle())
             }
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                axisCell("VOLUME", ratioText(volumeRatio), loadStatus(volumeRatio), "clock.fill", .cyan)
-                axisCell("sRPE", ratioText(srpeRatio), srpeCoverageText, "person.fill.checkmark", .purple)
-                axisCell("TRACKER", trackerEffortText, trackerEffortDeltaText, "scope", .orange)
-                axisCell(
-                    "RÉCUP",
-                    recovery?.score.map { "\(Int($0.rounded())) / 100" } ?? "—",
-                    recovery?.label ?? "Repères en construction",
-                    "sparkles",
-                    recoveryAccentColor
-                )
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ],
+                spacing: 8
+            ) {
+                Button {
+                    withAnimation(.snappy) {
+                        page = .volume
+                    }
+                } label: {
+                    axisCell(
+                        "VOLUME",
+                        ratioText(volumeRatio),
+                        loadStatus(volumeRatio),
+                        "clock.fill",
+                        .cyan
+                    )
+                }
+
+                Button {
+                    withAnimation(.snappy) {
+                        page = .srpe
+                    }
+                } label: {
+                    axisCell(
+                        "sRPE",
+                        ratioText(srpeRatio),
+                        srpeCoverageText,
+                        "person.fill.checkmark",
+                        .purple
+                    )
+                }
+
+                Button {
+                    withAnimation(.snappy) {
+                        page = .tracker
+                    }
+                } label: {
+                    axisCell(
+                        "TRACKER",
+                        trackerEffortText,
+                        trackerEffortDeltaText,
+                        "scope",
+                        .orange
+                    )
+                }
+
+                Button {
+                    withAnimation(.snappy) {
+                        page = .recovery
+                    }
+                } label: {
+                    axisCell(
+                        "RÉCUP",
+                        recovery?.score.map {
+                            "\(Int($0.rounded())) / 100"
+                        } ?? "—",
+                        recovery?.label
+                            ?? "Repères en construction",
+                        "sparkles",
+                        recoveryAccentColor
+                    )
+                }
             }
+            .buttonStyle(TrackerDepthButtonStyle())
         }
         .loadPanel()
     }
 
-    private var volumePanel: some View {
-        let recentMinutes = recentHealth.reduce(0) { $0 + $1.duration } / 60
+    private var loadStack: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("AXES")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Label(
+                    "glisse",
+                    systemImage: "arrow.left.and.right"
+                )
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+            }
+
+            HStack(spacing: 6) {
+                ForEach(TrainingLoadPage.allCases) { candidate in
+                    Button {
+                        withAnimation(.snappy) {
+                            page = candidate
+                        }
+                    } label: {
+                        Label(
+                            candidate.label,
+                            systemImage: candidate.symbol
+                        )
+                        .font(.system(size: 10, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                        .foregroundStyle(
+                            page == candidate
+                                ? Color.black
+                                : Color.primary
+                        )
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(
+                            page == candidate
+                                ? candidate.accent
+                                : Color.white.opacity(0.07),
+                            in: Capsule()
+                        )
+                    }
+                    .buttonStyle(TrackerDepthButtonStyle())
+                }
+            }
+
+            TabView(selection: $page) {
+                volumePanel
+                    .tag(TrainingLoadPage.volume)
+
+                srpePanel
+                    .tag(TrainingLoadPage.srpe)
+
+                trackerIntensityPanel
+                    .tag(TrainingLoadPage.tracker)
+
+                recoveryPanel
+                    .tag(TrainingLoadPage.recovery)
+            }
+            .frame(height: 320)
+            .tabViewStyle(
+                .page(indexDisplayMode: .never)
+            )
+        }
+    }
+
+    private var volumePanel: some View {        let recentMinutes = recentHealth.reduce(0) { $0 + $1.duration } / 60
         let referenceMinutes = referenceHealth.reduce(0) { $0 + $1.duration } / 60 / 4
 
         return VStack(alignment: .leading, spacing: 11) {
@@ -104,24 +264,72 @@ struct TrainingLoadIntelligenceView: View {
                 loadMetric(ratioText(volumeRatio), "ratio")
             }
 
-            Chart(volumeDays) { point in
-                BarMark(
-                    x: .value("Jour", point.date, unit: .day),
-                    y: .value("Minutes", point.volumeMinutes)
-                )
-                .foregroundStyle(Color.cyan.gradient)
-                .cornerRadius(4)
+            Chart {
+                ForEach(volumeDays) { point in
+                    BarMark(
+                        x: .value(
+                            "Jour",
+                            point.date,
+                            unit: .day
+                        ),
+                        y: .value(
+                            "Minutes",
+                            point.volumeMinutes
+                        )
+                    )
+                    .foregroundStyle(Color.cyan.gradient)
+                    .cornerRadius(4)
+
+                    if point.id == selectedVolumePoint?.id {
+                        RuleMark(
+                            x: .value(
+                                "Sélection",
+                                point.date
+                            )
+                        )
+                        .foregroundStyle(
+                            .white.opacity(0.45)
+                        )
+                        .annotation(
+                            position: .top,
+                            spacing: 4
+                        ) {
+                            loadSelectionBadge(
+                                date: point.date,
+                                value: point.volumeMinutes,
+                                suffix: "min",
+                                accent: .cyan
+                            )
+                        }
+                    }
+                }
 
                 if referenceDailyVolumeMinutes > 0 {
-                    RuleMark(y: .value("Repère", referenceDailyVolumeMinutes))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    RuleMark(
+                        y: .value(
+                            "Repère",
+                            referenceDailyVolumeMinutes
+                        )
+                    )
+                    .foregroundStyle(.white.opacity(0.35))
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 1,
+                            dash: [4, 4]
+                        )
+                    )
                 }
             }
+            .chartXSelection(
+                value: $selectedVolumeDate
+            )
             .frame(height: 160)
             .chartYAxis {
                 AxisMarks(position: .leading) { _ in
-                    AxisGridLine().foregroundStyle(.white.opacity(0.06))
+                    AxisGridLine()
+                        .foregroundStyle(
+                            .white.opacity(0.06)
+                        )
                     AxisValueLabel()
                 }
             }
@@ -144,24 +352,79 @@ struct TrainingLoadIntelligenceView: View {
             }
 
             if srpeRecentCoverage > 0 {
-                Chart(loadDays) { point in
-                    BarMark(
-                        x: .value("Jour", point.date, unit: .day),
-                        y: .value("sRPE", point.srpeLoad)
-                    )
-                    .foregroundStyle(Color.purple.gradient)
-                    .cornerRadius(4)
+                Chart {
+                    ForEach(loadDays) { point in
+                        BarMark(
+                            x: .value(
+                                "Jour",
+                                point.date,
+                                unit: .day
+                            ),
+                            y: .value(
+                                "sRPE",
+                                point.srpeLoad
+                            )
+                        )
+                        .foregroundStyle(
+                            Color.purple.gradient
+                        )
+                        .cornerRadius(4)
 
-                    if let reference = srpeReferenceDaily, reference > 0 {
-                        RuleMark(y: .value("Repère", reference))
-                            .foregroundStyle(.white.opacity(0.35))
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                        if point.id == selectedSrpePoint?.id {
+                            RuleMark(
+                                x: .value(
+                                    "Sélection",
+                                    point.date
+                                )
+                            )
+                            .foregroundStyle(
+                                .white.opacity(0.45)
+                            )
+                            .annotation(
+                                position: .top,
+                                spacing: 4
+                            ) {
+                                loadSelectionBadge(
+                                    date: point.date,
+                                    value: point.srpeLoad,
+                                    suffix: "UA",
+                                    accent: .purple
+                                )
+                            }
+                        }
+                    }
+
+                    if
+                        let reference = srpeReferenceDaily,
+                        reference > 0
+                    {
+                        RuleMark(
+                            y: .value(
+                                "Repère",
+                                reference
+                            )
+                        )
+                        .foregroundStyle(
+                            .white.opacity(0.35)
+                        )
+                        .lineStyle(
+                            StrokeStyle(
+                                lineWidth: 1,
+                                dash: [4, 4]
+                            )
+                        )
                     }
                 }
+                .chartXSelection(
+                    value: $selectedSrpeDate
+                )
                 .frame(height: 160)
                 .chartYAxis {
                     AxisMarks(position: .leading) { _ in
-                        AxisGridLine().foregroundStyle(.white.opacity(0.06))
+                        AxisGridLine()
+                            .foregroundStyle(
+                                .white.opacity(0.06)
+                            )
                         AxisValueLabel()
                     }
                 }
@@ -193,19 +456,70 @@ struct TrainingLoadIntelligenceView: View {
 
             if !recentLocal.isEmpty {
                 Chart(recentLocalEffortPoints) { point in
+                    LineMark(
+                        x: .value(
+                            "Séance",
+                            point.date
+                        ),
+                        y: .value(
+                            "Effort",
+                            point.effort
+                        )
+                    )
+                    .foregroundStyle(
+                        .orange.opacity(0.72)
+                    )
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 2.4,
+                            lineCap: .round,
+                            lineJoin: .round
+                        )
+                    )
+
                     PointMark(
-                        x: .value("Séance", point.date),
-                        y: .value("Effort", point.effort)
+                        x: .value(
+                            "Séance",
+                            point.date
+                        ),
+                        y: .value(
+                            "Effort",
+                            point.effort
+                        )
                     )
                     .foregroundStyle(.orange)
-                    .symbolSize(55)
-                    LineMark(
-                        x: .value("Séance", point.date),
-                        y: .value("Effort", point.effort)
+                    .symbolSize(
+                        point.id == selectedEffortPoint?.id
+                            ? 80
+                            : 42
                     )
-                    .foregroundStyle(.orange.opacity(0.55))
 
+                    if point.id == selectedEffortPoint?.id {
+                        RuleMark(
+                            x: .value(
+                                "Sélection",
+                                point.date
+                            )
+                        )
+                        .foregroundStyle(
+                            .white.opacity(0.45)
+                        )
+                        .annotation(
+                            position: .top,
+                            spacing: 4
+                        ) {
+                            loadSelectionBadge(
+                                date: point.date,
+                                value: point.effort,
+                                suffix: "/10",
+                                accent: .orange
+                            )
+                        }
+                    }
                 }
+                .chartXSelection(
+                    value: $selectedEffortDate
+                )
                 .chartYScale(domain: 1...10)
                 .frame(height: 150)
             }
@@ -454,8 +768,96 @@ struct TrainingLoadIntelligenceView: View {
             }
     }
 
-    private var availableSports: [ActivityKind] {
-        var raw = Set(healthWorkouts.map { $0.activity.rawValue })
+    private var selectedVolumePoint: LoadDayPoint? {
+        nearest(
+            volumeDays,
+            to: selectedVolumeDate
+        )
+    }
+
+    private var selectedSrpePoint: LoadDayPoint? {
+        nearest(
+            loadDays,
+            to: selectedSrpeDate
+        )
+    }
+
+    private var selectedEffortPoint: LoadEffortPoint? {
+        guard let selectedEffortDate else {
+            return nil
+        }
+
+        return recentLocalEffortPoints.min {
+            abs(
+                $0.date.timeIntervalSince(selectedEffortDate)
+            )
+            <
+            abs(
+                $1.date.timeIntervalSince(selectedEffortDate)
+            )
+        }
+    }
+
+    private func nearest(
+        _ points: [LoadDayPoint],
+        to selected: Date?
+    ) -> LoadDayPoint? {
+        guard let selected else {
+            return nil
+        }
+
+        return points.min {
+            abs(
+                $0.date.timeIntervalSince(selected)
+            )
+            <
+            abs(
+                $1.date.timeIntervalSince(selected)
+            )
+        }
+    }
+
+    private func loadSelectionBadge(
+        date: Date,
+        value: Double,
+        suffix: String,
+        accent: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(
+                date.formatted(
+                    .dateTime
+                        .weekday(.abbreviated)
+                        .day()
+                        .month(.abbreviated)
+                )
+            )
+            .font(.caption2.weight(.black))
+
+            Text(
+                String(
+                    format: "%.1f %@",
+                    value,
+                    suffix
+                )
+            )
+            .font(.caption.weight(.black))
+            .foregroundStyle(accent)
+            .monospacedDigit()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(
+                cornerRadius: 9,
+                style: .continuous
+            )
+        )
+        .allowsHitTesting(false)
+    }
+
+    private var availableSports: [ActivityKind] {        var raw = Set(healthWorkouts.map { $0.activity.rawValue })
         for summary in summaries {
             if let kind = activityKind(summary) { raw.insert(kind.rawValue) }
         }

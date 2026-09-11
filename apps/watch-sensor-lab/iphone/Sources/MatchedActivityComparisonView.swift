@@ -5,6 +5,7 @@ struct MatchedActivityComparisonView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var summaries: [TrackerSummary] = []
     @State private var selectedSessionID: String?
+    @State private var selectedChartDate: Date?
 
     private let store = NativeSessionStore()
     private let reviewStore = ActivityReviewStore()
@@ -27,9 +28,7 @@ struct MatchedActivityComparisonView: View {
                             .frame(minHeight: 260)
                         } else {
                             comparisonChart(anchor)
-                            ForEach(matches) { match in
-                                matchCard(anchor: anchor, match: match)
-                            }
+                            matchStack(anchor)
                             methodology
                         }
                     } else {
@@ -161,47 +160,208 @@ struct MatchedActivityComparisonView: View {
         .matchPanel()
     }
 
-    private func comparisonChart(_ anchor: TrackerSummary) -> some View {
-        let ordered = Array(matches.reversed()) + [MatchedActivityCandidate(summary: anchor, similarity: 1)]
+    private func comparisonChart(
+        _ anchor: TrackerSummary
+    ) -> some View {
+        let ordered =
+            Array(matches.reversed())
+            + [
+                MatchedActivityCandidate(
+                    summary: anchor,
+                    similarity: 1
+                )
+            ]
+
+        let selected = selectedChartDate.flatMap { date in
+            ordered.min {
+                abs(
+                    $0.summary.startedAt
+                        .timeIntervalSince(date)
+                )
+                <
+                abs(
+                    $1.summary.startedAt
+                        .timeIntervalSince(date)
+                )
+            }
+        }
+
         return VStack(alignment: .leading, spacing: 11) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("ÉVOLUTION")
                         .font(.caption.weight(.black))
                         .foregroundStyle(.cyan)
+
                     Text(chartTitle(anchor))
                         .font(.headline.weight(.bold))
                 }
+
                 Spacer()
-                Text("référence en mint")
+
+                Text("touche / glisse")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
 
             Chart(ordered) { item in
                 LineMark(
-                    x: .value("Date", item.summary.startedAt),
-                    y: .value(chartTitle(anchor), chartMetric(item.summary))
+                    x: .value(
+                        "Date",
+                        item.summary.startedAt
+                    ),
+                    y: .value(
+                        chartTitle(anchor),
+                        chartMetric(item.summary)
+                    )
                 )
-                .foregroundStyle(.cyan.opacity(0.55))
-
+                .foregroundStyle(
+                    .cyan.opacity(0.55)
+                )
+                .lineStyle(
+                    StrokeStyle(
+                        lineWidth: 2.4,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
 
                 PointMark(
-                    x: .value("Date", item.summary.startedAt),
-                    y: .value(chartTitle(anchor), chartMetric(item.summary))
+                    x: .value(
+                        "Date",
+                        item.summary.startedAt
+                    ),
+                    y: .value(
+                        chartTitle(anchor),
+                        chartMetric(item.summary)
+                    )
                 )
-                .foregroundStyle(item.summary.sessionID == anchor.sessionID ? Color.mint : Color.cyan)
-                .symbolSize(item.summary.sessionID == anchor.sessionID ? 90 : 50)
+                .foregroundStyle(
+                    item.summary.sessionID
+                        == anchor.sessionID
+                        ? Color.mint
+                        : Color.cyan
+                )
+                .symbolSize(
+                    item.summary.sessionID
+                        == selected?.summary.sessionID
+                        ? 95
+                        : item.summary.sessionID
+                            == anchor.sessionID
+                            ? 72
+                            : 42
+                )
+
+                if
+                    item.summary.sessionID
+                        == selected?.summary.sessionID
+                {
+                    RuleMark(
+                        x: .value(
+                            "Sélection",
+                            item.summary.startedAt
+                        )
+                    )
+                    .foregroundStyle(
+                        .white.opacity(0.45)
+                    )
+                    .annotation(
+                        position: .top,
+                        spacing: 5
+                    ) {
+                        VStack(
+                            alignment: .leading,
+                            spacing: 2
+                        ) {
+                            Text(
+                                item.summary.startedAt
+                                    .formatted(
+                                        date: .abbreviated,
+                                        time: .omitted
+                                    )
+                            )
+                            .font(
+                                .caption2.weight(.black)
+                            )
+
+                            Text(
+                                primaryPaceOrSpeed(
+                                    item.summary
+                                )
+                            )
+                            .font(
+                                .caption.weight(.black)
+                            )
+                            .foregroundStyle(
+                                item.summary.sessionID
+                                    == anchor.sessionID
+                                    ? Color.mint
+                                    : Color.cyan
+                            )
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(
+                            .ultraThinMaterial,
+                            in: RoundedRectangle(
+                                cornerRadius: 10,
+                                style: .continuous
+                            )
+                        )
+                        .allowsHitTesting(false)
+                    }
+                }
             }
+            .chartXSelection(
+                value: $selectedChartDate
+            )
             .frame(height: 190)
             .chartYAxis {
                 AxisMarks(position: .leading) { _ in
-                    AxisGridLine().foregroundStyle(.white.opacity(0.06))
+                    AxisGridLine()
+                        .foregroundStyle(
+                            .white.opacity(0.06)
+                        )
                     AxisValueLabel()
                 }
             }
         }
         .matchPanel()
+    }
+
+    private func matchStack(
+        _ anchor: TrackerSummary
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("MATCHS")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Label(
+                    "glisse",
+                    systemImage: "arrow.left.and.right"
+                )
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
+            }
+
+            TabView {
+                ForEach(matches) { match in
+                    matchCard(
+                        anchor: anchor,
+                        match: match
+                    )
+                    .padding(.horizontal, 1)
+                }
+            }
+            .frame(height: 405)
+            .tabViewStyle(
+                .page(indexDisplayMode: .automatic)
+            )
+        }
     }
 
     private func matchCard(anchor: TrackerSummary, match: MatchedActivityCandidate) -> some View {

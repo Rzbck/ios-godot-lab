@@ -44,6 +44,7 @@ private struct ReadyWatchHomeView: View {
             WatchProgressionDepthView().tag(1)
             WatchVisualRecentPage(showHistory: $showHistory).tag(2)
             WatchStatusDepthView().tag(3)
+            WatchRestoreEntryPage().tag(4)
         }
         .tabViewStyle(.page)
         .sheet(isPresented: $showHistory) {

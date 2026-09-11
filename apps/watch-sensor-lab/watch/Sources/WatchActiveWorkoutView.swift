@@ -260,6 +260,8 @@ private struct WatchRouteTerrainPage: View {
 
 private struct WatchControlsPage: View {
     @EnvironmentObject private var model: SensorModel
+    @State private var showFinishReview = false
+    @State private var finishActivity: ActivityKind = .walking
 
     var body: some View {
         VStack(spacing: 10) {
@@ -288,7 +290,7 @@ private struct WatchControlsPage: View {
                 .tint(.blue)
             }
 
-            Button { model.isPaused ? model.resume() : model.pause() } label: {
+            Button { model.isPaused ? model.workflowResume() : model.workflowPause() } label: {
                 Label(
                     model.isPaused ? "Reprendre" : "Pause",
                     systemImage: model.isPaused ? "play.fill" : "pause.fill"
@@ -300,17 +302,129 @@ private struct WatchControlsPage: View {
             .tint(model.isPaused ? .green : .orange)
             .controlSize(.large)
 
-            Button(role: .destructive) { model.stop() } label: {
+            Button(role: .destructive) {
+                if model.workflowFinishReview.required {
+                    finishActivity = model.workflowFinishReview.suggestedActivity
+                    showFinishReview = true
+                } else {
+                    model.workflowFinish(
+                            disposition: .preserveDetectedSegments,
+                            finalActivity: nil
+                        )
+                }
+            } label: {
                 Label("Terminer", systemImage: "stop.fill")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .sheet(isPresented: $showFinishReview) {
+                WatchFinishActivityReview(
+                    selection: $finishActivity,
+                    suggested: model.workflowFinishReview.suggestedActivity,
+                    preserveAuto: {
+                        model.workflowFinish(
+                            disposition: .preserveDetectedSegments,
+                            finalActivity: nil
+                        )
+                        showFinishReview = false
+                    },
+                    confirmSingle: {
+                        model.workflowFinish(
+                            disposition: .forceSingleActivity,
+                            finalActivity: finishActivity
+                        )
+                        showFinishReview = false
+                    }
+                )
+            }
 
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 2)
+    }
+}
+
+private struct WatchFinishActivityReview: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selection: ActivityKind
+
+    let suggested: ActivityKind
+    let preserveAuto: () -> Void
+    let confirmSingle: () -> Void
+
+    private var activities: [ActivityKind] {
+        ActivityKind.allCases.filter { !$0.isAutomatic }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 9) {
+                Text("TYPE D’ACTIVITÉ")
+                    .font(.caption2.weight(.black))
+                    .foregroundStyle(.secondary)
+
+                Text("Vérifie avant d’enregistrer")
+                    .font(.caption.weight(.bold))
+                    .multilineTextAlignment(.center)
+
+                Button {
+                    preserveAuto()
+                } label: {
+                    VStack(spacing: 2) {
+                        Label(
+                            "Conserver la détection Auto",
+                            systemImage: "wand.and.stars"
+                        )
+                        .font(.caption.weight(.bold))
+
+                        Text("Garde les changements de sport détectés")
+                            .font(.system(size: 8))
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+
+                Divider()
+
+                Text("Ou forcer un seul sport")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+
+                Text("Suggestion : \(suggested.label)")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+
+                Picker("Activité", selection: $selection) {
+                    ForEach(activities) { activity in
+                        Label(
+                            activity.label,
+                            systemImage: activity.symbol
+                        )
+                        .tag(activity)
+                    }
+                }
+
+                Button {
+                    confirmSingle()
+                } label: {
+                    Label(
+                        "Forcer · \(selection.label)",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button("Annuler", role: .cancel) {
+                    dismiss()
+                }
+                .font(.caption)
+            }
+            .padding(.horizontal, 4)
+        }
     }
 }
 

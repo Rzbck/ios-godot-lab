@@ -258,14 +258,29 @@ final class WatchAutoHealthReconciler: ObservableObject {
         let originals = workouts.filter { ($0.metadata?[segmentedKey] as? Bool) != true }
 
         guard let original = closestOriginal(in: originals, to: plan) else {
-            if segmented.count >= 2 {
+            if !segmented.isEmpty {
                 return .alreadyReconciled(segmented.count)
             }
             return .notReady
         }
 
         let segments = normalizedSegments(plan: plan, original: original)
-        guard Set(segments.map { $0.activity.rawValue }).count > 1 else {
+        guard !segments.isEmpty else { return .notReady }
+
+        let uniqueActivities = Set(
+            segments.map { $0.activity.rawValue }
+        )
+
+        let originalActivity = ActivityKind(
+            healthKitType: original.workoutActivityType
+        )
+
+        // Une séance Auto peut être mono-sport tout en ayant été lancée
+        // avec le type provisoire "walking". Dans ce cas elle doit quand
+        // même être reconstruite avec son vrai type.
+        if uniqueActivities.count == 1,
+           let onlyActivity = segments.first?.activity,
+           originalActivity == onlyActivity {
             return .unchanged
         }
 
@@ -370,6 +385,17 @@ final class WatchAutoHealthReconciler: ObservableObject {
             }
         }
         raw = merged
+
+        // Auto démarre historiquement avec walking comme valeur
+        // provisoire. Un court segment initial avant la première vraie
+        // classification ne représente pas forcément une vraie marche.
+        if raw.count >= 2,
+           raw[0].activity == .walking,
+           raw[1].activity != .walking,
+           let firstEnd = raw[0].endedAt,
+           firstEnd.timeIntervalSince(raw[0].startedAt) <= 45 {
+            raw.removeFirst()
+        }
 
         if raw.count == 1 {
             return [NormalizedSegment(activity: raw[0].activity, start: original.startDate, end: original.endDate)]

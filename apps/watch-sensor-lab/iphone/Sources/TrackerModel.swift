@@ -38,11 +38,26 @@ final class TrackerModel: NSObject, ObservableObject {
     @Published private(set) var currentWeather: SessionWeatherSnapshot?
     @Published private(set) var autoPauseEnabled = false
     @Published private(set) var autoPauseProfiles: [AutoPauseProfileKind: AutoPauseProfilePreference] = PhoneAutoPausePreferences.load()
+    @Published private(set) var finishReviewRequired = false
+    @Published private(set) var suggestedFinalActivity: ActivityKind = .walking
 
     var isActive: Bool { phase == .active || phase == .paused }
     var isPaused: Bool { phase == .paused }
     var displayActivity: ActivityKind { selectedActivity.isAutomatic ? effectiveActivity : selectedActivity }
     var gpsSettled: Bool { horizontalAccuracy > 0 && horizontalAccuracy <= 20 && elapsedSeconds >= 5 }
+
+    var finishReview: TrackerFinishReviewState {
+        let shared = TrackerWorkflowPolicy.finishReview(
+            selectedActivity: selectedActivity,
+            effectiveActivity: effectiveActivity,
+            suggestedActivity: suggestedFinalActivity
+        )
+
+        return TrackerFinishReviewState(
+            required: finishReviewRequired && shared.required,
+            suggestedActivity: shared.suggestedActivity
+        )
+    }
 
     private let locationManager = CLLocationManager()
     private let healthStore = HKHealthStore()
@@ -167,11 +182,20 @@ final class TrackerModel: NSObject, ObservableObject {
 
     func pauseFromPhone() { requestControl("pause", allowed: phase == .active) }
     func resumeFromPhone() { requestControl("resume", allowed: phase == .paused) }
-    func stopFromPhone() {
+    func stopFromPhone(
+        disposition: TrackerFinishDisposition = .preserveDetectedSegments,
+        finalActivity: ActivityKind? = nil
+    ) {
         if let location = previousLocation {
             captureWeather(at: location, force: true)
         }
-        requestControl("stop", allowed: isActive)
+
+        requestControl(
+            "stop",
+            allowed: isActive,
+            finishDisposition: disposition,
+            finalActivity: finalActivity
+        )
     }
 
     func deleteAllTestData() {
@@ -186,17 +210,31 @@ final class TrackerModel: NSObject, ObservableObject {
         sendWC(message)
     }
 
-    private func requestControl(_ command: String, allowed: Bool) {
+    private func requestControl(
+        _ command: String,
+        allowed: Bool,
+        finishDisposition: TrackerFinishDisposition? = nil,
+        finalActivity: ActivityKind? = nil
+    ) {
         guard allowed, pendingCommand == nil else { return }
+
         pendingCommand = command
         pendingCommandAtRevision = lastAuthorityRevision
+
         store.appendEvent("control_requested", source: "iphone", payload: [
             "command": command,
             "authority_revision": lastAuthorityRevision,
+            "finish_disposition": finishDisposition?.rawValue ?? "none",
+            "final_activity": finalActivity?.rawValue ?? "none",
         ])
+
         statusMessage = "Commande \(command) envoyée à la Watch…"
+
         var request = makeMessage(kind: .request)
         request.command = command
+        request.finishDisposition = finishDisposition?.rawValue
+        request.finalActivityOverride = finalActivity?.rawValue
+
         sendToWatch(request)
     }
 
@@ -342,6 +380,16 @@ final class TrackerModel: NSObject, ObservableObject {
             }
             effectiveActivity = effective
             lastEffectiveActivity = effective
+        }
+
+        if let required = message.finishReviewRequired {
+            finishReviewRequired = required
+        }
+
+        if let raw = message.suggestedFinalActivity,
+           let suggested = ActivityKind(rawValue: raw),
+           !suggested.isAutomatic {
+            suggestedFinalActivity = suggested
         }
 
         let remotePhase = Phase(rawValue: message.phase ?? "")
@@ -856,6 +904,49 @@ final class TrackerModel: NSObject, ObservableObject {
 
     private static func makeSessionID() -> String { String(Int(Date().timeIntervalSince1970 * 1000)) }
     private static func revisionNow() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+}
+
+
+extension TrackerModel: TrackerSharedWorkflowSurface {
+    var workflowIsRunning: Bool { isActive }
+    var workflowIsPaused: Bool { isPaused }
+    var workflowSelectedActivity: ActivityKind { selectedActivity }
+    var workflowEffectiveActivity: ActivityKind { effectiveActivity }
+    var workflowFinishReview: TrackerFinishReviewState { finishReview }
+
+    func workflowSelectActivity(_ activity: ActivityKind) {
+        selectActivity(activity)
+    }
+
+    func workflowSetAutoPauseEnabled(_ enabled: Bool) {
+        setAutoPauseEnabled(enabled)
+    }
+
+    func workflowStart() {
+        startFromPhone()
+    }
+
+    func workflowPause() {
+        pauseFromPhone()
+    }
+
+    func workflowResume() {
+        resumeFromPhone()
+    }
+
+    func workflowFinish(
+        disposition: TrackerFinishDisposition,
+        finalActivity: ActivityKind?
+    ) {
+        stopFromPhone(
+            disposition: disposition,
+            finalActivity: finalActivity
+        )
+    }
+
+    func workflowDeleteAllTestData() {
+        deleteAllTestData()
+    }
 }
 
 extension TrackerModel: CLLocationManagerDelegate {

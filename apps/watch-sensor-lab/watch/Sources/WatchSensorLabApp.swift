@@ -94,7 +94,7 @@ private struct WatchLaunchPage: View {
                     .minimumScaleFactor(0.65)
                 Spacer(minLength: 2)
                 Button {
-                    model.setAutoPauseEnabled(!model.autoPauseEnabled)
+                    model.workflowSetAutoPauseEnabled(!model.autoPauseEnabled)
                 } label: {
                     Image(systemName: model.autoPauseEnabled ? "pause.circle.fill" : "pause.circle")
                         .font(.caption.weight(.bold))
@@ -150,8 +150,8 @@ private struct WatchSportStartPicker: View {
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
                         ForEach(activities) { activity in
                             Button {
-                                model.selectActivity(activity)
-                                model.start()
+                                model.workflowSelectActivity(activity)
+                                model.workflowStart()
                                 dismiss()
                             } label: {
                                 VStack(spacing: 4) {

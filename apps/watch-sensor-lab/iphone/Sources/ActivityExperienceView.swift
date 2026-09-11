@@ -85,7 +85,7 @@ private struct IdleActivityExperienceView: View {
             }
             .buttonStyle(.plain)
 
-            Button { tracker.startFromPhone() } label: {
+            Button { tracker.workflowStart() } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "play.fill")
                     Text("DÉMARRER")
@@ -126,7 +126,7 @@ private struct IdleActivityExperienceView: View {
         Toggle(
             isOn: Binding(
                 get: { tracker.autoPauseEnabled },
-                set: { tracker.setAutoPauseEnabled($0) }
+                set: { tracker.workflowSetAutoPauseEnabled($0) }
             )
         ) {
             VStack(alignment: .leading, spacing: 3) {
@@ -142,7 +142,7 @@ private struct IdleActivityExperienceView: View {
     }
 
     private func activityButton(_ activity: ActivityKind) -> some View {
-        Button { tracker.selectActivity(activity) } label: {
+        Button { tracker.workflowSelectActivity(activity) } label: {
             Label(activity.label, systemImage: activity.symbol)
         }
     }
@@ -160,6 +160,8 @@ private struct LiveActivityExperienceView: View {
     @State private var section: Section = .summary
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var followUser = true
+    @State private var showFinishReview = false
+    @State private var finishActivity: ActivityKind = .walking
 
     var body: some View {
         NavigationStack {
@@ -407,7 +409,7 @@ private struct LiveActivityExperienceView: View {
     private var controls: some View {
         HStack(spacing: 10) {
             Button {
-                tracker.isPaused ? tracker.resumeFromPhone() : tracker.pauseFromPhone()
+                tracker.isPaused ? tracker.workflowResume() : tracker.workflowPause()
             } label: {
                 Label(
                     tracker.isPaused ? "Reprendre" : "Pause",
@@ -422,7 +424,14 @@ private struct LiveActivityExperienceView: View {
             .disabled(tracker.pendingCommand != nil)
 
             Button(role: .destructive) {
-                tracker.stopFromPhone()
+                if tracker.workflowFinishReview.required {
+                    finishActivity = tracker.workflowFinishReview.suggestedActivity
+                    showFinishReview = true
+                } else {
+                    tracker.workflowFinish(
+                        disposition: .preserveDetectedSegments
+                    )
+                }
             } label: {
                 Label("Terminer", systemImage: "stop.fill")
                     .font(.headline)
@@ -431,6 +440,26 @@ private struct LiveActivityExperienceView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(tracker.pendingCommand != nil)
+
+            .sheet(isPresented: $showFinishReview) {
+                PhoneFinishActivityReview(
+                    selection: $finishActivity,
+                    suggested: tracker.workflowFinishReview.suggestedActivity,
+                    preserveAuto: {
+                        tracker.workflowFinish(
+                            disposition: .preserveDetectedSegments
+                        )
+                        showFinishReview = false
+                    },
+                    confirmSingle: {
+                        tracker.workflowFinish(
+                            disposition: .forceSingleActivity,
+                            finalActivity: finishActivity
+                        )
+                        showFinishReview = false
+                    }
+                )
+            }
         }
     }
 
@@ -515,6 +544,76 @@ private struct ActivityReadinessPill: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
             .background(ready ? Color.green.opacity(0.12) : Color.white.opacity(0.05), in: Capsule())
+    }
+}
+
+
+private struct PhoneFinishActivityReview: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selection: ActivityKind
+
+    let suggested: ActivityKind
+    let preserveAuto: () -> Void
+    let confirmSingle: () -> Void
+
+    private var activities: [ActivityKind] {
+        ActivityKind.allCases.filter { !$0.isAutomatic }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Détection automatique") {
+                    Button {
+                        preserveAuto()
+                    } label: {
+                        Label(
+                            "Conserver les segments détectés",
+                            systemImage: "wand.and.stars"
+                        )
+                    }
+
+                    Text(
+                        "Conserve tous les changements de sport réellement détectés pendant la séance."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section("Forcer un seul sport") {
+                    Picker("Activité", selection: $selection) {
+                        ForEach(activities) { activity in
+                            Label(
+                                activity.label,
+                                systemImage: activity.symbol
+                            )
+                            .tag(activity)
+                        }
+                    }
+
+                    Text("Suggestion Auto : \(suggested.label)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Button {
+                        confirmSingle()
+                    } label: {
+                        Label(
+                            "Enregistrer comme \(selection.label)",
+                            systemImage: "checkmark.circle.fill"
+                        )
+                    }
+                }
+            }
+            .navigationTitle("Terminer la séance")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annuler") {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 

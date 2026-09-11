@@ -6,12 +6,14 @@ on:
   push:
     branches:
       - 'feat/watch-sensor-*'
+      - 'fix/watch-*'
     paths:
       - 'apps/watch-sensor-lab/iphone/**'
       - 'apps/watch-sensor-lab/watch/**'
       - 'apps/watch-sensor-lab/Shared/**'
       - 'apps/watch-sensor-lab/godot/**'
       - 'apps/watch-sensor-lab/GENERATE_APP_ICON.py'
+      - 'apps/watch-sensor-lab/CHECK_WORKFLOW_PARITY.py'
       - '.github/workflows/watch-sensor-lab-bootstrap.yml'
 
 permissions:
@@ -51,6 +53,12 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           xcrun --sdk watchos --show-sdk-version
+
+      - name: Verify shared iPhone Watch workflow parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$APP_DIR/CHECK_WORKFLOW_PARITY.py"
 
       - name: Stamp exact build identity
         shell: bash

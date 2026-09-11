@@ -233,3 +233,33 @@ A generated artifact is not an installation; an installation is not physical beh
 - artifact-free normal CI policy.
 
 No merge to `main`, release, promotion, destructive Git operation or cross-app propagation without explicit user approval.
+
+
+## Invariant iPhone / Watch — workflow partagé
+
+À partir du chantier `fix/watch-auto-run-integrity-20260911`, toute fonction de
+workflow utilisateur commune doit exister sur iPhone et Apple Watch.
+
+Le contrat de compilation est `TrackerSharedWorkflowSurface` dans
+`Shared/TrackerShared.swift`.
+
+Les fonctions couvertes sont au minimum :
+- choix d'activité ;
+- démarrage ;
+- activation/désactivation de l'auto-pause ;
+- pause ;
+- reprise ;
+- validation de fin ;
+- conservation des segments Auto ou correction utilisateur ;
+- purge des données de test.
+
+La Watch reste autoritaire pour l'état réel de la séance et les capteurs.
+L'iPhone peut commander le même workflow mais ne possède pas une deuxième
+machine d'état concurrente.
+
+Une fonction réellement spécifique au matériel peut rester spécifique à un
+appareil, mais elle doit être identifiée explicitement comme telle. Une étape
+de workflow utilisateur commune ne doit jamais être ajoutée à une seule UI.
+
+`CHECK_WORKFLOW_PARITY.py` est exécuté par la CI. Une divergence du contrat
+commun doit faire échouer le build au lieu d'être découverte sur le terrain.

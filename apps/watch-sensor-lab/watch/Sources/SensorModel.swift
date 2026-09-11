@@ -50,6 +50,33 @@ final class SensorModel: NSObject, ObservableObject {
     var displayActivity: ActivityKind { selectedActivity.isAutomatic ? effectiveActivity : selectedActivity }
     var canAdvanceTriathlon: Bool { (selectedActivity == .swimBikeRun && effectiveActivity != .running) || multisportTransition }
 
+    var suggestedFinalActivity: ActivityKind {
+        guard selectedActivity.isAutomatic else { return selectedActivity }
+
+        var totals = automaticActivitySeconds
+        if phase == .active, let since = automaticActivityStartedAt {
+            totals[effectiveActivity.rawValue, default: 0] +=
+                Swift.max(0, Date().timeIntervalSince(since))
+        }
+
+        guard
+            let raw = totals.max(by: { $0.value < $1.value })?.key,
+            let activity = ActivityKind(rawValue: raw)
+        else {
+            return effectiveActivity
+        }
+
+        return activity
+    }
+
+    var finishReview: TrackerFinishReviewState {
+        TrackerWorkflowPolicy.finishReview(
+            selectedActivity: selectedActivity,
+            effectiveActivity: effectiveActivity,
+            suggestedActivity: suggestedFinalActivity
+        )
+    }
+
     private let healthStore = HKHealthStore()
     private let locationManager = CLLocationManager()
     private let activityManager = CMMotionActivityManager()
@@ -101,6 +128,8 @@ final class SensorModel: NSObject, ObservableObject {
     private var triathlonMotionCandidate: ActivityKind?
     private var triathlonMotionToken = UUID()
     private var automaticActivityTransitions = 0
+    private var automaticActivitySeconds: [String: TimeInterval] = [:]
+    private var automaticActivityStartedAt: Date?
 
     private override init() {
         super.init()
@@ -273,6 +302,9 @@ final class SensorModel: NSObject, ObservableObject {
             resetPresentationData(keepActivity: true)
             phase = .active
             effectiveActivity = initialEffectiveActivity(for: selectedActivity)
+            if selectedActivity.isAutomatic {
+                automaticActivityStartedAt = startedAt ?? Date()
+            }
             authorityRevision = max(authorityRevision, 1)
             sessionStatus = selectedActivity.isAutomatic ? "Auto · analyse en cours" : "\(selectedActivity.label) en cours"
 
@@ -340,9 +372,47 @@ final class SensorModel: NSObject, ObservableObject {
     }
 
     func stop() {
+        stop(as: nil)
+    }
+
+    func stop(as confirmedActivity: ActivityKind?) {
         guard running else { return }
+
+        if selectedActivity.isAutomatic,
+           let confirmedActivity,
+           !confirmedActivity.isAutomatic {
+
+            closeAutomaticActivityAccounting(at: Date())
+
+            let previous = effectiveActivity
+            effectiveActivity = confirmedActivity
+            authorityRevision += 1
+
+            sendEvent("final_activity_confirmed", payload: [
+                "from": previous.rawValue,
+                "to": confirmedActivity.rawValue,
+                "suggested": suggestedFinalActivity.rawValue,
+            ])
+
+            sendAuthority(force: true)
+        }
+
         authorityRevision += 1
         stopCore(status: "Session terminée")
+    }
+
+    func finish(
+        _ disposition: TrackerFinishDisposition,
+        activity: ActivityKind? = nil
+    ) {
+        switch disposition {
+        case .preserveDetectedSegments:
+            stop()
+
+        case .forceSingleActivity:
+            guard let activity, !activity.isAutomatic else { return }
+            stop(as: activity)
+        }
     }
 
     func advanceTriathlon() {
@@ -417,6 +487,8 @@ final class SensorModel: NSObject, ObservableObject {
 
     private func pauseCore(reason: String) {
         guard phase == .active else { return }
+        closeAutomaticActivityAccounting(at: Date())
+        cancelPendingAutomaticActivity()
         phase = .paused
         pausedAt = Date()
         currentSpeedMps = 0
@@ -441,6 +513,10 @@ final class SensorModel: NSObject, ObservableObject {
         previousLocation = nil
         previousAltitudeLocation = nil
         phase = .active
+        cancelPendingAutomaticActivity()
+        if selectedActivity.isAutomatic {
+            automaticActivityStartedAt = Date()
+        }
         workoutSession?.resume()
         locationManager.startUpdatingLocation()
         startPedometer()
@@ -639,6 +715,8 @@ final class SensorModel: NSObject, ObservableObject {
         triathlonMotionCandidate = nil
         triathlonMotionToken = UUID()
         automaticActivityTransitions = 0
+        automaticActivitySeconds = [:]
+        automaticActivityStartedAt = nil
         lastMetricSnapshotSend = .distantPast
         lastReliableMetricSnapshotSend = .distantPast
         lastAutoEvidenceSend = .distantPast
@@ -684,6 +762,11 @@ final class SensorModel: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.refreshElapsed()
+
+                if self.autoPauseEnabled, self.phase == .active {
+                    self.stageAutoPauseIfNeeded()
+                }
+
                 self.sendAuthority()
                 self.sendMetricSnapshotIfNeeded()
             }
@@ -718,8 +801,21 @@ final class SensorModel: NSObject, ObservableObject {
 
             if rawMotionCandidate != nil {
                 self.lastMotionWasStationary = false
-                self.cancelPendingAutoPause()
-                self.stageAutoResumeIfNeeded()
+
+                if self.phase == .paused {
+                    self.stageAutoResumeIfNeeded()
+                } else if self.phase == .active {
+                    if WatchAutoPolicy.shouldStagePause(
+                        activity: self.displayActivity,
+                        stationary: false,
+                        speedMps: self.currentSpeedMps,
+                        cadenceSPM: self.cadenceSPM
+                    ) {
+                        self.stageAutoPauseIfNeeded()
+                    } else {
+                        self.cancelPendingAutoPause()
+                    }
+                }
             }
 
             if self.selectedActivity.isAutomatic,
@@ -757,45 +853,105 @@ final class SensorModel: NSObject, ObservableObject {
         }
     }
 
-    private func stageAutomaticCandidate(_ decision: WatchAutoDecision) {
-        let candidate = decision.activity
-        guard candidate != effectiveActivity else {
-            autoCandidate = nil
-            autoCandidateDecision = nil
-            autoCandidateToken = UUID()
+    private func cancelPendingAutomaticActivity() {
+        autoCandidate = nil
+        autoCandidateDecision = nil
+        autoCandidateToken = UUID()
+    }
+
+    private func closeAutomaticActivityAccounting(at date: Date) {
+        guard selectedActivity.isAutomatic else {
+            automaticActivityStartedAt = nil
             return
         }
+
+        guard let start = automaticActivityStartedAt else { return }
+
+        automaticActivitySeconds[effectiveActivity.rawValue, default: 0] +=
+            Swift.max(0, date.timeIntervalSince(start))
+
+        automaticActivityStartedAt = nil
+    }
+
+    private func stageAutomaticCandidate(_ decision: WatchAutoDecision) {
+        guard phase == .active else {
+            cancelPendingAutomaticActivity()
+            return
+        }
+
+        let candidate = decision.activity
+
+        // Filtre générique : un candidat ne peut pas remplacer
+        // l'activité courante si la vitesse observée est incompatible
+        // avec sa propre enveloppe physique.
+        if currentSpeedMps > 0.5,
+           currentSpeedMps > candidate.plausibleMaxSpeedMps * 1.10 {
+            cancelPendingAutomaticActivity()
+            return
+        }
+
+        guard candidate != effectiveActivity else {
+            cancelPendingAutomaticActivity()
+            return
+        }
+
+        // Hystérésis minimale commune à toutes les transitions A -> B.
+        let dwell = Swift.max(decision.dwellSeconds, 10)
+
         if autoCandidate != candidate || autoCandidateDecision != decision {
             autoCandidate = candidate
             autoCandidateDecision = decision
             autoCandidateToken = UUID()
+
             let token = autoCandidateToken
+
             sendEvent("auto_candidate", payload: [
                 "activity": candidate.rawValue,
                 "confidence": decision.confidence,
                 "provenance": decision.provenance,
-                "dwell_s": decision.dwellSeconds,
+                "dwell_s": dwell,
             ])
-            DispatchQueue.main.asyncAfter(deadline: .now() + decision.dwellSeconds) { [weak self] in
-                guard let self, self.running, self.phase == .active, self.selectedActivity.isAutomatic,
-                      self.autoCandidate == candidate, self.autoCandidateToken == token else { return }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + dwell) { [weak self] in
+                guard
+                    let self,
+                    self.running,
+                    self.phase == .active,
+                    self.selectedActivity.isAutomatic,
+                    self.autoCandidate == candidate,
+                    self.autoCandidateToken == token
+                else {
+                    return
+                }
+
+                let now = Date()
+                self.closeAutomaticActivityAccounting(at: now)
+
                 let previous = self.effectiveActivity
                 self.effectiveActivity = candidate
-                self.autoCandidate = nil
-                self.autoCandidateDecision = nil
+                self.automaticActivityStartedAt = now
+
+                self.cancelPendingAutomaticActivity()
                 self.automaticActivityTransitions += 1
                 self.authorityRevision += 1
                 self.sessionStatus = "Auto · \(candidate.label) détectée"
-                let healthActivity = self.workoutSession?.workoutConfiguration.activityType ?? .other
+
+                let healthActivity =
+                    self.workoutSession?.workoutConfiguration.activityType ?? .other
+
                 self.sendEvent("auto_activity_changed", payload: [
                     "from": previous.rawValue,
                     "to": candidate.rawValue,
                     "confidence": decision.confidence,
                     "provenance": decision.provenance,
                     "healthkit_container_type": healthActivity.rawValue,
-                    "healthkit_activity": ActivityKind(healthKitType: healthActivity)?.rawValue ?? "unknown",
-                    "healthkit_semantic_mismatch": healthActivity != candidate.healthKitType,
+                    "healthkit_activity":
+                        ActivityKind(healthKitType: healthActivity)?.rawValue
+                            ?? "unknown",
+                    "healthkit_semantic_mismatch":
+                        healthActivity != candidate.healthKitType,
                 ])
+
                 self.sendAuthority(force: true)
                 self.sendMetricSnapshotIfNeeded(force: true)
             }
@@ -1049,19 +1205,46 @@ final class SensorModel: NSObject, ObservableObject {
             if accuracyOK, plausible {
                 acceptedForDistance = true
                 distanceMeters += delta
+
                 let clipped = min(nativeSpeed, limit)
-                currentSpeedMps = currentSpeedMps == 0 ? clipped : currentSpeedMps * 0.80 + clipped * 0.20
-            } else if Date().timeIntervalSince(lastGPSRejectionEvent) > 5, delta > 3 {
-                lastGPSRejectionEvent = Date()
-                sendEvent("watch_gps_delta_rejected", payload: [
-                    "delta_m": delta,
-                    "dt_s": dt,
-                    "implied_speed_mps": implied.isFinite ? implied : -1,
-                    "native_speed_mps": nativeSpeed,
-                    "horizontal_accuracy_m": location.horizontalAccuracy,
-                    "limit_mps": limit,
-                    "activity": displayActivity.rawValue,
-                ])
+                currentSpeedMps =
+                    currentSpeedMps == 0
+                        ? clipped
+                        : currentSpeedMps * 0.80 + clipped * 0.20
+            } else {
+                // A stopped user still receives GPS fixes. Previously the speed
+                // stayed frozen on the last moving value because only accepted
+                // distance deltas updated currentSpeedMps. Let low-motion fixes
+                // pull the filtered speed back toward zero.
+                if accuracyOK,
+                   dt > 0.15,
+                   dt < 12,
+                   delta < 3,
+                   nativeSpeed >= 0,
+                   nativeSpeed <= 1.5 {
+
+                    currentSpeedMps =
+                        currentSpeedMps * 0.55
+                        + min(nativeSpeed, 1.5) * 0.45
+
+                    if currentSpeedMps < 0.35 {
+                        currentSpeedMps = 0
+                    }
+                }
+
+                if Date().timeIntervalSince(lastGPSRejectionEvent) > 5,
+                   delta > 3 {
+                    lastGPSRejectionEvent = Date()
+                    sendEvent("watch_gps_delta_rejected", payload: [
+                        "delta_m": delta,
+                        "dt_s": dt,
+                        "implied_speed_mps": implied.isFinite ? implied : -1,
+                        "native_speed_mps": nativeSpeed,
+                        "horizontal_accuracy_m": location.horizontalAccuracy,
+                        "limit_mps": limit,
+                        "activity": displayActivity.rawValue,
+                    ])
+                }
             }
         }
 
@@ -1220,6 +1403,11 @@ final class SensorModel: NSObject, ObservableObject {
         if !force, now.timeIntervalSince(lastStateSend) < 0.75 { return }
         lastStateSend = now
         var message = makeMessage(kind: .authority)
+
+        let review = finishReview
+        message.finishReviewRequired = review.required
+        message.suggestedFinalActivity = review.suggestedActivity.rawValue
+
         if let phaseOverride { message.phase = phaseOverride }
         if let data = TrackerWireCodec.encode(message), let workoutSession {
             workoutSession.sendToRemoteWorkoutSession(data: data) { _, _ in }
@@ -1281,7 +1469,21 @@ final class SensorModel: NSObject, ObservableObject {
         case "resume":
             if phase == .paused { resume() } else { sendAuthority(force: true) }
         case "stop":
-            if running { stop() }
+            guard running else { return }
+
+            let disposition =
+                message.finishDisposition
+                    .flatMap(TrackerFinishDisposition.init(rawValue:))
+                    ?? .preserveDetectedSegments
+
+            let overrideActivity =
+                message.finalActivityOverride
+                    .flatMap(ActivityKind.init(rawValue:))
+
+            finish(
+                disposition,
+                activity: overrideActivity
+            )
         default:
             break
         }
@@ -1396,6 +1598,49 @@ final class SensorModel: NSObject, ObservableObject {
 
     private static func makeSessionID() -> String { String(Int(Date().timeIntervalSince1970 * 1000)) }
     private static func revisionNow() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+}
+
+
+extension SensorModel: TrackerSharedWorkflowSurface {
+    var workflowIsRunning: Bool { running }
+    var workflowIsPaused: Bool { isPaused }
+    var workflowSelectedActivity: ActivityKind { selectedActivity }
+    var workflowEffectiveActivity: ActivityKind { effectiveActivity }
+    var workflowFinishReview: TrackerFinishReviewState { finishReview }
+
+    func workflowSelectActivity(_ activity: ActivityKind) {
+        selectActivity(activity)
+    }
+
+    func workflowSetAutoPauseEnabled(_ enabled: Bool) {
+        setAutoPauseEnabled(enabled)
+    }
+
+    func workflowStart() {
+        start()
+    }
+
+    func workflowPause() {
+        pause()
+    }
+
+    func workflowResume() {
+        resume()
+    }
+
+    func workflowFinish(
+        disposition: TrackerFinishDisposition,
+        finalActivity: ActivityKind?
+    ) {
+        finish(
+            disposition,
+            activity: finalActivity
+        )
+    }
+
+    func workflowDeleteAllTestData() {
+        deleteAllTestData()
+    }
 }
 
 extension SensorModel: HKWorkoutSessionDelegate {

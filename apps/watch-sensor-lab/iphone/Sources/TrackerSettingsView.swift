@@ -111,7 +111,7 @@ struct TrackerSettingsView: View {
                         "Pause automatique",
                         isOn: Binding(
                             get: { tracker.autoPauseEnabled },
-                            set: { tracker.setAutoPauseEnabled($0) }
+                            set: { tracker.workflowSetAutoPauseEnabled($0) }
                         )
                     )
                     .tint(.mint)

@@ -40,6 +40,8 @@ final class TrackerModel: NSObject, ObservableObject {
     @Published private(set) var autoPauseProfiles: [AutoPauseProfileKind: AutoPauseProfilePreference] = PhoneAutoPausePreferences.load()
     @Published private(set) var finishReviewRequired = false
     @Published private(set) var suggestedFinalActivity: ActivityKind = .walking
+    @Published private(set) var historicalRepairSessionID = ""
+    @Published private(set) var historicalRepairStatus = ""
 
     var isActive: Bool { phase == .active || phase == .paused }
     var isPaused: Bool { phase == .paused }
@@ -196,6 +198,32 @@ final class TrackerModel: NSObject, ObservableObject {
             finishDisposition: disposition,
             finalActivity: finalActivity
         )
+    }
+
+    func correctHistoricalActivity(
+        sessionID targetSessionID: String,
+        activity: ActivityKind
+    ) {
+        guard !isActive else {
+            historicalRepairStatus = "Termine la séance active avant une correction Santé."
+            return
+        }
+
+        guard !targetSessionID.isEmpty, !activity.isAutomatic else {
+            historicalRepairStatus = "Correction historique invalide."
+            return
+        }
+
+        historicalRepairSessionID = targetSessionID
+        historicalRepairStatus =
+            "Correction Santé demandée · \(activity.label)"
+
+        var request = makeMessage(kind: .request)
+        request.command = "correct_historical_activity"
+        request.sessionID = targetSessionID
+        request.finalActivityOverride = activity.rawValue
+
+        sendToWatch(request)
     }
 
     func deleteAllTestData() {
@@ -947,6 +975,16 @@ extension TrackerModel: TrackerSharedWorkflowSurface {
     func workflowDeleteAllTestData() {
         deleteAllTestData()
     }
+
+    func workflowCorrectHistoricalActivity(
+        sessionID: String,
+        activity: ActivityKind
+    ) {
+        correctHistoricalActivity(
+            sessionID: sessionID,
+            activity: activity
+        )
+    }
 }
 
 extension TrackerModel: CLLocationManagerDelegate {
@@ -1049,16 +1087,107 @@ extension TrackerModel: WCSessionDelegate {
            let source = payload["source"] as? String,
            let kind = payload["kind"] as? String,
            let sample = payload["payload"] as? [String: Any] {
+
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.isActive else { return }
-                if kind == "event", let name = sample["name"] as? String {
+                guard let self else { return }
+
+                if kind == "event",
+                   let name = sample["name"] as? String,
+                   name.hasPrefix("health_manual_correction_") {
+
+                    let repairedSession =
+                        sample["session_id"] as? String ?? ""
+
+                    let targetRaw =
+                        sample["target_activity"] as? String ?? ""
+
+                    self.historicalRepairSessionID = repairedSession
+
+                    switch name {
+                    case "health_manual_correction_started":
+                        self.historicalRepairStatus =
+                            "Reconstruction Santé en cours…"
+
+                    case "health_manual_correction_completed":
+                        let alreadyCorrect =
+                            sample["already_correct"] as? Bool ?? false
+
+                        self.historicalRepairStatus =
+                            alreadyCorrect
+                                ? "Santé déjà correcte."
+                                : "Correction Santé vérifiée."
+
+                        if !repairedSession.isEmpty,
+                           !targetRaw.isEmpty,
+                           let existing = ActivityReviewStore()
+                               .load(sessionID: repairedSession) {
+
+                            let updated = ActivityReviewRecord(
+                                sessionID: repairedSession,
+                                detectedActivity:
+                                    existing.detectedActivity,
+                                confirmedActivity: targetRaw,
+                                healthKitSyncState:
+                                    "replacement_verified"
+                            )
+
+                            try? ActivityReviewStore().save(updated)
+                        }
+
+                    case "health_manual_correction_failed":
+                        let message =
+                            sample["message"] as? String
+                                ?? "échec inconnu"
+
+                        self.historicalRepairStatus =
+                            "Correction annulée · \(message)"
+
+                        if !repairedSession.isEmpty,
+                           let existing = ActivityReviewStore()
+                               .load(sessionID: repairedSession) {
+
+                            let updated = ActivityReviewRecord(
+                                sessionID: repairedSession,
+                                detectedActivity:
+                                    existing.detectedActivity,
+                                confirmedActivity:
+                                    existing.confirmedActivity,
+                                healthKitSyncState:
+                                    "replacement_failed_original_preserved"
+                            )
+
+                            try? ActivityReviewStore().save(updated)
+                        }
+
+                    default:
+                        break
+                    }
+
+                    return
+                }
+
+                guard self.isActive else { return }
+
+                if kind == "event",
+                   let name = sample["name"] as? String {
+
                     var eventPayload = sample
                     eventPayload.removeValue(forKey: "name")
-                    self.store.appendEvent(name, source: source, payload: eventPayload)
+
+                    self.store.appendEvent(
+                        name,
+                        source: source,
+                        payload: eventPayload
+                    )
                 } else {
-                    self.store.appendSample(source: source, kind: kind, payload: sample)
+                    self.store.appendSample(
+                        source: source,
+                        kind: kind,
+                        payload: sample
+                    )
                 }
             }
+
             return
         }
 

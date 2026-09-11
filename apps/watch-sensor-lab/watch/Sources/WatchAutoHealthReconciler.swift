@@ -40,6 +40,15 @@ final class WatchAutoHealthReconciler: ObservableObject {
         let end: Date
     }
 
+
+    private struct HistoricalRepairResult {
+        let alreadyCorrect: Bool
+        let replacementUUID: String
+        let sourceWorkoutCount: Int
+        let sampleCount: Int
+        let routePointCount: Int
+    }
+
     private enum Outcome {
         case notReady
         case unchanged
@@ -71,6 +80,14 @@ final class WatchAutoHealthReconciler: ObservableObject {
     private let masterActivityKey = "com.rzbck.watchsensorlab.master_activity"
     private let algorithmKey = "com.rzbck.watchsensorlab.algorithm_version"
     private let buildKey = "com.rzbck.watchsensorlab.build_sha"
+    private let manualCorrectionKey =
+        "com.rzbck.watchsensorlab.manual_activity_correction"
+    private let correctionTargetKey =
+        "com.rzbck.watchsensorlab.correction_target_activity"
+    private let correctionSourceUUIDsKey =
+        "com.rzbck.watchsensorlab.correction_source_workouts"
+    private let correctionWorkoutUUIDKey =
+        "com.rzbck.watchsensorlab.correction_workout_uuid"
 
     private var cancellables = Set<AnyCancellable>()
     private var bound = false
@@ -78,6 +95,7 @@ final class WatchAutoHealthReconciler: ObservableObject {
     private var activePlan: Plan?
     private var pendingPlans: [Plan] = []
     private var reconciliationTask: Task<Void, Never>?
+    private var historicalRepairTask: Task<Void, Never>?
 
     private init() {
         pendingPlans = loadPendingPlans()
@@ -100,6 +118,94 @@ final class WatchAutoHealthReconciler: ObservableObject {
 
         if !pendingPlans.isEmpty {
             schedulePendingReconciliation()
+        }
+    }
+
+    func repairHistoricalActivity(
+        sessionID: String,
+        targetActivity: ActivityKind
+    ) {
+        guard !sessionID.isEmpty, !targetActivity.isAutomatic else {
+            return
+        }
+
+        guard historicalRepairTask == nil else {
+            return
+        }
+
+        requestHealthAccess()
+
+        DispatchQueue.main.async {
+            self.status =
+                "Correction Santé · \(targetActivity.label)…"
+        }
+
+        emit(
+            event: "health_manual_correction_started",
+            sessionID: sessionID,
+            payload: [
+                "target_activity": targetActivity.rawValue,
+            ]
+        )
+
+        historicalRepairTask = Task { [weak self] in
+            guard let self else { return }
+
+            defer {
+                self.historicalRepairTask = nil
+            }
+
+            do {
+                let result =
+                    try await self.repairHistoricalActivityTransaction(
+                        sessionID: sessionID,
+                        targetActivity: targetActivity
+                    )
+
+                await MainActor.run {
+                    self.status =
+                        result.alreadyCorrect
+                            ? "Santé déjà correcte · \(targetActivity.label)"
+                            : "Santé corrigée · \(targetActivity.label)"
+                }
+
+                self.emit(
+                    event: "health_manual_correction_completed",
+                    sessionID: sessionID,
+                    payload: [
+                        "target_activity":
+                            targetActivity.rawValue,
+                        "already_correct":
+                            result.alreadyCorrect,
+                        "source_workout_count":
+                            result.sourceWorkoutCount,
+                        "sample_count":
+                            result.sampleCount,
+                        "route_point_count":
+                            result.routePointCount,
+                        "replacement_uuid":
+                            result.replacementUUID,
+                    ]
+                )
+            } catch {
+                await MainActor.run {
+                    self.status =
+                        "Correction annulée · original conservé"
+                }
+
+                self.emit(
+                    event: "health_manual_correction_failed",
+                    sessionID: sessionID,
+                    payload: [
+                        "target_activity":
+                            targetActivity.rawValue,
+                        "message":
+                            error.localizedDescription,
+                        "original_preserved":
+                            true,
+                    ]
+                )
+            }
         }
     }
 
@@ -419,6 +525,479 @@ final class WatchAutoHealthReconciler: ObservableObject {
         return result.filter { $0.end > $0.start }
     }
 
+    private func repairHistoricalActivityTransaction(
+        sessionID: String,
+        targetActivity: ActivityKind
+    ) async throws -> HistoricalRepairResult {
+
+        let queriedWorkouts =
+            try await sessionWorkouts(sessionID: sessionID)
+
+        let sourceWorkouts = queriedWorkouts.filter {
+            ($0.metadata?[managedKey] as? Bool) == true
+        }
+
+        guard !sourceWorkouts.isEmpty else {
+            throw ReconcileError.operation(
+                "aucun workout Watch Tracker correspondant à cette session"
+            )
+        }
+
+        // Idempotence : une demande dupliquée ne recrée rien.
+        if sourceWorkouts.count == 1,
+           let current = sourceWorkouts.first,
+           current.workoutActivityType == targetActivity.healthKitType,
+           (current.metadata?[manualCorrectionKey] as? Bool) == true {
+
+            return HistoricalRepairResult(
+                alreadyCorrect: true,
+                replacementUUID: current.uuid.uuidString,
+                sourceWorkoutCount: 1,
+                sampleCount:
+                    try await associatedQuantitySamples(for: current).count,
+                routePointCount:
+                    try await routePointCount(
+                        sessionID: sessionID,
+                        correctionOnly: true
+                    )
+            )
+        }
+
+        let allRoutes =
+            try await sessionRouteObjects(sessionID: sessionID)
+
+        let sourceRoutes = allRoutes.filter {
+            ($0.metadata?[managedKey] as? Bool) == true
+        }
+
+        var routeLocations: [CLLocation] = []
+
+        for route in sourceRoutes {
+            routeLocations.append(
+                contentsOf: try await loadLocations(for: route)
+            )
+        }
+
+        routeLocations.sort {
+            $0.timestamp < $1.timestamp
+        }
+
+        // Déduplique les points si la session avait déjà été segmentée.
+        var deduplicatedLocations: [CLLocation] = []
+        var lastLocationKey = ""
+
+        for location in routeLocations {
+            let key = String(
+                format: "%.3f|%.6f|%.6f",
+                location.timestamp.timeIntervalSince1970,
+                location.coordinate.latitude,
+                location.coordinate.longitude
+            )
+
+            if key != lastLocationKey {
+                deduplicatedLocations.append(location)
+                lastLocationKey = key
+            }
+        }
+
+        routeLocations = deduplicatedLocations
+
+        var samplesByUUID: [UUID: HKSample] = [:]
+
+        for workout in sourceWorkouts {
+            let samples =
+                try await associatedQuantitySamples(for: workout)
+
+            for sample in samples {
+                samplesByUUID[sample.uuid] = sample
+            }
+        }
+
+        let sourceSamples =
+            samplesByUUID.values.sorted {
+                $0.startDate < $1.startDate
+            }
+
+        let sourceEvents =
+            sourceWorkouts
+                .flatMap { $0.workoutEvents ?? [] }
+                .sorted {
+                    $0.dateInterval.start
+                        < $1.dateInterval.start
+                }
+
+        guard
+            let start =
+                sourceWorkouts.map(\.startDate).min(),
+            let end =
+                sourceWorkouts.map(\.endDate).max(),
+            end > start,
+            let sourceDevice =
+                sourceWorkouts.first
+        else {
+            throw ReconcileError.operation(
+                "bornes temporelles HealthKit invalides"
+            )
+        }
+
+        let sourceDistance =
+            distanceMeters(in: sourceWorkouts)
+
+        let created =
+            try await createHistoricalCorrectionWorkout(
+                activity: targetActivity,
+                start: start,
+                end: end,
+                sessionID: sessionID,
+                source: sourceDevice,
+                sourceWorkouts: sourceWorkouts,
+                samples: sourceSamples,
+                events: sourceEvents,
+                locations: routeLocations
+            )
+
+        let replacementObjects: [HKObject] =
+            [created.route, created.workout]
+                .compactMap { $0 }
+
+        do {
+            // RELECTURE HealthKit : on ne fait pas confiance au seul callback.
+            let verifiedWorkouts =
+                try await sessionWorkouts(sessionID: sessionID)
+
+            guard
+                let verified = verifiedWorkouts.first(
+                    where: {
+                        $0.uuid == created.workout.uuid
+                    }
+                ),
+                verified.workoutActivityType
+                    == targetActivity.healthKitType,
+                (verified.metadata?[manualCorrectionKey] as? Bool)
+                    == true,
+                abs(
+                    verified.startDate
+                        .timeIntervalSince(start)
+                ) <= 1,
+                abs(
+                    verified.endDate
+                        .timeIntervalSince(end)
+                ) <= 1
+            else {
+                throw ReconcileError.operation(
+                    "le workout de remplacement n’a pas passé la relecture HealthKit"
+                )
+            }
+
+            let verifiedSamples =
+                try await associatedQuantitySamples(
+                    for: verified
+                )
+
+            guard
+                verifiedSamples.count
+                    >= sourceSamples.count
+            else {
+                throw ReconcileError.operation(
+                    "des samples associés manquent sur le remplacement"
+                )
+            }
+
+            if routeLocations.count >= 2 {
+                let verifiedRoutes =
+                    try await sessionRouteObjects(
+                        sessionID: sessionID
+                    )
+
+                guard
+                    let createdRoute = created.route,
+                    verifiedRoutes.contains(
+                        where: {
+                            $0.uuid == createdRoute.uuid
+                                && (
+                                    $0.metadata?[
+                                        manualCorrectionKey
+                                    ] as? Bool
+                                ) == true
+                        }
+                    )
+                else {
+                    throw ReconcileError.operation(
+                        "la route reconstruite n’a pas passé la vérification"
+                    )
+                }
+            }
+
+            if sourceDistance > 1 {
+                let replacementDistance =
+                    distanceMeters(in: [verified])
+
+                let tolerance =
+                    max(
+                        10,
+                        sourceDistance * 0.03
+                    )
+
+                guard
+                    abs(
+                        replacementDistance
+                            - sourceDistance
+                    ) <= tolerance
+                else {
+                    throw ReconcileError.operation(
+                        "distance du remplacement incohérente"
+                    )
+                }
+            }
+        } catch {
+            // Aucune suppression de l'original :
+            // on retire uniquement le remplacement inachevé.
+            try? await deleteObjects(replacementObjects)
+            throw error
+        }
+
+        // SEULEMENT APRÈS CRÉATION + RELECTURE + VÉRIFICATION.
+        do {
+            try await deleteObjects(sourceWorkouts)
+        } catch {
+            // Le workout original existe toujours :
+            // rollback du nouveau.
+            try? await deleteObjects(replacementObjects)
+
+            throw ReconcileError.operation(
+                "ancien workout impossible à supprimer ; original conservé"
+            )
+        }
+
+        // Les routes sources ne sont supprimées qu'après le remplacement.
+        // Si HealthKit les a déjà retirées avec le workout, l'erreur est ignorée.
+        if !sourceRoutes.isEmpty {
+            try? await deleteObjects(sourceRoutes)
+        }
+
+        return HistoricalRepairResult(
+            alreadyCorrect: false,
+            replacementUUID:
+                created.workout.uuid.uuidString,
+            sourceWorkoutCount:
+                sourceWorkouts.count,
+            sampleCount:
+                sourceSamples.count,
+            routePointCount:
+                routeLocations.count
+        )
+    }
+
+    private func createHistoricalCorrectionWorkout(
+        activity: ActivityKind,
+        start: Date,
+        end: Date,
+        sessionID: String,
+        source: HKWorkout,
+        sourceWorkouts: [HKWorkout],
+        samples: [HKSample],
+        events: [HKWorkoutEvent],
+        locations: [CLLocation]
+    ) async throws
+        -> (
+            workout: HKWorkout,
+            route: HKWorkoutRoute?
+        ) {
+
+        let configuration =
+            HKWorkoutConfiguration()
+
+        configuration.activityType =
+            activity.healthKitType
+
+        configuration.locationType =
+            locations.count >= 2
+                ? .outdoor
+                : .unknown
+
+        let builder =
+            HKWorkoutBuilder(
+                healthStore: healthStore,
+                configuration: configuration,
+                device: source.device
+            )
+
+        let routeBuilder =
+            builder.seriesBuilder(
+                for: HKSeriesType.workoutRoute()
+            ) as? HKWorkoutRouteBuilder
+
+        try await beginCollection(
+            builder,
+            start: start
+        )
+
+        try await addMetadata(
+            [
+                managedKey: true,
+                sessionKey: sessionID,
+                segmentedKey: true,
+                manualCorrectionKey: true,
+                correctionTargetKey:
+                    activity.rawValue,
+                correctionSourceUUIDsKey:
+                    sourceWorkouts
+                        .map { $0.uuid.uuidString }
+                        .joined(separator: ","),
+                segmentIndexKey: 0,
+                segmentCountKey: 1,
+                segmentActivityKey:
+                    activity.rawValue,
+                masterActivityKey:
+                    activity.rawValue,
+                algorithmKey:
+                    "tracker-v4-20260910",
+                buildKey:
+                    BuildInfo.gitSHA,
+            ],
+            to: builder
+        )
+
+        if !samples.isEmpty {
+            try await addSamples(
+                samples,
+                to: builder
+            )
+        }
+
+        if !events.isEmpty {
+            try await addEvents(
+                events,
+                to: builder
+            )
+        }
+
+        if let routeBuilder,
+           locations.count >= 2 {
+
+            try await insertRoute(
+                locations,
+                into: routeBuilder
+            )
+        }
+
+        try await endCollection(
+            builder,
+            end: end
+        )
+
+        guard
+            let workout =
+                try await finishWorkout(builder)
+        else {
+            throw ReconcileError.operation(
+                "HealthKit n’a pas retourné le workout corrigé"
+            )
+        }
+
+        guard
+            let routeBuilder,
+            locations.count >= 2
+        else {
+            return (workout, nil)
+        }
+
+        do {
+            let route =
+                try await finishRoute(
+                    routeBuilder,
+                    workout: workout,
+                    metadata: [
+                        managedKey: true,
+                        sessionKey: sessionID,
+                        segmentedKey: true,
+                        manualCorrectionKey: true,
+                        correctionTargetKey:
+                            activity.rawValue,
+                        correctionWorkoutUUIDKey:
+                            workout.uuid.uuidString,
+                    ]
+                )
+
+            return (workout, route)
+        } catch {
+            // Le workout venait d'être créé mais la route a échoué.
+            // On retire ce remplacement et on garde l'original.
+            try? await deleteObjects([workout])
+            throw error
+        }
+    }
+
+    private func distanceMeters(
+        in workouts: [HKWorkout]
+    ) -> Double {
+
+        let identifiers: [
+            HKQuantityTypeIdentifier
+        ] = [
+            .distanceWalkingRunning,
+            .distanceCycling,
+            .distanceSwimming,
+        ]
+
+        return workouts.reduce(0) {
+            partial, workout in
+
+            partial
+                + identifiers.reduce(0) {
+                    subtotal, identifier in
+
+                    guard
+                        let type =
+                            HKQuantityType
+                                .quantityType(
+                                    forIdentifier:
+                                        identifier
+                                ),
+                        let quantity =
+                            workout
+                                .statistics(for: type)?
+                                .sumQuantity()
+                    else {
+                        return subtotal
+                    }
+
+                    return subtotal
+                        + quantity.doubleValue(
+                            for: HKUnit.meter()
+                        )
+                }
+        }
+    }
+
+    private func routePointCount(
+        sessionID: String,
+        correctionOnly: Bool
+    ) async throws -> Int {
+
+        let routes =
+            try await sessionRouteObjects(
+                sessionID: sessionID
+            )
+
+        var count = 0
+
+        for route in routes {
+            if correctionOnly,
+               (route.metadata?[manualCorrectionKey]
+                    as? Bool) != true {
+                continue
+            }
+
+            count +=
+                try await loadLocations(
+                    for: route
+                ).count
+        }
+
+        return count
+    }
+
     private func sessionWorkouts(sessionID: String) async throws -> [HKWorkout] {
         let predicate = HKQuery.predicateForObjects(
             withMetadataKey: sessionKey,
@@ -675,6 +1254,15 @@ final class WatchAutoHealthReconciler: ObservableObject {
         ]
         let session = WCSession.default
         guard session.activationState == .activated else { return }
-        session.transferUserInfo(packet)
+
+        if session.isReachable {
+            session.sendMessage(
+                packet,
+                replyHandler: nil,
+                errorHandler: nil
+            )
+        } else {
+            session.transferUserInfo(packet)
+        }
     }
 }

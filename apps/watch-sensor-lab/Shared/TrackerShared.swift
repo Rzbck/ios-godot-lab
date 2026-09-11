@@ -290,6 +290,7 @@ enum TrackerSharedWorkflowCapability: String, CaseIterable {
     case finishReview
     case finishDisposition
     case purge
+    case historicalActivityCorrection
 }
 
 protocol TrackerSharedWorkflowSurface: AnyObject {
@@ -312,6 +313,11 @@ protocol TrackerSharedWorkflowSurface: AnyObject {
     )
 
     func workflowDeleteAllTestData()
+
+    func workflowCorrectHistoricalActivity(
+        sessionID: String,
+        activity: ActivityKind
+    )
 }
 
 struct TrackerWireMessage: Codable {

@@ -212,6 +212,8 @@ final class SessionTimelineLoader {
 }
 
 struct ActivityReviewCard: View {
+    @EnvironmentObject private var tracker: TrackerModel
+
     let summary: TrackerSummary
     var requiresConfirmation = false
     var onSaved: ((ActivityReviewRecord) -> Void)?
@@ -271,7 +273,7 @@ struct ActivityReviewCard: View {
 
             if selectedActivity.rawValue != summary.activity {
                 Label(
-                    "La correction change l’historique Watch Tracker. Le workout HealthKit déjà sauvegardé ne peut pas être modifié sur place ; la synchronisation Santé doit rester explicitement tracée.",
+                    "La correction conserve les données brutes puis reconstruit un workout HealthKit du bon type. L’ancien workout n’est supprimé qu’après vérification du remplacement.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.caption2)
@@ -301,6 +303,20 @@ struct ActivityReviewCard: View {
                     .font(.caption2)
                     .foregroundStyle(.red)
             }
+
+
+            if tracker.historicalRepairSessionID == summary.sessionID,
+               !tracker.historicalRepairStatus.isEmpty {
+
+                Text(tracker.historicalRepairStatus)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(
+                        tracker.historicalRepairStatus
+                            .contains("annulée")
+                            ? .orange
+                            : .cyan
+                    )
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -314,25 +330,58 @@ struct ActivityReviewCard: View {
                 onSaved?(existing)
             }
         }
+        .onChange(of: tracker.historicalRepairStatus) { _, _ in
+            guard
+                tracker.historicalRepairSessionID
+                    == summary.sessionID,
+                let existing =
+                    reviewStore.load(
+                        sessionID: summary.sessionID
+                    )
+            else {
+                return
+            }
+
+            storedReview = existing
+            onSaved?(existing)
+        }
     }
 
     private func saveReview() {
         let detected = summary.activity
         let confirmed = selectedActivity.rawValue
-        let healthState = detected == confirmed ? "matches_saved_workout" : "review_differs_from_saved_workout"
+
+        let healthState =
+            detected == confirmed
+                ? "matches_saved_workout"
+                : "replacement_requested"
+
         let record = ActivityReviewRecord(
             sessionID: summary.sessionID,
             detectedActivity: detected,
             confirmedActivity: confirmed,
             healthKitSyncState: healthState
         )
+
         do {
+            // 1. La correction locale est atomique et ne touche pas aux raw data.
             try reviewStore.save(record)
+
             storedReview = record
             saveError = nil
             onSaved?(record)
+
+            // 2. Si le sport change, la Watch exécute séparément
+            //    la transaction HealthKit sécurisée.
+            if detected != confirmed {
+                tracker.workflowCorrectHistoricalActivity(
+                    sessionID: summary.sessionID,
+                    activity: selectedActivity
+                )
+            }
         } catch {
-            saveError = "Impossible d’enregistrer la correction : \(error.localizedDescription)"
+            saveError =
+                "Impossible d’enregistrer la correction : \(error.localizedDescription)"
         }
     }
 }

@@ -263,3 +263,30 @@ de workflow utilisateur commune ne doit jamais être ajoutée à une seule UI.
 
 `CHECK_WORKFLOW_PARITY.py` est exécuté par la CI. Une divergence du contrat
 commun doit faire échouer le build au lieu d'être découverte sur le terrain.
+
+
+## Correction historique HealthKit — invariant transactionnel
+
+Une correction d’activité historique est un workflow partagé iPhone / Watch
+(`historicalActivityCorrection`), avec exécution HealthKit autoritaire sur la
+Watch.
+
+Ordre obligatoire :
+1. conserver les fichiers raw Tracker et l’ActivityReview ;
+2. retrouver les workouts gérés par Watch Tracker via `session_id` ;
+3. charger les samples, événements et routes AVANT mutation ;
+4. construire le workout du nouveau type ;
+5. reconstruire sa route ;
+6. relire le remplacement depuis HealthKit et vérifier type, bornes, samples,
+   distance et route ;
+7. seulement après validation, supprimer l’ancien workout ;
+8. si une étape avant 7 échoue, supprimer uniquement le remplacement et
+   conserver l’original.
+
+La correction ne réécrit jamais `samples.jsonl`.
+
+Migration terrain en attente :
+- session `1789141684582`
+- activité confirmée par l’utilisateur : `cycling`
+- ne pas considérer la migration validée avant retour
+  `health_manual_correction_completed` et vérification matérielle dans Santé.

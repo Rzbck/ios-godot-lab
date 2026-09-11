@@ -429,8 +429,9 @@ private struct LiveActivityExperienceView: View {
                     showFinishReview = true
                 } else {
                     tracker.workflowFinish(
-                        disposition: .preserveDetectedSegments
-                    )
+                            disposition: .preserveDetectedSegments,
+                            finalActivity: nil
+                        )
                 }
             } label: {
                 Label("Terminer", systemImage: "stop.fill")
@@ -447,7 +448,8 @@ private struct LiveActivityExperienceView: View {
                     suggested: tracker.workflowFinishReview.suggestedActivity,
                     preserveAuto: {
                         tracker.workflowFinish(
-                            disposition: .preserveDetectedSegments
+                            disposition: .preserveDetectedSegments,
+                            finalActivity: nil
                         )
                         showFinishReview = false
                     },
@@ -548,7 +550,7 @@ private struct ActivityReadinessPill: View {
 }
 
 
-private struct PhoneFinishActivityReview: View {
+struct PhoneFinishActivityReview: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var selection: ActivityKind
 

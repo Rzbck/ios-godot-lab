@@ -217,7 +217,7 @@ struct LiveTrackerView: View {
 
             HStack(spacing: 9) {
                 Button {
-                    tracker.isPaused ? tracker.resumeFromPhone() : tracker.pauseFromPhone()
+                    tracker.isPaused ? tracker.workflowResume() : tracker.workflowPause()
                 } label: {
                     Label(
                         tracker.isPaused ? "Reprendre" : "Pause",
@@ -232,7 +232,10 @@ struct LiveTrackerView: View {
                 .disabled(tracker.pendingCommand != nil)
 
                 Button(role: .destructive) {
-                    tracker.stopFromPhone()
+                    tracker.workflowFinish(
+                    disposition: .preserveDetectedSegments,
+                    finalActivity: nil
+                )
                 } label: {
                     Label("Terminer", systemImage: "stop.fill")
                         .font(.headline)
@@ -311,7 +314,7 @@ struct LiveTrackerView: View {
             Toggle(
                 isOn: Binding(
                     get: { tracker.autoPauseEnabled },
-                    set: { tracker.setAutoPauseEnabled($0) }
+                    set: { tracker.workflowSetAutoPauseEnabled($0) }
                 )
             ) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -323,7 +326,7 @@ struct LiveTrackerView: View {
             }
             .tint(.mint)
 
-            Button { tracker.startFromPhone() } label: {
+            Button { tracker.workflowStart() } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "play.fill")
                     Text("DÉMARRER · \(tracker.selectedActivity.label.uppercased())")
@@ -446,7 +449,7 @@ struct LiveTrackerView: View {
 
     @ViewBuilder
     private func activityButton(_ activity: ActivityKind) -> some View {
-        Button { tracker.selectActivity(activity) } label: {
+        Button { tracker.workflowSelectActivity(activity) } label: {
             Label(activity.label, systemImage: activity.symbol)
         }
     }

@@ -457,6 +457,30 @@ final class SensorModel: NSObject, ObservableObject {
         sendAuthority(force: true)
     }
 
+    func correctHistoricalActivity(
+        sessionID targetSessionID: String,
+        activity: ActivityKind
+    ) {
+        guard !running else {
+            sessionStatus =
+                "Termine la séance avant une correction Santé"
+            return
+        }
+
+        guard !targetSessionID.isEmpty, !activity.isAutomatic else {
+            sessionStatus = "Correction Santé invalide"
+            return
+        }
+
+        sessionStatus =
+            "Correction \(activity.label) en préparation…"
+
+        WatchAutoHealthReconciler.shared.repairHistoricalActivity(
+            sessionID: targetSessionID,
+            targetActivity: activity
+        )
+    }
+
     func deleteAllTestData() {
         guard !running else {
             sessionStatus = "Termine la session avant d’effacer"
@@ -1462,6 +1486,25 @@ final class SensorModel: NSObject, ObservableObject {
             return
         }
 
+        if command == "correct_historical_activity" {
+            guard !running else { return }
+
+            guard
+                let raw = message.finalActivityOverride,
+                let target = ActivityKind(rawValue: raw),
+                !target.isAutomatic
+            else {
+                return
+            }
+
+            correctHistoricalActivity(
+                sessionID: message.sessionID,
+                activity: target
+            )
+
+            return
+        }
+
         guard running, message.sessionID == sessionID else { return }
         switch command {
         case "pause":
@@ -1640,6 +1683,16 @@ extension SensorModel: TrackerSharedWorkflowSurface {
 
     func workflowDeleteAllTestData() {
         deleteAllTestData()
+    }
+
+    func workflowCorrectHistoricalActivity(
+        sessionID: String,
+        activity: ActivityKind
+    ) {
+        correctHistoricalActivity(
+            sessionID: sessionID,
+            activity: activity
+        )
     }
 }
 

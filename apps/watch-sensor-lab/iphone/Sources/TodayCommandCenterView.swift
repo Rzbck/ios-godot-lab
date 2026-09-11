@@ -20,6 +20,7 @@ struct TodayCommandCenterView: View {
             ScrollView {
                 LazyVStack(spacing: 14) {
                     commandHero
+                    TrackerDailyBriefCard()
                     TrackerRecoveryIntelligenceCard()
                     todayMetrics
                     weeklyTrajectory

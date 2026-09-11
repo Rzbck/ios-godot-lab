@@ -438,7 +438,7 @@ private struct TodayHealthDetailView: View {
                     Chart(points) { point in
                         LineMark(x: .value("Date", point.date), y: .value(title, point.value))
                             .foregroundStyle(accent)
-                            .interpolationMethod(.catmullRom)
+
                         PointMark(x: .value("Date", point.date), y: .value(title, point.value))
                             .foregroundStyle(accent)
                     }

@@ -132,7 +132,7 @@ struct TodayCommandCenterView: View {
                 .frame(height: 50)
                 .background(tracker.isActive ? Color.mint : Color.cyan, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TrackerDepthButtonStyle())
         }
         .padding(18)
         .background(
@@ -223,7 +223,7 @@ struct TodayCommandCenterView: View {
                         accent: .pink
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TrackerDepthButtonStyle())
             }
         }
         .commandPanel()
@@ -247,7 +247,7 @@ struct TodayCommandCenterView: View {
                     y: .value("Minutes cumulées", point.minutes)
                 )
                 .foregroundStyle(by: .value("Période", point.period))
-                .interpolationMethod(.catmullRom)
+
                 .lineStyle(StrokeStyle(lineWidth: point.period == "Cette semaine" ? 3 : 2))
 
                 if point.period == "Cette semaine" {
@@ -395,7 +395,7 @@ struct TodayCommandCenterView: View {
                         }
                         .padding(.vertical, 5)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TrackerDepthButtonStyle())
                 }
             }
         }
@@ -478,7 +478,7 @@ struct TodayCommandCenterView: View {
         } label: {
             TodayCommandMetricCard(value: value, label: title.uppercased(), symbol: symbol, accent: accent)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TrackerDepthButtonStyle())
     }
 
     private func commandHealthLink(
@@ -493,7 +493,7 @@ struct TodayCommandCenterView: View {
         } label: {
             TodayCommandMetricCard(value: value, label: title.uppercased(), symbol: symbol, accent: accent)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TrackerDepthButtonStyle())
     }
 
     private func commandLegend(_ title: String, _ color: Color) -> some View {
@@ -600,7 +600,7 @@ private struct TodayCommandHealthDetail: View {
                     Chart(points) { point in
                         LineMark(x: .value("Date", point.date), y: .value(title, point.value))
                             .foregroundStyle(accent)
-                            .interpolationMethod(.catmullRom)
+
                         PointMark(x: .value("Date", point.date), y: .value(title, point.value))
                             .foregroundStyle(accent)
                     }
@@ -690,7 +690,16 @@ private extension View {
         self
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(15)
-            .background(.white.opacity(0.048), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(.white.opacity(0.048))
+            )
+            .shadow(
+                color: .black.opacity(0.30),
+                radius: 10,
+                x: 0,
+                y: 5
+            )
             .overlay {
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(.white.opacity(0.045), lineWidth: 1)

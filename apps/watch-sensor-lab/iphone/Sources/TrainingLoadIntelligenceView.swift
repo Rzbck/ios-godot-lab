@@ -204,7 +204,7 @@ struct TrainingLoadIntelligenceView: View {
                         y: .value("Effort", point.effort)
                     )
                     .foregroundStyle(.orange.opacity(0.55))
-                    .interpolationMethod(.catmullRom)
+
                 }
                 .chartYScale(domain: 1...10)
                 .frame(height: 150)

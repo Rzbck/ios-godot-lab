@@ -421,7 +421,7 @@ struct TrackerCardioFitnessLabView: View {
                         y: .value(title, point.value)
                     )
                     .foregroundStyle(accent)
-                    .interpolationMethod(.catmullRom)
+
                     AreaMark(
                         x: .value("Date", point.date),
                         y: .value(title, point.value)

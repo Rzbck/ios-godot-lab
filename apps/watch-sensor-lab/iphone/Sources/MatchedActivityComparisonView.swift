@@ -184,7 +184,7 @@ struct MatchedActivityComparisonView: View {
                     y: .value(chartTitle(anchor), chartMetric(item.summary))
                 )
                 .foregroundStyle(.cyan.opacity(0.55))
-                .interpolationMethod(.catmullRom)
+
 
                 PointMark(
                     x: .value("Date", item.summary.startedAt),

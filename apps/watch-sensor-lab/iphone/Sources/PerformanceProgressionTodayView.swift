@@ -215,7 +215,7 @@ struct PerformanceProgressionTodayView: View {
                 )
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TrackerDepthButtonStyle())
     }
 
     private var periodSelector: some View {
@@ -236,7 +236,7 @@ struct PerformanceProgressionTodayView: View {
                                 .frame(height: 36)
                                 .background(range == item ? Color.cyan : Color.white.opacity(0.08), in: Capsule())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(TrackerDepthButtonStyle())
                     }
                 }
             }
@@ -271,7 +271,7 @@ struct PerformanceProgressionTodayView: View {
                         .frame(height: 32)
                         .background(.white.opacity(0.08), in: Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TrackerDepthButtonStyle())
             }
 
             if range == .all {
@@ -437,7 +437,7 @@ struct PerformanceProgressionTodayView: View {
                         }
                         .padding(.vertical, 5)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TrackerDepthButtonStyle())
                 }
             }
         }
@@ -567,7 +567,7 @@ struct PerformanceProgressionTodayView: View {
                         points: []
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TrackerDepthButtonStyle())
             }
         }
         .performanceCardV2()

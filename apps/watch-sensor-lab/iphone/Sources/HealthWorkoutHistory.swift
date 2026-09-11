@@ -151,7 +151,7 @@ private struct HealthWorkoutHistoryView: View {
                                 } label: {
                                     HealthWorkoutRow(record: record)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(TrackerDepthButtonStyle())
                             }
                         }
                         .padding(.horizontal, 16)
@@ -269,7 +269,20 @@ private struct HealthWorkoutRow: View {
             // toutes les séances partagent le même historique.
         }
         .padding(14)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.white.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(
+            color: .black.opacity(0.28),
+            radius: 8,
+            x: 0,
+            y: 4
+        )
     }
 }
 

@@ -47,7 +47,7 @@ private struct TrackerAppContainer: View {
     }
 }
 
-private enum TrackerAppSection: Hashable {
+private enum TrackerAppSection: Int, CaseIterable, Hashable {
     case today
     case activity
     case progression
@@ -85,6 +85,10 @@ private struct TrackerRootView: View {
                 .tag(TrackerAppSection.history)
                 .tabItem { Label("Historique", systemImage: "clock.arrow.circlepath") }
         }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 70)
+                .onEnded(handleSectionSwipe)
+        )
         .task {
             WatchReliableRecovery.refreshAllAvailableSummaries()
             recentHistoryBridge.publish(summaries: store.listSummaries())
@@ -105,6 +109,39 @@ private struct TrackerRootView: View {
         }
         .sheet(item: $completedSummary) { summary in
             PostActivitySummaryView(summary: summary)
+        }
+    }
+
+    private func handleSectionSwipe(_ value: DragGesture.Value) {
+        let horizontal = value.translation.width
+        let vertical = abs(value.translation.height)
+        let predicted = value.predictedEndTranslation.width
+
+        // Geste volontairement strict pour ne pas confondre
+        // un scroll vertical avec un changement de section.
+        guard abs(horizontal) >= 120 else { return }
+        guard abs(horizontal) > vertical * 1.6 else { return }
+        guard abs(predicted) >= 180 else { return }
+
+        moveSection(by: horizontal < 0 ? 1 : -1)
+    }
+
+    private func moveSection(by offset: Int) {
+        let sections = TrackerAppSection.allCases
+
+        guard let current = sections.firstIndex(of: selection) else {
+            return
+        }
+
+        let destination = min(
+            max(current + offset, 0),
+            sections.count - 1
+        )
+
+        guard destination != current else { return }
+
+        withAnimation(.snappy) {
+            selection = sections[destination]
         }
     }
 }

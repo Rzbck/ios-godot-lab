@@ -11,6 +11,7 @@ struct TodayCommandCenterView: View {
     @State private var health = HealthProgressionData.empty
     @State private var loading = true
     @State private var showSettings = false
+    @State private var selectedWeeklyIndex: Int?
 
     private let workoutReader = HealthWorkoutHistoryReader()
     private let healthReader = HealthProgressionReader()
@@ -244,46 +245,89 @@ struct TodayCommandCenterView: View {
             Chart(weeklyComparisonPoints) { point in
                 LineMark(
                     x: .value("Jour de période", point.index),
-                    y: .value("Minutes cumulées", point.minutes)
+                    y: .value("Minutes", point.minutes)
                 )
-                .foregroundStyle(by: .value("Période", point.period))
-
-                .lineStyle(StrokeStyle(lineWidth: point.period == "Cette semaine" ? 3 : 2))
-
-                if point.period == "Cette semaine" {
-                    AreaMark(
-                        x: .value("Jour de période", point.index),
-                        y: .value("Minutes cumulées", point.minutes)
+                .foregroundStyle(
+                    by: .value("Période", point.period)
+                )
+                .lineStyle(
+                    StrokeStyle(
+                        lineWidth: point.period == "Cette semaine"
+                            ? 2.8
+                            : 2,
+                        lineCap: .round,
+                        lineJoin: .round,
+                        dash: point.period == "Cette semaine"
+                            ? []
+                            : [5, 4]
                     )
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.cyan.opacity(0.16), .cyan.opacity(0.01)],
-                            startPoint: .top,
-                            endPoint: .bottom
+                )
+
+                PointMark(
+                    x: .value("Jour de période", point.index),
+                    y: .value("Minutes", point.minutes)
+                )
+                .foregroundStyle(
+                    by: .value("Période", point.period)
+                )
+                .symbolSize(
+                    point.index == selectedWeeklyPair?.index
+                        ? 70
+                        : 18
+                )
+
+                if
+                    point.period == "Cette semaine",
+                    point.index == selectedWeeklyPair?.index,
+                    let pair = selectedWeeklyPair
+                {
+                    RuleMark(
+                        x: .value("Sélection", pair.index)
+                    )
+                    .foregroundStyle(.white.opacity(0.42))
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 1,
+                            dash: [3, 3]
                         )
                     )
+                    .annotation(
+                        position: .top,
+                        spacing: 5
+                    ) {
+                        weeklySelectionBadge(pair)
+                    }
                 }
             }
             .chartForegroundStyleScale([
                 "Cette semaine": Color.cyan,
-                "Précédente": Color.white.opacity(0.32),
+                "Précédente": Color.white.opacity(0.42),
             ])
             .chartXAxis {
                 AxisMarks(values: [1, 3, 5, 7]) { value in
-                    AxisGridLine().foregroundStyle(.white.opacity(0.04))
+                    AxisGridLine()
+                        .foregroundStyle(.white.opacity(0.05))
                     AxisValueLabel {
-                        if let index = value.as(Int.self) { Text("J\(index)") }
+                        if let index = value.as(Int.self) {
+                            Text("J\(index)")
+                        }
                     }
                 }
             }
             .chartYAxis {
                 AxisMarks(position: .leading) { _ in
-                    AxisGridLine().foregroundStyle(.white.opacity(0.05))
+                    AxisGridLine()
+                        .foregroundStyle(.white.opacity(0.06))
                     AxisValueLabel()
                 }
             }
+            .chartXSelection(
+                value: $selectedWeeklyIndex
+            )
             .frame(height: 155)
-            .accessibilityLabel("Comparaison cumulative du temps d’entraînement des sept derniers jours avec les sept jours précédents")
+            .accessibilityLabel(
+                "Comparaison jour par jour des sept derniers jours avec les sept jours précédents"
+            )
 
             HStack(spacing: 14) {
                 commandLegend("Cette semaine", .cyan)
@@ -304,34 +348,163 @@ struct TodayCommandCenterView: View {
         let calendar = Calendar.autoupdatingCurrent
         let today = calendar.startOfDay(for: Date())
         var values: [WeeklyPoint] = []
-        var currentCumulative = 0.0
-        var previousCumulative = 0.0
 
         for index in 1...7 {
             let currentOffset = -(7 - index)
             let previousOffset = -(14 - index)
-            if let currentDay = calendar.date(byAdding: .day, value: currentOffset, to: today),
-               let currentEnd = calendar.date(byAdding: .day, value: 1, to: currentDay) {
-                currentCumulative += workouts
-                    .filter { $0.startedAt >= currentDay && $0.startedAt < currentEnd }
-                    .reduce(0) { $0 + $1.duration } / 60
+
+            var currentMinutes = 0.0
+            var previousMinutes = 0.0
+
+            if
+                let currentDay = calendar.date(
+                    byAdding: .day,
+                    value: currentOffset,
+                    to: today
+                ),
+                let currentEnd = calendar.date(
+                    byAdding: .day,
+                    value: 1,
+                    to: currentDay
+                )
+            {
+                currentMinutes = workouts
+                    .filter {
+                        $0.startedAt >= currentDay
+                            && $0.startedAt < currentEnd
+                    }
+                    .reduce(0) {
+                        $0 + $1.duration
+                    } / 60
             }
-            if let previousDay = calendar.date(byAdding: .day, value: previousOffset, to: today),
-               let previousEnd = calendar.date(byAdding: .day, value: 1, to: previousDay) {
-                previousCumulative += workouts
-                    .filter { $0.startedAt >= previousDay && $0.startedAt < previousEnd }
-                    .reduce(0) { $0 + $1.duration } / 60
+
+            if
+                let previousDay = calendar.date(
+                    byAdding: .day,
+                    value: previousOffset,
+                    to: today
+                ),
+                let previousEnd = calendar.date(
+                    byAdding: .day,
+                    value: 1,
+                    to: previousDay
+                )
+            {
+                previousMinutes = workouts
+                    .filter {
+                        $0.startedAt >= previousDay
+                            && $0.startedAt < previousEnd
+                    }
+                    .reduce(0) {
+                        $0 + $1.duration
+                    } / 60
             }
-            values.append(WeeklyPoint(period: "Cette semaine", index: index, minutes: currentCumulative))
-            values.append(WeeklyPoint(period: "Précédente", index: index, minutes: previousCumulative))
+
+            values.append(
+                WeeklyPoint(
+                    period: "Cette semaine",
+                    index: index,
+                    minutes: currentMinutes
+                )
+            )
+
+            values.append(
+                WeeklyPoint(
+                    period: "Précédente",
+                    index: index,
+                    minutes: previousMinutes
+                )
+            )
         }
+
         return values
+    }
+
+    private var selectedWeeklyPair: (
+        index: Int,
+        current: Double,
+        previous: Double
+    )? {
+        guard let selectedWeeklyIndex else {
+            return nil
+        }
+
+        let index = min(
+            max(selectedWeeklyIndex, 1),
+            7
+        )
+
+        let points = weeklyComparisonPoints
+
+        return (
+            index,
+            points.first {
+                $0.period == "Cette semaine"
+                    && $0.index == index
+            }?.minutes ?? 0,
+            points.first {
+                $0.period == "Précédente"
+                    && $0.index == index
+            }?.minutes ?? 0
+        )
+    }
+
+    private func weeklySelectionBadge(
+        _ pair: (
+            index: Int,
+            current: Double,
+            previous: Double
+        )
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("J\(pair.index)")
+                .font(.caption2.weight(.black))
+
+            HStack(spacing: 8) {
+                Label {
+                    Text(
+                        "\(Int(pair.current.rounded())) min"
+                    )
+                } icon: {
+                    Circle()
+                        .fill(.cyan)
+                        .frame(width: 6, height: 6)
+                }
+
+                Label {
+                    Text(
+                        "\(Int(pair.previous.rounded())) min"
+                    )
+                } icon: {
+                    Circle()
+                        .fill(.secondary)
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .font(.caption2.weight(.semibold))
+            .monospacedDigit()
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(
+                cornerRadius: 10,
+                style: .continuous
+            )
+        )
+        .allowsHitTesting(false)
     }
 
     private var weeklyComparisonHeadline: String {
         let points = weeklyComparisonPoints
-        let current = points.last(where: { $0.period == "Cette semaine" })?.minutes ?? 0
-        let previous = points.last(where: { $0.period == "Précédente" })?.minutes ?? 0
+        let current = points
+            .filter { $0.period == "Cette semaine" }
+            .reduce(0) { $0 + $1.minutes }
+
+        let previous = points
+            .filter { $0.period == "Précédente" }
+            .reduce(0) { $0 + $1.minutes }
         guard previous > 0 else {
             return current > 0 ? "\(Int(current.rounded())) min ces 7 derniers jours" : "Construis ta première référence"
         }

@@ -57,7 +57,11 @@ struct TrackerInspectableHealthChart: View {
                 )
                 .annotation(
                     position: .top,
-                    spacing: 5
+                    spacing: 5,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
                 ) {
                     VStack(
                         alignment: .leading,

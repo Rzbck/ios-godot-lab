@@ -175,45 +175,71 @@ struct PerformanceProgressionTodayView: View {
 
     private var todayQuickGrid: some View {
         let day = bounds(for: .today)
-        let todayRecords = records(in: day.currentStart...day.currentEnd)
+        let todayRecords = records(
+            in: day.currentStart...day.currentEnd
+        )
         let today = aggregate(todayRecords)
 
-        return LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+        return HStack(spacing: 6) {
             NavigationLink {
-                PerformanceMetricDetailV2(title: "Activités aujourd’hui", symbol: "figure.run", accent: .orange, records: todayRecords, metric: .sessions)
-            } label: {
-                ProgressionDrillCardV2(value: "\(today.sessions)", label: "SÉANCES", symbol: "figure.run", accent: .orange)
-            }
-
-            NavigationLink {
-                PerformanceMetricDetailV2(title: "Temps actif aujourd’hui", symbol: "clock.fill", accent: .cyan, records: todayRecords, metric: .duration)
-            } label: {
-                ProgressionDrillCardV2(value: progressionDurationV2(today.duration), label: "TEMPS ACTIF", symbol: "clock.fill", accent: .cyan)
-            }
-
-            NavigationLink {
-                PerformanceMetricDetailV2(title: "Distance aujourd’hui", symbol: "location.fill", accent: .mint, records: todayRecords, metric: .distance)
-            } label: {
-                ProgressionDrillCardV2(value: progressionDistanceV2(today.distance), label: "DISTANCE", symbol: "location.fill", accent: .mint)
-            }
-
-            NavigationLink {
-                HealthSignalDetailV2(
-                    title: "Pas aujourd’hui",
-                    value: health.stepsToday.map { "\(Int($0.rounded()))" } ?? "—",
-                    subtitle: "Total Apple Health du jour",
-                    symbol: "shoeprints.fill",
-                    accent: .green,
-                    points: []
+                PerformanceMetricDetailV2(
+                    title: "Activités aujourd’hui",
+                    symbol: "figure.run",
+                    accent: .orange,
+                    records: todayRecords,
+                    metric: .sessions
                 )
             } label: {
                 ProgressionDrillCardV2(
-                    value: health.stepsToday.map { "\(Int($0.rounded()))" } ?? "—",
-                    label: "PAS",
-                    symbol: "shoeprints.fill",
-                    accent: .green
+                    value: "\(today.sessions)",
+                    label: "SÉANCES",
+                    symbol: "figure.run",
+                    accent: .orange
                 )
             }
+
+            NavigationLink {
+                PerformanceMetricDetailV2(
+                    title: "Temps actif aujourd’hui",
+                    symbol: "clock.fill",
+                    accent: .cyan,
+                    records: todayRecords,
+                    metric: .duration
+                )
+            } label: {
+                ProgressionDrillCardV2(
+                    value: progressionDurationV2(today.duration),
+                    label: "ACTIF",
+                    symbol: "clock.fill",
+                    accent: .cyan
+                )
+            }
+
+            NavigationLink {
+                PerformanceMetricDetailV2(
+                    title: "Distance aujourd’hui",
+                    symbol: "location.fill",
+                    accent: .mint,
+                    records: todayRecords,
+                    metric: .distance
+                )
+            } label: {
+                ProgressionDrillCardV2(
+                    value: progressionDistanceV2(today.distance),
+                    label: "DIST.",
+                    symbol: "location.fill",
+                    accent: .mint
+                )
+            }
+
+            ProgressionDrillCardV2(
+                value: health.stepsToday.map {
+                    "\(Int($0.rounded()))"
+                } ?? "—",
+                label: "PAS",
+                symbol: "shoeprints.fill",
+                accent: .green
+            )
         }
         .buttonStyle(TrackerDepthButtonStyle())
     }
@@ -404,60 +430,108 @@ struct PerformanceProgressionTodayView: View {
     @ViewBuilder
     private var sportComposition: some View {
         let slices = sportSlices
-        let totalDuration = slices.reduce(0) { $0 + $1.duration }
+        let totalDuration = slices.reduce(0) {
+            $0 + $1.duration
+        }
+        let visible = Array(slices.prefix(6))
 
         if !slices.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text("RÉPARTITION DES SPORTS")
                         .font(.caption.weight(.black))
                         .foregroundStyle(.secondary)
+
                     Spacer()
+
                     Text("\(slices.count) sport\(slices.count > 1 ? "s" : "")")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 }
 
-                ForEach(slices) { slice in
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack(spacing: 9) {
-                            Image(systemName: slice.activity.symbol)
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(sportAccentV2(slice.activity))
-                                .frame(width: 24)
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ],
+                    spacing: 7
+                ) {
+                    ForEach(visible) { slice in
+                        VStack(
+                            alignment: .leading,
+                            spacing: 4
+                        ) {
+                            HStack {
+                                Image(
+                                    systemName: slice.activity.symbol
+                                )
+                                .foregroundStyle(
+                                    sportAccentV2(
+                                        slice.activity
+                                    )
+                                )
 
-                            Text(slice.activity.label)
-                                .font(.subheadline.weight(.bold))
-
-                            Spacer()
-
-                            VStack(alignment: .trailing, spacing: 1) {
-                                Text(progressionDurationV2(slice.duration))
-                                    .font(.subheadline.weight(.bold))
-                                    .monospacedDigit()
+                                Spacer()
 
                                 if totalDuration > 0 {
-                                    Text(String(
-                                        format: "%.0f%%",
-                                        (slice.duration / totalDuration) * 100
-                                    ))
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                    Text(
+                                        String(
+                                            format: "%.0f%%",
+                                            (
+                                                slice.duration
+                                                / totalDuration
+                                            ) * 100
+                                        )
+                                    )
+                                    .font(
+                                        .caption2.weight(.black)
+                                    )
                                 }
                             }
+
+                            Text(slice.activity.label)
+                                .font(
+                                    .system(
+                                        size: 9,
+                                        weight: .bold
+                                    )
+                                )
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.65)
+
+                            Text(
+                                progressionDurationV2(
+                                    slice.duration
+                                )
+                            )
+                            .font(.caption.weight(.black))
+                            .monospacedDigit()
                         }
-
-                        ProgressView(
-                            value: max(0, slice.duration),
-                            total: max(1, totalDuration)
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: 68,
+                            alignment: .leading
                         )
-                        .tint(sportAccentV2(slice.activity))
+                        .padding(8)
+                        .background(
+                            sportAccentV2(
+                                slice.activity
+                            ).opacity(0.08),
+                            in: RoundedRectangle(
+                                cornerRadius: 14,
+                                style: .continuous
+                            )
+                        )
                     }
-                    .padding(.vertical, 4)
+                }
 
-                    if slice.id != slices.last?.id {
-                        Divider().opacity(0.18)
-                    }
+                if slices.count > visible.count {
+                    Text(
+                        "+\(slices.count - visible.count) autre\(slices.count - visible.count > 1 ? "s" : "") sport\(slices.count - visible.count > 1 ? "s" : "")"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
                 }
             }
             .performanceCardV2()
@@ -465,64 +539,112 @@ struct PerformanceProgressionTodayView: View {
     }
 
     private var healthSignals: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("FORME & RÉCUPÉRATION")
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(.secondary)
-                    Text("Appuie sur une carte pour le détail")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
+                Text("FORME & RÉCUPÉRATION")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+
                 Spacer()
-                Image(systemName: "heart.text.square.fill").foregroundStyle(.pink)
+
+                Image(
+                    systemName: "heart.text.square.fill"
+                )
+                .foregroundStyle(.pink)
             }
 
             if loading {
-                HStack(spacing: 8) { ProgressView(); Text("Lecture de Santé…").font(.caption).foregroundStyle(.secondary) }
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Lecture de Santé…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                HStack(spacing: 6) {
                     healthLink(
                         title: "Fréquence au repos",
-                        value: health.restingHeartRate.map { String(format: "%.0f bpm", $0.value) } ?? "—",
-                        shortValue: health.restingHeartRate.map { String(format: "%.0f", $0.value) } ?? "—",
+                        value: health.restingHeartRate.map {
+                            String(
+                                format: "%.0f bpm",
+                                $0.value
+                            )
+                        } ?? "—",
+                        shortValue: health.restingHeartRate.map {
+                            String(
+                                format: "%.0f",
+                                $0.value
+                            )
+                        } ?? "—",
                         unit: "bpm",
-                        subtitle: health.restingHeartRate.map { "Source : \($0.source)" } ?? "Donnée non disponible",
+                        subtitle: health.restingHeartRate.map {
+                            "Source : \($0.source)"
+                        } ?? "Donnée non disponible",
                         symbol: "heart.fill",
                         accent: .red,
-                        points: health.restingHeartRateTrend
+                        points: health.restingHeartRateTrend,
+                        compactLabel: "REPOS"
                     )
+
                     healthLink(
                         title: "Variabilité cardiaque",
-                        value: health.hrvSDNN.map { String(format: "%.0f ms", $0.value) } ?? "—",
-                        shortValue: health.hrvSDNN.map { String(format: "%.0f", $0.value) } ?? "—",
+                        value: health.hrvSDNN.map {
+                            String(
+                                format: "%.0f ms",
+                                $0.value
+                            )
+                        } ?? "—",
+                        shortValue: health.hrvSDNN.map {
+                            String(
+                                format: "%.0f",
+                                $0.value
+                            )
+                        } ?? "—",
                         unit: "ms",
-                        subtitle: health.hrvSDNN.map { "Source : \($0.source)" } ?? "Donnée non disponible",
+                        subtitle: health.hrvSDNN.map {
+                            "Source : \($0.source)"
+                        } ?? "Donnée non disponible",
                         symbol: "waveform.path.ecg",
                         accent: .purple,
-                        points: health.hrvTrend
+                        points: health.hrvTrend,
+                        compactLabel: "VFC"
                     )
-                    healthLink(
-                        title: "Sommeil récent",
-                        value: health.sleepHours.map { String(format: "%.1f h", $0) } ?? "—",
-                        shortValue: health.sleepHours.map { String(format: "%.1f", $0) } ?? "—",
-                        unit: "h",
-                        subtitle: health.sleepSource ?? "Donnée non disponible",
-                        symbol: "moon.stars.fill",
-                        accent: .indigo,
-                        points: []
-                    )
-                    healthLink(
-                        title: "VO₂ max",
-                        value: health.vo2Max.map { String(format: "%.1f", $0.value) } ?? "—",
-                        shortValue: health.vo2Max.map { String(format: "%.1f", $0.value) } ?? "—",
-                        unit: "",
-                        subtitle: health.vo2Max.map { "Source : \($0.source)" } ?? "Donnée non disponible",
-                        symbol: "lungs.fill",
-                        accent: .mint,
-                        points: []
-                    )
+
+                    NavigationLink {
+                        TrackerSleepLabView()
+                    } label: {
+                        HealthDrillTileV2(
+                            label: "SOMMEIL",
+                            value: health.sleepHours.map {
+                                String(
+                                    format: "%.1f",
+                                    $0
+                                )
+                            } ?? "—",
+                            unit: "h",
+                            symbol: "moon.stars.fill",
+                            accent: .indigo
+                        )
+                    }
+
+                    NavigationLink {
+                        TrackerCardioFitnessLabView(
+                            initialSnapshot: nil
+                        )
+                    } label: {
+                        HealthDrillTileV2(
+                            label: "VO₂",
+                            value: health.vo2Max.map {
+                                String(
+                                    format: "%.1f",
+                                    $0.value
+                                )
+                            } ?? "—",
+                            unit: "",
+                            symbol: "lungs.fill",
+                            accent: .mint
+                        )
+                    }
                 }
                 .buttonStyle(TrackerDepthButtonStyle())
             }
@@ -557,12 +679,19 @@ struct PerformanceProgressionTodayView: View {
         subtitle: String,
         symbol: String,
         accent: Color,
-        points: [HealthTrendPoint]
+        points: [HealthTrendPoint],
+        compactLabel: String? = nil
     ) -> some View {
         NavigationLink {
             HealthSignalDetailV2(title: title, value: value, subtitle: subtitle, symbol: symbol, accent: accent, points: points)
         } label: {
-            HealthDrillTileV2(label: title, value: shortValue, unit: unit, symbol: symbol, accent: accent)
+            HealthDrillTileV2(
+                label: compactLabel ?? title,
+                value: shortValue,
+                unit: unit,
+                symbol: symbol,
+                accent: accent
+            )
         }
     }
 
@@ -856,7 +985,8 @@ private struct InteractiveComparisonChartV3: View {
                 if let old = point.previous {
                     LineMark(
                         x: .value("Étape", point.index),
-                        y: .value("Avant", old)
+                        y: .value("Avant", old),
+                        series: .value("Série", "Avant")
                     )
                     .foregroundStyle(Color.secondary.opacity(0.75))
                     .lineStyle(
@@ -881,7 +1011,8 @@ private struct InteractiveComparisonChartV3: View {
                 if let now = point.current {
                     LineMark(
                         x: .value("Étape", point.index),
-                        y: .value("Actuel", now)
+                        y: .value("Actuel", now),
+                        series: .value("Série", "Actuel")
                     )
                     .foregroundStyle(.cyan)
                     .lineStyle(
@@ -917,7 +1048,11 @@ private struct InteractiveComparisonChartV3: View {
                     )
                     .annotation(
                         position: .top,
-                        spacing: 5
+                        spacing: 5,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
                     ) {
                         selectionBadge(point)
                     }
@@ -1164,7 +1299,11 @@ private struct InteractiveAllHistoryChartV3: View {
                     )
                     .annotation(
                         position: .top,
-                        spacing: 5
+                        spacing: 5,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
                     ) {
                         VStack(
                             alignment: .leading,
@@ -1259,26 +1398,57 @@ private struct ProgressionDrillCardV2: View {
     let accent: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Image(systemName: symbol).foregroundStyle(accent)
-                Spacer()
-                Image(systemName: "arrow.up.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
-            }
-            Text(value).font(.title3.weight(.black)).monospacedDigit().minimumScaleFactor(0.65).lineLimit(1)
-            Text(label).font(.caption2.weight(.black)).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(accent)
+
+            Text(value)
+                .font(
+                    .system(
+                        size: 13,
+                        weight: .black,
+                        design: .rounded
+                    )
+                )
+                .monospacedDigit()
+                .minimumScaleFactor(0.55)
+                .lineLimit(1)
+
+            Text(label)
+                .font(
+                    .system(
+                        size: 7,
+                        weight: .black
+                    )
+                )
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
         }
-        .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
-        .padding(12)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: 62,
+            alignment: .leading
+        )
+        .padding(7)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(accent.opacity(0.10))
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .fill(accent.opacity(0.09))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .stroke(
+                .white.opacity(0.07),
+                lineWidth: 1
+            )
         )
-        .shadow(color: .black.opacity(0.28), radius: 8, x: 0, y: 4)
     }
 }
 
@@ -1290,29 +1460,68 @@ private struct HealthDrillTileV2: View {
     let accent: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: symbol).foregroundStyle(accent)
-                Spacer()
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(accent)
+
+            HStack(
+                alignment: .firstTextBaseline,
+                spacing: 2
+            ) {
+                Text(value)
+                    .font(
+                        .system(
+                            size: 13,
+                            weight: .black,
+                            design: .rounded
+                        )
+                    )
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.55)
+                    .lineLimit(1)
+
+                if !unit.isEmpty {
+                    Text(unit)
+                        .font(.system(size: 7))
+                        .foregroundStyle(.secondary)
+                }
             }
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(value).font(.title3.weight(.black)).monospacedDigit()
-                if !unit.isEmpty { Text(unit).font(.caption2).foregroundStyle(.secondary) }
-            }
-            Text(label).font(.caption2.weight(.bold)).foregroundStyle(.secondary).lineLimit(1)
+
+            Text(label)
+                .font(
+                    .system(
+                        size: 7,
+                        weight: .black
+                    )
+                )
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.60)
         }
-        .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
-        .padding(12)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: 62,
+            alignment: .leading
+        )
+        .padding(7)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(accent.opacity(0.09))
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .fill(accent.opacity(0.08))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .stroke(
+                .white.opacity(0.07),
+                lineWidth: 1
+            )
         )
-        .shadow(color: .black.opacity(0.26), radius: 7, x: 0, y: 4)
     }
 }
 

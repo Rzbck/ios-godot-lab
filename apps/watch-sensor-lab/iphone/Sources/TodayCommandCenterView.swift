@@ -245,7 +245,8 @@ struct TodayCommandCenterView: View {
             Chart(weeklyComparisonPoints) { point in
                 LineMark(
                     x: .value("Jour de période", point.index),
-                    y: .value("Minutes", point.minutes)
+                    y: .value("Minutes", point.minutes),
+                    series: .value("Période", point.period)
                 )
                 .foregroundStyle(
                     by: .value("Période", point.period)
@@ -293,7 +294,11 @@ struct TodayCommandCenterView: View {
                     )
                     .annotation(
                         position: .top,
-                        spacing: 5
+                        spacing: 5,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
                     ) {
                         weeklySelectionBadge(pair)
                     }

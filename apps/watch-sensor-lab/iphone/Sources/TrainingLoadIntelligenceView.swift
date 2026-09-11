@@ -292,7 +292,11 @@ struct TrainingLoadIntelligenceView: View {
                         )
                         .annotation(
                             position: .top,
-                            spacing: 4
+                            spacing: 4,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
                         ) {
                             loadSelectionBadge(
                                 date: point.date,
@@ -382,7 +386,11 @@ struct TrainingLoadIntelligenceView: View {
                             )
                             .annotation(
                                 position: .top,
-                                spacing: 4
+                                spacing: 4,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
                             ) {
                                 loadSelectionBadge(
                                     date: point.date,
@@ -506,7 +514,11 @@ struct TrainingLoadIntelligenceView: View {
                         )
                         .annotation(
                             position: .top,
-                            spacing: 4
+                            spacing: 4,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
                         ) {
                             loadSelectionBadge(
                                 date: point.date,

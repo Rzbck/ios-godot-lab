@@ -1074,7 +1074,11 @@ struct TrackerRecoveryDetailView: View {
                             )
                             .annotation(
                                 position: .top,
-                                spacing: 4
+                                spacing: 4,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
                             ) {
                                 VStack(
                                     alignment: .leading,

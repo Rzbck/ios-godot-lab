@@ -62,7 +62,7 @@ final class TrackerCardioFitnessReader {
 
         if let type = HKQuantityType.quantityType(forIdentifier: .vo2Max) {
             group.enter()
-            loadDaily(type: type, unit: HKUnit(from: "ml/kg*min"), start: start, end: now, reduce: .latest) { values in
+            loadDaily(type: type, unit: TrackerHealthUnits.vo2Max, start: start, end: now, reduce: .latest) { values in
                 lock.lock(); vo2 = values; lock.unlock(); group.leave()
             }
         }
@@ -125,8 +125,9 @@ final class TrackerCardioFitnessReader {
         ) { [calendar] _, samples, _ in
             var buckets: [Date: [(value: Double, date: Date, source: String)]] = [:]
             for sample in samples as? [HKQuantitySample] ?? [] {
-                let value = sample.quantity.doubleValue(for: unit)
-                guard value.isFinite else { continue }
+                guard let value = sample.quantity.trackerDoubleValue(for: unit) else {
+                    continue
+                }
                 let day = calendar.startOfDay(for: sample.endDate)
                 buckets[day, default: []].append((value, sample.endDate, sample.sourceRevision.source.name))
             }

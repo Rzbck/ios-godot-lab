@@ -46,8 +46,8 @@ final class HealthWorkoutHistoryReader {
         let metadata = workout.metadata ?? [:]
         let sessionID = metadata["com.rzbck.watchsensorlab.session_id"] as? String
         let activity = ActivityKind(healthKitType: workout.workoutActivityType) ?? .other
-        let distance = workout.totalDistance?.doubleValue(for: .meter()) ?? 0
-        let energy = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie())
+        let distance = workout.totalDistance?.trackerDoubleValue(for: .meter()) ?? 0
+        let energy = workout.totalEnergyBurned?.trackerDoubleValue(for: .kilocalorie())
 
         return HealthWorkoutRecord(
             id: workout.uuid,

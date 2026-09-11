@@ -95,11 +95,7 @@ final class TrackerPhysiologyProfileReader {
 
         if let type = HKQuantityType.quantityType(forIdentifier: .vo2Max) {
             group.enter()
-            // Compose mL/kg/min with HKUnit math; parsing this complex unit from a string can raise NSException.
-            let milliliters = HKUnit.literUnit(with: .milli)
-            let kilograms = HKUnit.gramUnit(with: .kilo)
-            let vo2Unit = milliliters.unitDivided(by: kilograms).unitDivided(by: .minute())
-            loadLatest(type: type, unit: vo2Unit) { value in
+            loadLatest(type: type, unit: TrackerHealthUnits.vo2Max) { value in
                 lock.lock(); vo2 = value; lock.unlock(); group.leave()
             }
         }
@@ -163,8 +159,7 @@ final class TrackerPhysiologyProfileReader {
                 completion(nil)
                 return
             }
-            let value = sample.quantity.doubleValue(for: unit)
-            guard value.isFinite else {
+            guard let value = sample.quantity.trackerDoubleValue(for: unit) else {
                 completion(nil)
                 return
             }

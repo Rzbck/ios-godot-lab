@@ -190,8 +190,7 @@ final class TrackerNightVitalsReader {
         ) { _, samples, _ in
             let typed = samples as? [HKQuantitySample] ?? []
             let values = typed.compactMap { sample -> Double? in
-                let value = sample.quantity.doubleValue(for: unit)
-                return value.isFinite ? value : nil
+                sample.quantity.trackerDoubleValue(for: unit)
             }
             guard let median = Self.median(values) else {
                 completion(nil)

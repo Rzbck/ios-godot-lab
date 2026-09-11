@@ -194,8 +194,9 @@ final class TrackerRecoveryIntelligenceReader {
         ) { [calendar] _, samples, _ in
             var buckets: [Date: [(Double, String)]] = [:]
             for sample in samples as? [HKQuantitySample] ?? [] {
-                let value = sample.quantity.doubleValue(for: unit)
-                guard value.isFinite else { continue }
+                guard let value = sample.quantity.trackerDoubleValue(for: unit) else {
+                    continue
+                }
                 let day = calendar.startOfDay(for: sample.endDate)
                 buckets[day, default: []].append((value, sample.sourceRevision.source.name))
             }

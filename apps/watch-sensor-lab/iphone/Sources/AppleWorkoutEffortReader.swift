@@ -131,8 +131,8 @@ final class AppleWorkoutEffortReader {
                 completion(nil)
                 return
             }
-            let value = sample.quantity.doubleValue(for: .appleEffortScore())
-            guard value.isFinite, value > 0 else {
+            guard let value = sample.quantity.trackerDoubleValue(for: .appleEffortScore()),
+                  value > 0 else {
                 completion(nil)
                 return
             }

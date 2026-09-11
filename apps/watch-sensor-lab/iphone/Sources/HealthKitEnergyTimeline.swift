@@ -41,8 +41,9 @@ final class HealthEnergyTimelineLoader {
             var points: [HealthEnergyTimelinePoint] = []
             var cumulative = 0.0
             collection.enumerateStatistics(from: summary.startedAt, to: summary.endedAt) { statistics, _ in
-                if let quantity = statistics.sumQuantity() {
-                    cumulative += max(0, quantity.doubleValue(for: .kilocalorie()))
+                if let quantity = statistics.sumQuantity(),
+                   let value = quantity.trackerDoubleValue(for: .kilocalorie()) {
+                    cumulative += max(0, value)
                 }
                 points.append(
                     HealthEnergyTimelinePoint(

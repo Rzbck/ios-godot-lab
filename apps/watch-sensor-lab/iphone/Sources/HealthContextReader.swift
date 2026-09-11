@@ -81,8 +81,9 @@ final class HealthContextReader {
             ) { [weak self] _, statistics, _ in
                 defer { group.leave() }
                 guard let self, let quantity = self.quantity(from: statistics, options: definition.options) else { return }
-                let raw = quantity.doubleValue(for: definition.unit)
-                guard raw.isFinite else { return }
+                guard let raw = quantity.trackerDoubleValue(for: definition.unit) else {
+                    return
+                }
 
                 let metric = HealthContextMetric(
                     id: definition.id,
@@ -194,7 +195,7 @@ final class HealthContextReader {
         add(30, .heartRate, "heart_rate_max_health", "FC max Santé", bpm, .discreteMax, sessionStart, sessionEnd, detail: "Maximum des échantillons HealthKit pendant la fenêtre de l’activité.") {
             String(format: "%.0f bpm", $0)
         }
-        add(31, .heartRateRecoveryOneMinute, "heart_rate_recovery", "Récupération FC", bpm, .discreteAverage, recoveryStart, recoveryEnd, detail: "Valeur HealthKit de récupération cardiaque trouvée dans les 10 minutes suivant l’arrêt.") {
+        add(31, .heartRateRecoveryOneMinute, "heart_rate_recovery", "Récupération FC", .count(), .discreteAverage, recoveryStart, recoveryEnd, detail: "Valeur HealthKit de récupération cardiaque trouvée dans les 10 minutes suivant l’arrêt.") {
             String(format: "%.0f bpm", $0)
         }
         add(32, .respiratoryRate, "respiratory_context", "Respiration Santé", breathsPerMinute, .discreteAverage, respiratoryStart, respiratoryEnd, detail: "Contexte ±12 h autour de l’activité ; pas une mesure respiratoire live de l’entraînement.") {

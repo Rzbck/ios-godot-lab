@@ -63,7 +63,7 @@ $Arguments = @('-m', 'pymobiledevice3', 'syslog', 'live', '-m', 'WSL_TELEMETRY')
     }
 
     try {
-        $Record = $Json | ConvertFrom-Json -Depth 64
+        $Record = $Json | ConvertFrom-Json
     }
     catch {
         Write-Host "TELEMETRY PARSE ERROR: $Line" -ForegroundColor Red

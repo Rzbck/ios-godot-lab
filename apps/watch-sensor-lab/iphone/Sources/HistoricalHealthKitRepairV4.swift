@@ -9,6 +9,15 @@ import SwiftUI
 /// V4 refuses to create a new recovery while any older raw-restoration workout
 /// for the same Tracker session still exists. Cleanup is explicit and strictly
 /// scoped to objects tagged raw_restoration=true + the exact session ID.
+///
+/// Route policy:
+/// - Tracker summary distance is compared independently with Watch/iPhone raw counters;
+/// - one incomplete secondary counter never invalidates a matching primary counter;
+/// - the source whose counter agrees with the summary is primary;
+/// - the secondary GPS source may only fill ACTIVE gaps in the primary route;
+/// - impossible spikes and accuracy-scale zigzags are removed without inventing points;
+/// - reconstruction stays blocked if the final route is still geometrically or
+///   temporally incoherent.
 @MainActor
 final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
     static let shared = HistoricalHealthKitRepairV4Coordinator()
@@ -23,19 +32,25 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         let phoneGeometryMeters: Double
         let watchRawDistanceMeters: Double?
         let phoneRawDistanceMeters: Double?
+        let distanceReferenceSource: String?
         let chosenSource: String?
         let chosenPoints: Int
+        let selectedGeometryMeters: Double
         let activeGapsOver3Seconds: Int
         let maxActiveGapSeconds: Double
         let generatedWorkoutCount: Int
         let normalWorkoutCount: Int
         let distanceConflict: Bool
+        let routeGeometryConflict: Bool
+        let routeContinuityConflict: Bool
 
         var canReconstruct: Bool {
             generatedWorkoutCount == 0
                 && normalWorkoutCount == 0
                 && chosenPoints >= 2
                 && !distanceConflict
+                && !routeGeometryConflict
+                && !routeContinuityConflict
         }
     }
 
@@ -59,8 +74,8 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
     private let generationKey = "com.rzbck.watchsensorlab.historical_generation"
     private let attemptKey = "com.rzbck.watchsensorlab.historical_attempt_id"
 
-    private let generation = "ios_historical_v4_clean_route"
-    private let source = "tracker_raw_ios_v4_clean_route"
+    private let generation = "ios_historical_v4_fused_route"
+    private let source = "tracker_raw_ios_v4_fused_route"
 
     private init() {}
 
@@ -76,13 +91,27 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             do {
                 let summary = try loadSummary(sessionID: sessionID)
                 let raw = try loadRawRoutes(summary: summary)
-                // Inspection must stay permissive because the stored legacy
-                // activity can itself be wrong (the incident says Marche, real = Vélo).
-                let choice = chooseRoute(raw: raw, activity: .other)
+                // Inspection stays permissive: the legacy stored activity may itself
+                // be wrong, so use generic cycling-scale plausibility here.
+                let choice = chooseRoute(
+                    raw: raw,
+                    summaryDistanceMeters: summary.distanceMeters,
+                    activity: .other
+                )
                 let workouts = try await managedWorkouts(sessionID: sessionID, summary: summary)
                 let generated = workouts.filter { isGenerated($0, sessionID: sessionID) }
                 let normal = workouts.filter { !isGenerated($0, sessionID: sessionID) }
                 let conflict = hasDistanceConflict(
+                    summaryMeters: summary.distanceMeters,
+                    watchRawMeters: raw.watchRawDistanceMeters,
+                    phoneRawMeters: raw.phoneRawDistanceMeters
+                )
+                let geometryConflict = hasRouteGeometryConflict(
+                    summaryMeters: summary.distanceMeters,
+                    route: choice.selected
+                )
+                let continuityConflict = hasRouteContinuityConflict(choice.selected)
+                let distanceReference = distanceReferenceSource(
                     summaryMeters: summary.distanceMeters,
                     watchRawMeters: raw.watchRawDistanceMeters,
                     phoneRawMeters: raw.phoneRawDistanceMeters
@@ -98,13 +127,17 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                     phoneGeometryMeters: choice.phone.geometryMeters,
                     watchRawDistanceMeters: raw.watchRawDistanceMeters,
                     phoneRawDistanceMeters: raw.phoneRawDistanceMeters,
+                    distanceReferenceSource: distanceReference,
                     chosenSource: choice.selected?.source,
                     chosenPoints: choice.selected?.points.count ?? 0,
+                    selectedGeometryMeters: choice.selected?.geometryMeters ?? 0,
                     activeGapsOver3Seconds: choice.selected?.activeGapsOver3Seconds ?? 0,
                     maxActiveGapSeconds: choice.selected?.maxActiveGapSeconds ?? 0,
                     generatedWorkoutCount: generated.count,
                     normalWorkoutCount: normal.count,
-                    distanceConflict: conflict
+                    distanceConflict: conflict,
+                    routeGeometryConflict: geometryConflict,
+                    routeContinuityConflict: continuityConflict
                 )
 
                 if !normal.isEmpty {
@@ -115,12 +148,18 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                         "\(generated.count) restauration(s) de test détectée(s) · nettoyage requis avant tout nouvel essai."
                 } else if conflict {
                     statusBySession[sessionID] =
-                        "Distance locale incohérente avec les compteurs raw · aucune écriture Santé autorisée."
+                        "Aucun compteur raw fiable ne confirme la distance du résumé · aucune écriture Santé."
+                } else if choice.selected == nil {
+                    statusBySession[sessionID] = "Aucune route GPS sûre après analyse Watch + iPhone."
+                } else if geometryConflict {
+                    statusBySession[sessionID] =
+                        "Route GPS encore incohérente avec la distance Tracker · aucune écriture Santé."
+                } else if continuityConflict {
+                    statusBySession[sessionID] =
+                        "Route GPS encore trop trouée pendant une phase active · aucune écriture Santé."
                 } else if let selected = choice.selected {
                     statusBySession[sessionID] =
-                        "Diagnostic prêt · route \(selected.source), \(selected.points.count) points filtrés · aucune écriture Santé."
-                } else {
-                    statusBySession[sessionID] = "Aucune route GPS sûre après analyse Watch + iPhone."
+                        "Diagnostic prêt · route \(selected.source), \(selected.points.count) points · aucune écriture Santé."
                 }
             } catch {
                 statusBySession[sessionID] = "Diagnostic échoué · \(error.localizedDescription)"
@@ -212,18 +251,37 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 let summary = try loadSummary(sessionID: sessionID)
                 let payload = try makePayload(sessionID: sessionID, targetActivity: targetActivity)
                 let raw = try loadRawRoutes(summary: summary)
+
                 guard !hasDistanceConflict(
                     summaryMeters: summary.distanceMeters,
                     watchRawMeters: raw.watchRawDistanceMeters,
                     phoneRawMeters: raw.phoneRawDistanceMeters
                 ) else {
                     throw V4Error.operation(
-                        "distance summary/raw incohérente ; reconstruction bloquée avant toute écriture"
+                        "aucun compteur raw fiable ne confirme la distance du résumé"
                     )
                 }
-                let choice = chooseRoute(raw: raw, activity: targetActivity)
+
+                let choice = chooseRoute(
+                    raw: raw,
+                    summaryDistanceMeters: summary.distanceMeters,
+                    activity: targetActivity
+                )
                 guard let selectedRoute = choice.selected, selectedRoute.points.count >= 2 else {
                     throw V4Error.operation("aucune route GPS sûre après filtrage")
+                }
+                guard !hasRouteGeometryConflict(
+                    summaryMeters: summary.distanceMeters,
+                    route: selectedRoute
+                ) else {
+                    throw V4Error.operation(
+                        "géométrie route/distance Tracker incohérente ; reconstruction bloquée"
+                    )
+                }
+                guard !hasRouteContinuityConflict(selectedRoute) else {
+                    throw V4Error.operation(
+                        "route GPS trop trouée pendant une phase active ; reconstruction bloquée"
+                    )
                 }
 
                 try await requestRepairAuthorization(
@@ -287,6 +345,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         let horizontalAccuracy: Double
         let verticalAccuracy: Double
         let nativeSpeed: Double?
+        let cumulativeDistanceMeters: Double?
         let source: String
     }
 
@@ -418,30 +477,94 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             horizontalAccuracy: horizontal,
             verticalAccuracy: number(quality["vertical_accuracy_m"]) ?? -1,
             nativeSpeed: number(quality["native_speed_mps"]) ?? number(payload["speed_mps"]),
+            cumulativeDistanceMeters: number(payload["distance_m"]),
             source: source
         )
     }
 
-    private func chooseRoute(raw: RawRoutes, activity: ActivityKind) -> RouteChoice {
-        let watch = sanitize(source: "WATCH", points: raw.watch, pauses: raw.pauses, activity: activity)
-        let phone = sanitize(source: "IPHONE", points: raw.phone, pauses: raw.pauses, activity: activity)
-        let selected = [watch, phone]
-            .filter { $0.points.count >= 2 }
-            .min { routeScore($0) < routeScore($1) }
-        return RouteChoice(watch: watch, phone: phone, selected: selected)
+    private func chooseRoute(
+        raw: RawRoutes,
+        summaryDistanceMeters: Double,
+        activity: ActivityKind
+    ) -> RouteChoice {
+        let watchTrusted = counterAgrees(
+            summaryMeters: summaryDistanceMeters,
+            rawMeters: raw.watchRawDistanceMeters
+        )
+        let phoneTrusted = counterAgrees(
+            summaryMeters: summaryDistanceMeters,
+            rawMeters: raw.phoneRawDistanceMeters
+        )
+
+        let watch = sanitize(
+            source: "WATCH",
+            points: raw.watch,
+            pauses: raw.pauses,
+            activity: activity,
+            targetDistanceMeters: watchTrusted ? summaryDistanceMeters : nil
+        )
+        let phone = sanitize(
+            source: "IPHONE",
+            points: raw.phone,
+            pauses: raw.pauses,
+            activity: activity,
+            targetDistanceMeters: phoneTrusted ? summaryDistanceMeters : nil
+        )
+
+        let primary: CleanRoute
+        let secondary: CleanRoute
+        if watchTrusted && !phoneTrusted {
+            primary = watch
+            secondary = phone
+        } else if phoneTrusted && !watchTrusted {
+            primary = phone
+            secondary = watch
+        } else if routeScore(watch, summaryMeters: summaryDistanceMeters)
+                    <= routeScore(phone, summaryMeters: summaryDistanceMeters) {
+            primary = watch
+            secondary = phone
+        } else {
+            primary = phone
+            secondary = watch
+        }
+
+        guard primary.points.count >= 2 else {
+            let fallback = secondary.points.count >= 2 ? secondary : nil
+            return RouteChoice(watch: watch, phone: phone, selected: fallback)
+        }
+
+        let merged = mergeActiveGaps(
+            primary: primary,
+            secondary: secondary,
+            pauses: raw.pauses,
+            activity: activity
+        )
+        let finalRoute = denoiseForDistance(
+            route: merged,
+            targetDistanceMeters: summaryDistanceMeters,
+            pauses: raw.pauses,
+            activity: activity
+        )
+
+        return RouteChoice(
+            watch: watch,
+            phone: phone,
+            selected: finalRoute.points.count >= 2 ? finalRoute : nil
+        )
     }
 
     private func sanitize(
         source: String,
         points: [RawPoint],
         pauses: [TrackerHealthRestorePause],
-        activity: ActivityKind
+        activity: ActivityKind,
+        targetDistanceMeters: Double?
     ) -> CleanRoute {
         let speedLimit = maximumPlausibleSpeed(activity)
         var values = deduplicate(points).filter { !isPaused($0.timestamp, pauses: pauses) }
 
-        // Remove isolated GPS spikes: both adjacent legs impossible while the
-        // direct bridge is plausible. This never invents a coordinate.
+        // Remove isolated impossible spikes. Only raw points are discarded; no
+        // interpolated coordinate is ever fabricated.
         var didChange = true
         while didChange, values.count >= 3 {
             didChange = false
@@ -462,6 +585,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             values = nextValues
         }
 
+        // Reject remaining impossible jumps sequentially.
         var accepted: [RawPoint] = []
         for point in values {
             guard let last = accepted.last else {
@@ -474,23 +598,225 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             }
         }
 
-        let pairs = Array(zip(accepted, accepted.dropFirst()))
-        let geometry = pairs.reduce(0.0) { $0 + distance($1.0, $1.1) }
-        let activeGaps = pairs.compactMap { pair -> Double? in
-            guard !intervalOverlapsPause(pair.0.timestamp, pair.1.timestamp, pauses: pauses) else {
-                return nil
+        if targetDistanceMeters != nil {
+            accepted = counterAwareFilter(accepted)
+        }
+
+        var route = makeCleanRoute(source: source, points: accepted, pauses: pauses)
+        if let targetDistanceMeters {
+            route = denoiseForDistance(
+                route: route,
+                targetDistanceMeters: targetDistanceMeters,
+                pauses: pauses,
+                activity: activity
+            )
+        }
+        return route
+    }
+
+    /// Uses the cumulative raw distance only as a noise discriminator. It never
+    /// rewrites the distance or coordinates. This is useful for the trusted Watch
+    /// stream where a stationary GPS wobble can otherwise add hundreds of metres.
+    private func counterAwareFilter(_ points: [RawPoint]) -> [RawPoint] {
+        guard points.count >= 3 else { return points }
+        var accepted: [RawPoint] = [points[0]]
+
+        for point in points.dropFirst() {
+            guard let last = accepted.last else {
+                accepted.append(point)
+                continue
             }
+            let deltaTime = point.timestamp - last.timestamp
+            guard deltaTime > 0 else { continue }
+
+            guard let previousDistance = last.cumulativeDistanceMeters,
+                  let currentDistance = point.cumulativeDistanceMeters,
+                  currentDistance >= previousDistance else {
+                accepted.append(point)
+                continue
+            }
+
+            let rawDelta = currentDistance - previousDistance
+            let geometryDelta = distance(last, point)
+            let accuracyBudget = min(
+                40,
+                max(8, last.horizontalAccuracy + point.horizontalAccuracy)
+            )
+
+            if deltaTime <= 10,
+               geometryDelta > rawDelta * 2.5 + accuracyBudget {
+                continue
+            }
+
+            // If the authoritative distance did not meaningfully advance, do not
+            // keep a sub-3.5-second location whose movement is inside GPS accuracy.
+            if deltaTime <= 3.5,
+               rawDelta < 0.75,
+               geometryDelta <= accuracyBudget {
+                continue
+            }
+
+            accepted.append(point)
+        }
+
+        if let last = points.last,
+           accepted.last?.timestamp != last.timestamp {
+            accepted.append(last)
+        }
+        return deduplicate(accepted)
+    }
+
+    /// Fill only ACTIVE holes in the primary route with already-sanitized points
+    /// from the secondary device. A secondary point is accepted only when the
+    /// chain remains kinematically plausible at both ends.
+    private func mergeActiveGaps(
+        primary: CleanRoute,
+        secondary: CleanRoute,
+        pauses: [TrackerHealthRestorePause],
+        activity: ActivityKind
+    ) -> CleanRoute {
+        guard primary.points.count >= 2, secondary.points.count >= 2 else { return primary }
+        let speedLimit = maximumPlausibleSpeed(activity) * 1.15
+        let primaryPoints = primary.points.sorted { $0.timestamp < $1.timestamp }
+        let secondaryPoints = secondary.points.sorted { $0.timestamp < $1.timestamp }
+        var merged: [RawPoint] = []
+        var inserted = 0
+
+        for index in 0..<(primaryPoints.count - 1) {
+            let start = primaryPoints[index]
+            let end = primaryPoints[index + 1]
+            if merged.last?.timestamp != start.timestamp {
+                merged.append(start)
+            }
+
+            let gap = end.timestamp - start.timestamp
+            guard gap > 3,
+                  !intervalOverlapsPause(start.timestamp, end.timestamp, pauses: pauses) else {
+                continue
+            }
+
+            let candidates = secondaryPoints.filter {
+                $0.timestamp > start.timestamp
+                    && $0.timestamp < end.timestamp
+                    && $0.horizontalAccuracy <= 35
+                    && !isPaused($0.timestamp, pauses: pauses)
+            }
+            guard !candidates.isEmpty else { continue }
+
+            var bridge: [RawPoint] = []
+            var previous = start
+            for candidate in candidates {
+                if impliedSpeed(previous, candidate) <= speedLimit {
+                    bridge.append(candidate)
+                    previous = candidate
+                }
+            }
+            while let last = bridge.last,
+                  impliedSpeed(last, end) > speedLimit {
+                bridge.removeLast()
+            }
+            guard let last = bridge.last,
+                  impliedSpeed(last, end) <= speedLimit else {
+                continue
+            }
+            merged.append(contentsOf: bridge)
+            inserted += bridge.count
+        }
+        if let last = primaryPoints.last { merged.append(last) }
+
+        let sourceName = inserted > 0
+            ? "\(primary.source)+\(secondary.source)"
+            : primary.source
+        return makeCleanRoute(
+            source: sourceName,
+            points: deduplicate(merged),
+            pauses: pauses
+        )
+    }
+
+    /// Reduce only accuracy-scale zigzags until active route geometry is close to
+    /// the authoritative Tracker distance. A point is removable only if bridging
+    /// its neighbours stays within a short time gap and plausible sport speed.
+    private func denoiseForDistance(
+        route: CleanRoute,
+        targetDistanceMeters: Double,
+        pauses: [TrackerHealthRestorePause],
+        activity: ActivityKind
+    ) -> CleanRoute {
+        guard targetDistanceMeters > 100, route.points.count >= 3 else { return route }
+        let upperTarget = targetDistanceMeters + max(120, targetDistanceMeters * 0.10)
+        guard route.geometryMeters > upperTarget else { return route }
+
+        let speedLimit = maximumPlausibleSpeed(activity) * 1.15
+        var points = route.points
+        var current = route
+
+        while current.geometryMeters > upperTarget, points.count >= 3 {
+            var bestIndex: Int?
+            var bestReduction = 0.0
+
+            for index in 1..<(points.count - 1) {
+                let previous = points[index - 1]
+                let point = points[index]
+                let next = points[index + 1]
+
+                guard next.timestamp - previous.timestamp <= 4.25,
+                      !intervalOverlapsPause(previous.timestamp, next.timestamp, pauses: pauses),
+                      impliedSpeed(previous, next) <= speedLimit else {
+                    continue
+                }
+
+                let before = distance(previous, point) + distance(point, next)
+                let after = distance(previous, next)
+                let reduction = before - after
+                guard reduction > 0.25 else { continue }
+
+                let deviation = perpendicularDeviation(point, from: previous, to: next)
+                let noiseEnvelope = min(
+                    30,
+                    max(6, point.horizontalAccuracy * 1.5)
+                )
+                guard deviation <= noiseEnvelope else { continue }
+
+                if reduction > bestReduction {
+                    bestReduction = reduction
+                    bestIndex = index
+                }
+            }
+
+            guard let bestIndex else { break }
+            points.remove(at: bestIndex)
+            current = makeCleanRoute(source: route.source, points: points, pauses: pauses)
+        }
+
+        return current
+    }
+
+    private func makeCleanRoute(
+        source: String,
+        points: [RawPoint],
+        pauses: [TrackerHealthRestorePause]
+    ) -> CleanRoute {
+        let ordered = deduplicate(points)
+        let pairs = Array(zip(ordered, ordered.dropFirst()))
+        let activePairs = pairs.filter {
+            !intervalOverlapsPause($0.0.timestamp, $0.1.timestamp, pauses: pauses)
+        }
+        let geometry = activePairs.reduce(0.0) {
+            $0 + distance($1.0, $1.1)
+        }
+        let activeGaps = activePairs.compactMap { pair -> Double? in
             let gap = pair.1.timestamp - pair.0.timestamp
             return gap > 0 ? gap : nil
         }
-        let accuracies = accepted.map(\.horizontalAccuracy).sorted()
+        let accuracies = ordered.map(\.horizontalAccuracy).sorted()
         let p90 = accuracies.isEmpty
             ? 999
             : accuracies[Int(Double(accuracies.count - 1) * 0.90)]
 
         return CleanRoute(
             source: source,
-            points: accepted,
+            points: ordered,
             geometryMeters: geometry,
             activeGapsOver3Seconds: activeGaps.filter { $0 > 3 }.count,
             maxActiveGapSeconds: activeGaps.max() ?? 0,
@@ -498,10 +824,14 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         )
     }
 
-    private func routeScore(_ route: CleanRoute) -> Double {
-        Double(route.activeGapsOver3Seconds) * 30
+    private func routeScore(_ route: CleanRoute, summaryMeters: Double) -> Double {
+        let geometryPenalty = summaryMeters > 100
+            ? min(400, abs(route.geometryMeters - summaryMeters) / 10)
+            : 0
+        return Double(route.activeGapsOver3Seconds) * 30
             + min(route.maxActiveGapSeconds, 60) * 3
             + route.p90AccuracyMeters
+            + geometryPenalty
             + (route.points.count < 100 ? 500 : 0)
     }
 
@@ -514,28 +844,69 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         }
     }
 
+    private func counterAgrees(summaryMeters: Double, rawMeters: Double?) -> Bool {
+        guard summaryMeters > 100, let rawMeters, rawMeters > 100 else { return false }
+        let tolerance = max(150, summaryMeters * 0.12)
+        return abs(rawMeters - summaryMeters) <= tolerance
+    }
+
+    private func distanceReferenceSource(
+        summaryMeters: Double,
+        watchRawMeters: Double?,
+        phoneRawMeters: Double?
+    ) -> String? {
+        let watch = counterAgrees(summaryMeters: summaryMeters, rawMeters: watchRawMeters)
+        let phone = counterAgrees(summaryMeters: summaryMeters, rawMeters: phoneRawMeters)
+        if watch && phone { return "WATCH+IPHONE" }
+        if watch { return "WATCH" }
+        if phone { return "IPHONE" }
+        return nil
+    }
+
     private func hasDistanceConflict(
         summaryMeters: Double,
         watchRawMeters: Double?,
         phoneRawMeters: Double?
     ) -> Bool {
-        let raw = [watchRawMeters, phoneRawMeters].compactMap { $0 }.filter { $0 > 100 }
-        guard !raw.isEmpty, summaryMeters > 100 else { return false }
-        if raw.count >= 2 {
-            let low = raw.min() ?? 0
-            let high = raw.max() ?? 0
-            if high - low > max(150, high * 0.20) {
-                return true
-            }
+        guard summaryMeters > 100 else { return false }
+
+        // One authoritative match is enough. A secondary counter can be partial
+        // (as observed on the incident: Watch 2.80 km, iPhone 0.11 km) and must
+        // not veto the matching source.
+        if counterAgrees(summaryMeters: summaryMeters, rawMeters: watchRawMeters)
+            || counterAgrees(summaryMeters: summaryMeters, rawMeters: phoneRawMeters) {
+            return false
         }
-        let reference = raw.reduce(0, +) / Double(raw.count)
-        return abs(reference - summaryMeters) > max(150, reference * 0.20)
+
+        let usable = [watchRawMeters, phoneRawMeters]
+            .compactMap { $0 }
+            .filter { $0 > 100 }
+        return !usable.isEmpty
+    }
+
+    private func hasRouteGeometryConflict(
+        summaryMeters: Double,
+        route: CleanRoute?
+    ) -> Bool {
+        guard summaryMeters > 100, let route, route.geometryMeters > 0 else { return false }
+        let tolerance = max(220, summaryMeters * 0.15)
+        return abs(route.geometryMeters - summaryMeters) > tolerance
+    }
+
+    private func hasRouteContinuityConflict(_ route: CleanRoute?) -> Bool {
+        guard let route else { return false }
+        return route.maxActiveGapSeconds > 20
     }
 
     private func deduplicate(_ points: [RawPoint]) -> [RawPoint] {
         var seen = Set<String>()
         return points.sorted { $0.timestamp < $1.timestamp }.filter { point in
-            let key = String(format: "%.3f|%.6f|%.6f", point.timestamp, point.latitude, point.longitude)
+            let key = String(
+                format: "%.3f|%.6f|%.6f",
+                point.timestamp,
+                point.latitude,
+                point.longitude
+            )
             return seen.insert(key).inserted
         }
     }
@@ -569,6 +940,26 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         return 2 * radius * asin(min(1, sqrt(h)))
     }
 
+    private func perpendicularDeviation(
+        _ point: RawPoint,
+        from start: RawPoint,
+        to end: RawPoint
+    ) -> Double {
+        let a = distance(start, point)
+        let b = distance(point, end)
+        let c = distance(start, end)
+        guard c > 0.5 else { return min(a, b) }
+        let semiperimeter = (a + b + c) / 2
+        let squaredArea = max(
+            0,
+            semiperimeter
+                * (semiperimeter - a)
+                * (semiperimeter - b)
+                * (semiperimeter - c)
+        )
+        return 2 * sqrt(squaredArea) / c
+    }
+
     private func makePauses(
         explicit: [(TimeInterval, Bool)],
         fallback: [(TimeInterval, String, String)],
@@ -592,7 +983,9 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             if pause {
                 if openPause == nil { openPause = timestamp }
             } else if let pauseStart = openPause, timestamp > pauseStart {
-                result.append(TrackerHealthRestorePause(startedAt: pauseStart, endedAt: timestamp))
+                result.append(
+                    TrackerHealthRestorePause(startedAt: pauseStart, endedAt: timestamp)
+                )
                 openPause = nil
             }
         }
@@ -622,8 +1015,15 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         let configuration = HKWorkoutConfiguration()
         configuration.activityType = activity.healthKitType
         configuration.locationType = .outdoor
-        let builder = HKWorkoutBuilder(healthStore: healthStore, configuration: configuration, device: nil)
-        let sampleMetadata = generatedMetadata(sessionID: payload.sessionID, attemptID: attemptID)
+        let builder = HKWorkoutBuilder(
+            healthStore: healthStore,
+            configuration: configuration,
+            device: nil
+        )
+        let sampleMetadata = generatedMetadata(
+            sessionID: payload.sessionID,
+            attemptID: attemptID
+        )
 
         var createdWorkout: HKWorkout?
         var createdRoute: HKWorkoutRoute?
@@ -646,6 +1046,8 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 "com.rzbck.watchsensorlab.route_source": route.source,
                 "com.rzbck.watchsensorlab.route_filtered_point_count": route.points.count,
                 "com.rzbck.watchsensorlab.route_geometry_m": route.geometryMeters,
+                "com.rzbck.watchsensorlab.route_filter_strategy":
+                    "primary_counter_secondary_gap_fill_accuracy_denoise",
             ]
             for (key, value) in HistoricalHealthKitFullFidelity.workoutMetadata(
                 summary: summary,
@@ -658,7 +1060,12 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             metadata[HKMetadataKeyIndoorWorkout] = false
             try await addMetadata(metadata, to: builder)
             try await add(
-                makeSamples(payload: payload, activity: activity, route: route, metadata: sampleMetadata),
+                makeSamples(
+                    payload: payload,
+                    activity: activity,
+                    route: route,
+                    metadata: sampleMetadata
+                ),
                 to: builder
             )
             let events = makeEvents(payload: payload, attemptID: attemptID)
@@ -671,7 +1078,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
 
             let locations = route.points.map { point in
                 CLLocation(
-                    coordinate: CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude),
+                    coordinate: CLLocationCoordinate2D(
+                        latitude: point.latitude,
+                        longitude: point.longitude
+                    ),
                     altitude: point.altitude,
                     horizontalAccuracy: point.horizontalAccuracy,
                     verticalAccuracy: point.verticalAccuracy,
@@ -714,7 +1124,9 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 attemptID: attemptID
             )) ?? [])
             if !rollback.isEmpty {
-                try? await delete(Array(Dictionary(grouping: rollback, by: \.uuid).values.compactMap(\.first)))
+                try? await delete(
+                    Array(Dictionary(grouping: rollback, by: \.uuid).values.compactMap(\.first))
+                )
             }
             throw error
         }
@@ -730,8 +1142,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             throw V4Error.operation("type fréquence cardiaque indisponible")
         }
         var samples: [HKSample] = payload.heartRates.compactMap { point in
-            guard point.bpm > 0, point.bpm < 260,
-                  point.timestamp >= payload.startedAt, point.timestamp <= payload.endedAt else {
+            guard point.bpm > 0,
+                  point.bpm < 260,
+                  point.timestamp >= payload.startedAt,
+                  point.timestamp <= payload.endedAt else {
                 return nil
             }
             let date = Date(timeIntervalSince1970: point.timestamp)
@@ -746,25 +1160,31 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
 
         let start = Date(timeIntervalSince1970: payload.startedAt)
         let end = Date(timeIntervalSince1970: payload.endedAt)
-        if let energy = payload.activeEnergyKcal, energy > 0,
+        if let energy = payload.activeEnergyKcal,
+           energy > 0,
            let type = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) {
-            samples.append(HKQuantitySample(
-                type: type,
-                quantity: HKQuantity(unit: .kilocalorie(), doubleValue: energy),
-                start: start,
-                end: end,
-                metadata: metadata
-            ))
+            samples.append(
+                HKQuantitySample(
+                    type: type,
+                    quantity: HKQuantity(unit: .kilocalorie(), doubleValue: energy),
+                    start: start,
+                    end: end,
+                    metadata: metadata
+                )
+            )
         }
-        if let identifier = distanceIdentifier(for: activity), payload.distanceMeters > 0,
+        if let identifier = distanceIdentifier(for: activity),
+           payload.distanceMeters > 0,
            let type = HKQuantityType.quantityType(forIdentifier: identifier) {
-            samples.append(HKQuantitySample(
-                type: type,
-                quantity: HKQuantity(unit: .meter(), doubleValue: payload.distanceMeters),
-                start: start,
-                end: end,
-                metadata: metadata
-            ))
+            samples.append(
+                HKQuantitySample(
+                    type: type,
+                    quantity: HKQuantity(unit: .meter(), doubleValue: payload.distanceMeters),
+                    start: start,
+                    end: end,
+                    metadata: metadata
+                )
+            )
         }
         if let identifier = speedIdentifier(for: activity),
            let type = HKQuantityType.quantityType(forIdentifier: identifier) {
@@ -772,13 +1192,15 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             for point in route.points {
                 guard let speed = point.nativeSpeed, speed >= 0, speed < 100 else { continue }
                 let date = Date(timeIntervalSince1970: point.timestamp)
-                samples.append(HKQuantitySample(
-                    type: type,
-                    quantity: HKQuantity(unit: unit, doubleValue: speed),
-                    start: date,
-                    end: date,
-                    metadata: metadata
-                ))
+                samples.append(
+                    HKQuantitySample(
+                        type: type,
+                        quantity: HKQuantity(unit: unit, doubleValue: speed),
+                        start: date,
+                        end: date,
+                        metadata: metadata
+                    )
+                )
             }
         }
         return samples
@@ -798,17 +1220,27 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             guard pause.startedAt >= payload.startedAt,
                   pause.endedAt > pause.startedAt,
                   pause.endedAt <= payload.endedAt else { continue }
-            result.append(HKWorkoutEvent(
-                type: .pause,
-                dateInterval: DateInterval(start: Date(timeIntervalSince1970: pause.startedAt), duration: 0),
-                metadata: metadata
-            ))
-            if pause.endedAt < payload.endedAt - 0.05 {
-                result.append(HKWorkoutEvent(
-                    type: .resume,
-                    dateInterval: DateInterval(start: Date(timeIntervalSince1970: pause.endedAt), duration: 0),
+            result.append(
+                HKWorkoutEvent(
+                    type: .pause,
+                    dateInterval: DateInterval(
+                        start: Date(timeIntervalSince1970: pause.startedAt),
+                        duration: 0
+                    ),
                     metadata: metadata
-                ))
+                )
+            )
+            if pause.endedAt < payload.endedAt - 0.05 {
+                result.append(
+                    HKWorkoutEvent(
+                        type: .resume,
+                        dateInterval: DateInterval(
+                            start: Date(timeIntervalSince1970: pause.endedAt),
+                            duration: 0
+                        ),
+                        metadata: metadata
+                    )
+                )
             }
         }
         return result
@@ -850,7 +1282,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         }
         let sample = HKQuantitySample(
             type: type,
-            quantity: HKQuantity(unit: .appleEffortScore(), doubleValue: Double(perceivedEffort)),
+            quantity: HKQuantity(
+                unit: .appleEffortScore(),
+                doubleValue: Double(perceivedEffort)
+            ),
             start: workout.startDate,
             end: workout.endDate,
             metadata: metadata
@@ -886,44 +1321,140 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         let delays: [UInt64] = [0, 1_200_000_000, 3_000_000_000]
         for delay in delays {
             if delay > 0 { try await Task.sleep(nanoseconds: delay) }
-            let workouts = try await managedWorkouts(sessionID: payload.sessionID, summary: summary)
-            let generated = workouts.filter { isGenerated($0, sessionID: payload.sessionID) }
-            guard generated.count == 1,
-                  let workout = generated.first,
-                  workout.uuid == workoutUUID,
-                  workout.workoutActivityType == activity.healthKitType,
-                  (workout.metadata?[generationKey] as? String) == generation,
-                  (workout.metadata?[attemptKey] as? String) == attemptID else {
-                throw V4Error.operation("unicité/identité du workout v4 non vérifiée")
-            }
+            try await verifyOnce(
+                payload: payload,
+                summary: summary,
+                activity: activity,
+                route: route,
+                workoutUUID: workoutUUID,
+                routeUUID: routeUUID,
+                attemptID: attemptID,
+                perceivedEffort: perceivedEffort
+            )
+        }
+    }
 
-            let durationTolerance = max(20, payload.activeDuration * 0.04)
-            guard abs(workout.duration - payload.activeDuration) <= durationTolerance else {
-                throw V4Error.operation("durée active v4 incohérente")
-            }
-            try HistoricalHealthKitFullFidelity.verifyWorkoutMetadata(workout: workout, summary: summary)
+    private func verifyOnce(
+        payload: TrackerHealthRestorePayload,
+        summary: TrackerSummary,
+        activity: ActivityKind,
+        route: CleanRoute,
+        workoutUUID: UUID,
+        routeUUID: UUID,
+        attemptID: String,
+        perceivedEffort: Int?
+    ) async throws {
+        let workouts = try await managedWorkouts(sessionID: payload.sessionID, summary: summary)
+        let generated = workouts.filter { isGenerated($0, sessionID: payload.sessionID) }
+        guard generated.count == 1,
+              let workout = generated.first,
+              workout.uuid == workoutUUID,
+              workout.workoutActivityType == activity.healthKitType,
+              (workout.metadata?[generationKey] as? String) == generation,
+              (workout.metadata?[attemptKey] as? String) == attemptID else {
+            throw V4Error.operation("unicité/identité du workout v4 non vérifiée")
+        }
 
-            let savedRoutes = try await routes(for: workout)
-            guard savedRoutes.count == 1,
-                  let savedRoute = savedRoutes.first,
-                  savedRoute.uuid == routeUUID,
-                  (savedRoute.metadata?[generationKey] as? String) == generation,
-                  (savedRoute.metadata?[attemptKey] as? String) == attemptID else {
-                throw V4Error.operation("route v4 non associée de façon unique")
-            }
-            let locations = try await loadLocations(for: savedRoute)
-            guard locations.count >= max(2, Int(Double(route.points.count) * 0.95)) else {
-                throw V4Error.operation("points GPS v4 manquants après relecture")
-            }
+        let durationTolerance = max(20, payload.activeDuration * 0.04)
+        guard abs(workout.duration - payload.activeDuration) <= durationTolerance else {
+            throw V4Error.operation("durée active v4 incohérente")
+        }
+        try HistoricalHealthKitFullFidelity.verifyWorkoutMetadata(
+            workout: workout,
+            summary: summary
+        )
 
-            if let perceivedEffort, (1...10).contains(perceivedEffort), #available(iOS 18.0, *) {
-                let samples = try await effortSamples(for: workout).compactMap { $0 as? HKQuantitySample }
-                let unit = HKUnit.appleEffortScore()
-                guard samples.contains(where: {
-                    ($0.metadata?[attemptKey] as? String) == attemptID
-                        && abs($0.quantity.doubleValue(for: unit) - Double(perceivedEffort)) < 0.01
-                }) else {
-                    throw V4Error.operation("effort Apple v4 non relu comme relation du workout")
+        let generatedSamples = try await generatedQuantitySamples(
+            sessionID: payload.sessionID,
+            summary: summary,
+            attemptID: attemptID
+        )
+        try verifyQuantitySamples(
+            generatedSamples,
+            payload: payload,
+            activity: activity,
+            route: route
+        )
+
+        let savedRoutes = try await routes(for: workout)
+        guard savedRoutes.count == 1,
+              let savedRoute = savedRoutes.first,
+              savedRoute.uuid == routeUUID,
+              (savedRoute.metadata?[generationKey] as? String) == generation,
+              (savedRoute.metadata?[attemptKey] as? String) == attemptID else {
+            throw V4Error.operation("route v4 non associée de façon unique")
+        }
+        let locations = try await loadLocations(for: savedRoute)
+        guard locations.count >= max(2, Int(Double(route.points.count) * 0.95)) else {
+            throw V4Error.operation("points GPS v4 manquants après relecture")
+        }
+
+        if let perceivedEffort,
+           (1...10).contains(perceivedEffort),
+           #available(iOS 18.0, *) {
+            let samples = try await effortSamples(for: workout)
+                .compactMap { $0 as? HKQuantitySample }
+            let unit = HKUnit.appleEffortScore()
+            guard samples.contains(where: {
+                ($0.metadata?[attemptKey] as? String) == attemptID
+                    && abs($0.quantity.doubleValue(for: unit) - Double(perceivedEffort)) < 0.01
+            }) else {
+                throw V4Error.operation("effort Apple v4 non relu comme relation du workout")
+            }
+        }
+    }
+
+    private func verifyQuantitySamples(
+        _ samples: [HKSample],
+        payload: TrackerHealthRestorePayload,
+        activity: ActivityKind,
+        route: CleanRoute
+    ) throws {
+        if let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) {
+            let count = samples.compactMap { $0 as? HKQuantitySample }
+                .filter { $0.quantityType == heartRateType }
+                .count
+            guard count >= max(1, Int(Double(payload.heartRates.count) * 0.90)) else {
+                throw V4Error.operation("fréquence cardiaque v4 incomplète après relecture")
+            }
+        }
+
+        if let identifier = distanceIdentifier(for: activity),
+           let distanceType = HKQuantityType.quantityType(forIdentifier: identifier),
+           payload.distanceMeters > 0 {
+            let meters = samples.compactMap { $0 as? HKQuantitySample }
+                .filter { $0.quantityType == distanceType }
+                .reduce(0.0) { $0 + $1.quantity.doubleValue(for: .meter()) }
+            let tolerance = max(15, payload.distanceMeters * 0.04)
+            guard abs(meters - payload.distanceMeters) <= tolerance else {
+                throw V4Error.operation("distance v4 incomplète après relecture")
+            }
+        }
+
+        if let energy = payload.activeEnergyKcal,
+           energy > 0,
+           let energyType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) {
+            let kcal = samples.compactMap { $0 as? HKQuantitySample }
+                .filter { $0.quantityType == energyType }
+                .reduce(0.0) { $0 + $1.quantity.doubleValue(for: .kilocalorie()) }
+            let tolerance = max(2, energy * 0.05)
+            guard abs(kcal - energy) <= tolerance else {
+                throw V4Error.operation("énergie v4 incomplète après relecture")
+            }
+        }
+
+        if let identifier = speedIdentifier(for: activity),
+           let speedType = HKQuantityType.quantityType(forIdentifier: identifier) {
+            let expected = route.points.filter {
+                guard let speed = $0.nativeSpeed else { return false }
+                return speed >= 0 && speed < 100
+            }.count
+            if expected > 0 {
+                let actual = samples.compactMap { $0 as? HKQuantitySample }
+                    .filter { $0.quantityType == speedType }
+                    .count
+                guard actual >= max(1, Int(Double(expected) * 0.90)) else {
+                    throw V4Error.operation("vitesse v4 incomplète après relecture")
                 }
             }
         }
@@ -931,13 +1462,19 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
 
     // MARK: - HealthKit queries / authorization / cleanup
 
-    private func managedWorkouts(sessionID: String, summary: TrackerSummary) async throws -> [HKWorkout] {
+    private func managedWorkouts(
+        sessionID: String,
+        summary: TrackerSummary
+    ) async throws -> [HKWorkout] {
         let predicate = HKQuery.predicateForSamples(
             withStart: summary.startedAt.addingTimeInterval(-120),
             end: summary.endedAt.addingTimeInterval(120),
             options: []
         )
-        let samples = try await querySamples(type: HKObjectType.workoutType(), predicate: predicate)
+        let samples = try await querySamples(
+            type: HKObjectType.workoutType(),
+            predicate: predicate
+        )
         return (samples as? [HKWorkout] ?? []).filter {
             ($0.metadata?[managedKey] as? Bool) == true
                 && ($0.metadata?[sessionKey] as? String) == sessionID
@@ -959,10 +1496,20 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
 
     @available(iOS 18.0, *)
     private func effortSamples(for workout: HKWorkout) async throws -> [HKSample] {
-        guard let type = HKQuantityType.quantityType(forIdentifier: .workoutEffortScore) else { return [] }
-        var predicates = [HKQuery.predicateForWorkoutEffortSamplesRelated(workout: workout, activity: nil)]
+        guard let type = HKQuantityType.quantityType(forIdentifier: .workoutEffortScore) else {
+            return []
+        }
+        var predicates = [
+            HKQuery.predicateForWorkoutEffortSamplesRelated(
+                workout: workout,
+                activity: nil
+            )
+        ]
         predicates.append(contentsOf: workout.workoutActivities.map {
-            HKQuery.predicateForWorkoutEffortSamplesRelated(workout: workout, activity: $0)
+            HKQuery.predicateForWorkoutEffortSamplesRelated(
+                workout: workout,
+                activity: $0
+            )
         })
         var result: [HKSample] = []
         for predicate in predicates {
@@ -997,15 +1544,21 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else { continue }
             result.append(contentsOf: try await querySamples(type: type, predicate: predicate).filter {
                 guard ($0.metadata?[rawRestoreKey] as? Bool) == true,
-                      ($0.metadata?[sessionKey] as? String) == sessionID else { return false }
-                return attemptID == nil || ($0.metadata?[attemptKey] as? String) == attemptID
+                      ($0.metadata?[sessionKey] as? String) == sessionID else {
+                    return false
+                }
+                return attemptID == nil
+                    || ($0.metadata?[attemptKey] as? String) == attemptID
             })
         }
         return Array(Dictionary(grouping: result, by: \.uuid).values.compactMap(\.first))
     }
 
     private func requestCleanupAuthorization() async throws {
-        var shareTypes: Set<HKSampleType> = [HKObjectType.workoutType(), HKSeriesType.workoutRoute()]
+        var shareTypes: Set<HKSampleType> = [
+            HKObjectType.workoutType(),
+            HKSeriesType.workoutRoute(),
+        ]
         for identifier: HKQuantityTypeIdentifier in [
             .heartRate,
             .activeEnergyBurned,
@@ -1015,7 +1568,9 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             .cyclingSpeed,
             .runningSpeed,
         ] {
-            if let type = HKQuantityType.quantityType(forIdentifier: identifier) { shareTypes.insert(type) }
+            if let type = HKQuantityType.quantityType(forIdentifier: identifier) {
+                shareTypes.insert(type)
+            }
         }
         if #available(iOS 18.0, *),
            let effort = HKQuantityType.quantityType(forIdentifier: .workoutEffortScore) {
@@ -1030,32 +1585,62 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         hasSpeed: Bool,
         perceivedEffort: Int?
     ) async throws {
-        var shareTypes: Set<HKSampleType> = [HKObjectType.workoutType(), HKSeriesType.workoutRoute()]
-        if let type = HKQuantityType.quantityType(forIdentifier: .heartRate) { shareTypes.insert(type) }
-        if hasEnergy, let type = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) { shareTypes.insert(type) }
+        var shareTypes: Set<HKSampleType> = [
+            HKObjectType.workoutType(),
+            HKSeriesType.workoutRoute(),
+        ]
+        if let type = HKQuantityType.quantityType(forIdentifier: .heartRate) {
+            shareTypes.insert(type)
+        }
+        if hasEnergy,
+           let type = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) {
+            shareTypes.insert(type)
+        }
         if let identifier = distanceIdentifier(for: activity),
-           let type = HKQuantityType.quantityType(forIdentifier: identifier) { shareTypes.insert(type) }
-        if hasSpeed, let identifier = speedIdentifier(for: activity),
-           let type = HKQuantityType.quantityType(forIdentifier: identifier) { shareTypes.insert(type) }
-        if perceivedEffort != nil, #available(iOS 18.0, *),
-           let type = HKQuantityType.quantityType(forIdentifier: .workoutEffortScore) { shareTypes.insert(type) }
+           let type = HKQuantityType.quantityType(forIdentifier: identifier) {
+            shareTypes.insert(type)
+        }
+        if hasSpeed,
+           let identifier = speedIdentifier(for: activity),
+           let type = HKQuantityType.quantityType(forIdentifier: identifier) {
+            shareTypes.insert(type)
+        }
+        if perceivedEffort != nil,
+           #available(iOS 18.0, *),
+           let type = HKQuantityType.quantityType(forIdentifier: .workoutEffortScore) {
+            shareTypes.insert(type)
+        }
         try await requestAndVerifyAuthorization(shareTypes)
     }
 
-    private func requestAndVerifyAuthorization(_ shareTypes: Set<HKSampleType>) async throws {
-        guard HKHealthStore.isHealthDataAvailable() else { throw V4Error.operation("HealthKit indisponible") }
+    private func requestAndVerifyAuthorization(
+        _ shareTypes: Set<HKSampleType>
+    ) async throws {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            throw V4Error.operation("HealthKit indisponible")
+        }
         let readTypes = Set<HKObjectType>(shareTypes.map { $0 as HKObjectType })
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, any Error>) in
-            healthStore.requestAuthorization(toShare: shareTypes, read: readTypes) { success, error in
+            healthStore.requestAuthorization(
+                toShare: shareTypes,
+                read: readTypes
+            ) { success, error in
                 if let error { continuation.resume(throwing: error) }
-                else if !success { continuation.resume(throwing: V4Error.operation("autorisation Santé incomplète")) }
-                else { continuation.resume(returning: ()) }
+                else if !success {
+                    continuation.resume(
+                        throwing: V4Error.operation("autorisation Santé incomplète")
+                    )
+                } else {
+                    continuation.resume(returning: ())
+                }
             }
         }
         for type in shareTypes {
             guard healthStore.authorizationStatus(for: type) == .sharingAuthorized else {
-                throw V4Error.operation("écriture Santé non autorisée pour \(type.identifier)")
+                throw V4Error.operation(
+                    "écriture Santé non autorisée pour \(type.identifier)"
+                )
             }
         }
     }
@@ -1067,7 +1652,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(
             TrackerSummary.self,
-            from: Data(contentsOf: try sessionDirectory(sessionID: sessionID).appendingPathComponent("summary.json"))
+            from: Data(
+                contentsOf: try sessionDirectory(sessionID: sessionID)
+                    .appendingPathComponent("summary.json")
+            )
         )
     }
 
@@ -1096,10 +1684,19 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             }
     }
 
-    private func makePayload(sessionID: String, targetActivity: ActivityKind) throws -> TrackerHealthRestorePayload {
-        let url = try packetBuilder.makeTransferFile(sessionID: sessionID, targetActivity: targetActivity)
+    private func makePayload(
+        sessionID: String,
+        targetActivity: ActivityKind
+    ) throws -> TrackerHealthRestorePayload {
+        let url = try packetBuilder.makeTransferFile(
+            sessionID: sessionID,
+            targetActivity: targetActivity
+        )
         defer { try? FileManager.default.removeItem(at: url) }
-        return try JSONDecoder().decode(TrackerHealthRestorePayload.self, from: Data(contentsOf: url))
+        return try JSONDecoder().decode(
+            TrackerHealthRestorePayload.self,
+            from: Data(contentsOf: url)
+        )
     }
 
     private func number(_ value: Any?) -> Double? {
@@ -1108,7 +1705,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         return nil
     }
 
-    private func generatedMetadata(sessionID: String, attemptID: String) -> [String: Any] {
+    private func generatedMetadata(
+        sessionID: String,
+        attemptID: String
+    ) -> [String: Any] {
         [
             rawRestoreKey: true,
             sessionKey: sessionID,
@@ -1136,7 +1736,9 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         ]
     }
 
-    private func distanceIdentifier(for activity: ActivityKind) -> HKQuantityTypeIdentifier? {
+    private func distanceIdentifier(
+        for activity: ActivityKind
+    ) -> HKQuantityTypeIdentifier? {
         switch activity {
         case .cycling, .handCycling: return .distanceCycling
         case .swimming, .waterFitness, .waterPolo: return .distanceSwimming
@@ -1145,7 +1747,9 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         }
     }
 
-    private func speedIdentifier(for activity: ActivityKind) -> HKQuantityTypeIdentifier? {
+    private func speedIdentifier(
+        for activity: ActivityKind
+    ) -> HKQuantityTypeIdentifier? {
         switch activity {
         case .cycling, .handCycling: return .cyclingSpeed
         case .running, .trackAndField: return .runningSpeed
@@ -1153,7 +1757,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         }
     }
 
-    private func querySamples(type: HKSampleType, predicate: NSPredicate?) async throws -> [HKSample] {
+    private func querySamples(
+        type: HKSampleType,
+        predicate: NSPredicate?
+    ) async throws -> [HKSample] {
         try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
                 sampleType: type,
@@ -1172,7 +1779,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         try await withCheckedThrowingContinuation { continuation in
             var result: [CLLocation] = []
             let query = HKWorkoutRouteQuery(route: route) { _, locations, done, error in
-                if let error { continuation.resume(throwing: error); return }
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
                 result.append(contentsOf: locations ?? [])
                 if done { continuation.resume(returning: result) }
             }
@@ -1181,23 +1791,42 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
     }
 
     private func begin(_ builder: HKWorkoutBuilder, at date: Date) async throws {
-        try await checked { completion in builder.beginCollection(withStart: date, completion: completion) }
+        try await checked {
+            completion in builder.beginCollection(withStart: date, completion: completion)
+        }
     }
 
     private func end(_ builder: HKWorkoutBuilder, at date: Date) async throws {
-        try await checked { completion in builder.endCollection(withEnd: date, completion: completion) }
+        try await checked {
+            completion in builder.endCollection(withEnd: date, completion: completion)
+        }
     }
 
-    private func addMetadata(_ metadata: [String: Any], to builder: HKWorkoutBuilder) async throws {
-        try await checked { completion in builder.addMetadata(metadata, completion: completion) }
+    private func addMetadata(
+        _ metadata: [String: Any],
+        to builder: HKWorkoutBuilder
+    ) async throws {
+        try await checked {
+            completion in builder.addMetadata(metadata, completion: completion)
+        }
     }
 
-    private func add(_ samples: [HKSample], to builder: HKWorkoutBuilder) async throws {
-        try await checked { completion in builder.add(samples, completion: completion) }
+    private func add(
+        _ samples: [HKSample],
+        to builder: HKWorkoutBuilder
+    ) async throws {
+        try await checked {
+            completion in builder.add(samples, completion: completion)
+        }
     }
 
-    private func add(_ events: [HKWorkoutEvent], to builder: HKWorkoutBuilder) async throws {
-        try await checked { completion in builder.addWorkoutEvents(events, completion: completion) }
+    private func add(
+        _ events: [HKWorkoutEvent],
+        to builder: HKWorkoutBuilder
+    ) async throws {
+        try await checked {
+            completion in builder.addWorkoutEvents(events, completion: completion)
+        }
     }
 
     private func finish(_ builder: HKWorkoutBuilder) async throws -> HKWorkout? {
@@ -1210,29 +1839,43 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
     }
 
     private func save(_ object: HKObject) async throws {
-        try await checked { completion in healthStore.save(object, withCompletion: completion) }
+        try await checked {
+            completion in healthStore.save(object, withCompletion: completion)
+        }
     }
 
     private func delete(_ objects: [HKObject]) async throws {
         guard !objects.isEmpty else { return }
-        try await checked { completion in healthStore.delete(objects, withCompletion: completion) }
+        try await checked {
+            completion in healthStore.delete(objects, withCompletion: completion)
+        }
     }
 
-    private func checked(_ operation: (@escaping (Bool, Error?) -> Void) -> Void) async throws {
+    private func checked(
+        _ operation: (@escaping (Bool, Error?) -> Void) -> Void
+    ) async throws {
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, any Error>) in
             operation { success, error in
                 if let error { continuation.resume(throwing: error) }
-                else if !success { continuation.resume(throwing: V4Error.operation("opération HealthKit refusée")) }
-                else { continuation.resume(returning: ()) }
+                else if !success {
+                    continuation.resume(
+                        throwing: V4Error.operation("opération HealthKit refusée")
+                    )
+                } else {
+                    continuation.resume(returning: ())
+                }
             }
         }
     }
 
     private enum V4Error: LocalizedError {
         case operation(String)
+
         var errorDescription: String? {
-            switch self { case .operation(let value): return value }
+            switch self {
+            case .operation(let value): return value
+            }
         }
     }
 }
@@ -1246,7 +1889,10 @@ struct HistoricalHealthKitRepairV4View: View {
         NavigationStack {
             Group {
                 if summaries.isEmpty {
-                    ContentUnavailableView("Aucune séance Tracker", systemImage: "checkmark.circle.fill")
+                    ContentUnavailableView(
+                        "Aucune séance Tracker",
+                        systemImage: "checkmark.circle.fill"
+                    )
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 12) {
@@ -1261,7 +1907,10 @@ struct HistoricalHealthKitRepairV4View: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(14)
-                            .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+                            .background(
+                                .orange.opacity(0.08),
+                                in: RoundedRectangle(cornerRadius: 18)
+                            )
 
                             ForEach(summaries) { summary in
                                 HistoricalRepairV4Card(summary: summary)
@@ -1273,7 +1922,9 @@ struct HistoricalHealthKitRepairV4View: View {
                 }
             }
             .navigationTitle("Récupération")
-            .onAppear { summaries = store.listSummaries().sorted { $0.startedAt > $1.startedAt } }
+            .onAppear {
+                summaries = store.listSummaries().sorted { $0.startedAt > $1.startedAt }
+            }
         }
         .preferredColorScheme(.dark)
     }
@@ -1298,16 +1949,20 @@ private struct HistoricalRepairV4Card: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(ActivityKind(rawValue: summary.activity)?.label ?? summary.activity)
                         .font(.headline.weight(.bold))
-                    Text(summary.startedAt, format: .dateTime.day().month().year().hour().minute())
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        summary.startedAt,
+                        format: .dateTime.day().month().year().hour().minute()
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     Text(summary.sessionID)
                         .font(.system(size: 8, design: .monospaced))
                         .foregroundStyle(.tertiary)
                 }
                 Spacer()
                 if coordinator.internallyVerifiedSessions.contains(summary.sessionID) {
-                    Image(systemName: "checkmark.shield.fill").foregroundStyle(.orange)
+                    Image(systemName: "checkmark.shield.fill")
+                        .foregroundStyle(.orange)
                 }
             }
 
@@ -1319,18 +1974,37 @@ private struct HistoricalRepairV4Card: View {
 
             if let audit {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Route : \(audit.chosenSource ?? "aucune") · \(audit.chosenPoints) points filtrés")
-                    Text(String(format: "Géométrie W %.2f km · iPhone %.2f km", audit.watchGeometryMeters / 1000, audit.phoneGeometryMeters / 1000))
+                    Text(
+                        "Route : \(audit.chosenSource ?? "aucune") · \(audit.chosenPoints) points · \(v4Distance(audit.selectedGeometryMeters)) actifs"
+                    )
+                    Text(
+                        String(
+                            format: "Géométrie W %.2f km · iPhone %.2f km",
+                            audit.watchGeometryMeters / 1000,
+                            audit.phoneGeometryMeters / 1000
+                        )
+                    )
                     if let value = audit.watchRawDistanceMeters {
                         Text(String(format: "Compteur raw Watch %.2f km", value / 1000))
                     }
                     if let value = audit.phoneRawDistanceMeters {
                         Text(String(format: "Compteur raw iPhone %.2f km", value / 1000))
                     }
-                    Text("Gaps actifs >3s : \(audit.activeGapsOver3Seconds) · max \(String(format: "%.1f", audit.maxActiveGapSeconds))s")
+                    Text("Référence distance : \(audit.distanceReferenceSource ?? "aucune")")
+                    Text(
+                        "Gaps actifs >3s : \(audit.activeGapsOver3Seconds) · max \(String(format: "%.1f", audit.maxActiveGapSeconds))s"
+                    )
                     Text("Restaurations HealthKit : \(audit.generatedWorkoutCount)")
                     if audit.distanceConflict {
-                        Text("DISTANCE SUMMARY/RAW INCOHÉRENTE · écriture bloquée")
+                        Text("DISTANCE SUMMARY/RAW NON CONFIRMÉE · écriture bloquée")
+                            .foregroundStyle(.red)
+                    }
+                    if audit.routeGeometryConflict {
+                        Text("GÉOMÉTRIE ROUTE INCOHÉRENTE · écriture bloquée")
+                            .foregroundStyle(.red)
+                    }
+                    if audit.routeContinuityConflict {
+                        Text("TROU GPS ACTIF TROP LONG · écriture bloquée")
                             .foregroundStyle(.red)
                     }
                 }
@@ -1341,8 +2015,11 @@ private struct HistoricalRepairV4Card: View {
             Button {
                 coordinator.inspect(sessionID: summary.sessionID)
             } label: {
-                Label("Actualiser le diagnostic", systemImage: "waveform.path.ecg.rectangle")
-                    .frame(maxWidth: .infinity)
+                Label(
+                    "Actualiser le diagnostic",
+                    systemImage: "waveform.path.ecg.rectangle"
+                )
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
             .disabled(coordinator.activeSessionID != nil)
@@ -1351,8 +2028,11 @@ private struct HistoricalRepairV4Card: View {
                 Button(role: .destructive) {
                     confirmCleanup = true
                 } label: {
-                    Label("Nettoyer \(audit.generatedWorkoutCount) restauration(s) de test", systemImage: "trash")
-                        .frame(maxWidth: .infinity)
+                    Label(
+                        "Nettoyer \(audit.generatedWorkoutCount) restauration(s) de test",
+                        systemImage: "trash"
+                    )
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .disabled(coordinator.activeSessionID != nil)
@@ -1377,9 +2057,12 @@ private struct HistoricalRepairV4Card: View {
             Button {
                 confirmRepair = true
             } label: {
-                Label("Reconstruire proprement dans Santé", systemImage: "heart.circle.fill")
-                    .font(.subheadline.weight(.bold))
-                    .frame(maxWidth: .infinity)
+                Label(
+                    "Reconstruire proprement dans Santé",
+                    systemImage: "heart.circle.fill"
+                )
+                .font(.subheadline.weight(.bold))
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(.orange)
@@ -1392,14 +2075,22 @@ private struct HistoricalRepairV4Card: View {
             if let status = coordinator.statusBySession[summary.sessionID] {
                 Text(status)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(status.contains("échoué") || status.contains("bloquée") ? .red : .secondary)
+                    .foregroundStyle(
+                        status.contains("échoué")
+                            || status.contains("bloquée")
+                            || status.contains("aucune écriture")
+                            ? .red
+                            : .secondary
+                    )
             }
         }
         .padding(14)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 20))
         .onAppear {
             if perceivedEffort == nil {
-                perceivedEffort = HistoricalHealthKitFullFidelity.savedPerceivedEffort(sessionID: summary.sessionID)
+                perceivedEffort = HistoricalHealthKitFullFidelity.savedPerceivedEffort(
+                    sessionID: summary.sessionID
+                )
             }
             if audit == nil { coordinator.inspect(sessionID: summary.sessionID) }
         }
@@ -1413,7 +2104,9 @@ private struct HistoricalRepairV4Card: View {
             }
             Button("Annuler", role: .cancel) {}
         } message: {
-            Text("Le filtre exige raw_restoration=true + le session ID exact. Les raw Tracker et les workouts normaux restent intacts.")
+            Text(
+                "Le filtre exige raw_restoration=true + le session ID exact. Les raw Tracker et les workouts normaux restent intacts."
+            )
         }
         .confirmationDialog(
             "Créer UNE nouvelle restauration v4 ?",
@@ -1431,14 +2124,20 @@ private struct HistoricalRepairV4Card: View {
             }
             Button("Annuler", role: .cancel) {}
         } message: {
-            Text("La reconstruction reste bloquée tant qu’une ancienne restauration ou une incohérence de distance existe.")
+            Text(
+                "La reconstruction reste bloquée tant qu’une ancienne restauration ou une incohérence de distance/route existe."
+            )
         }
     }
 
     private func metric(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(.subheadline.weight(.bold)).monospacedDigit()
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline.weight(.bold))
+                .monospacedDigit()
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

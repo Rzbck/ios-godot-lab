@@ -3,9 +3,11 @@ import OSLog
 
 /// Structured, bounded, local-first telemetry for Watch Sensor Lab.
 ///
-/// Every record is emitted as one JSON line prefixed with `WSL_TELEMETRY|`
-/// so a tethered host can stream it through the device syslog. Records are also
-/// persisted locally as rotating JSONL files for post-mortem debugging.
+/// Every record is emitted with a `WSL_TELEMETRY|` marker when it is small
+/// enough for one unified-log line. Larger records are split into bounded
+/// base64 chunks prefixed with `WSL_TELEMETRY_CHUNK|` and reassembled by the
+/// Windows receiver. Records are also persisted locally as rotating JSONL
+/// files for post-mortem debugging.
 final class AppTelemetry {
     static let shared = AppTelemetry()
 
@@ -19,6 +21,8 @@ final class AppTelemetry {
     private var relay: ((String) -> Void)?
     private let maxFileBytes: UInt64 = 4 * 1024 * 1024
     private let maxRotatedFiles = 4
+    private let maxSingleUnifiedLogBytes = 700
+    private let chunkPayloadBytes = 480
 
     private init() {}
 
@@ -130,10 +134,28 @@ final class AppTelemetry {
               let json = String(data: data, encoding: .utf8)
         else { return }
 
-        let line = "WSL_TELEMETRY|" + json
-        logger.notice("\(line, privacy: .public)")
+        emitUnifiedLog(json: json, data: data, recordSequence: sequence)
         relay?(json)
         persist(json + "\n")
+    }
+
+    private func emitUnifiedLog(json: String, data: Data, recordSequence: UInt64) {
+        let directLine = "WSL_TELEMETRY|" + json
+        if directLine.utf8.count <= maxSingleUnifiedLogBytes {
+            logger.notice("\(directLine, privacy: .public)")
+            return
+        }
+
+        let recordID = "\(bootID)-\(recordSequence)"
+        let total = max(1, Int(ceil(Double(data.count) / Double(chunkPayloadBytes))))
+
+        for index in 0..<total {
+            let start = index * chunkPayloadBytes
+            let end = min(start + chunkPayloadBytes, data.count)
+            let chunk = data.subdata(in: start..<end).base64EncodedString()
+            let line = "WSL_TELEMETRY_CHUNK|\(recordID)|\(index + 1)|\(total)|\(chunk)"
+            logger.notice("\(line, privacy: .public)")
+        }
     }
 
     private func jsonSafe(_ value: Any) -> Any {

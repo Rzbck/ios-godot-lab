@@ -29,6 +29,7 @@ iphone_hk_audit = read("iphone/Sources/HistoricalManagedWorkoutAudit.swift")
 iphone_fidelity = read("iphone/Sources/HistoricalHealthKitFullFidelity.swift")
 restore_packet = read("iphone/Sources/TrackerHealthRestorePacket.swift")
 iphone_reliable = read("iphone/Sources/WatchReliableRecovery.swift")
+route_probe = read("iphone/Sources/HistoricalRouteDiagnosticProbe.swift")
 diagnostic_api = read("iphone/Sources/DiagnosticService.swift")
 diagnostic_client = read("WSL.ps1")
 watch_root = read("watch/Sources/WatchSensorLabApp.swift")
@@ -110,6 +111,7 @@ else:
     forbid(repair_body, "cleanupGeneratedRestorations(", "Nettoyage automatique interdit dans repair")
     require(repair_body, "guard generated.isEmpty", "Repair bloque les doublons")
     require(repair_body, "hasDistanceConflict", "Repair exige une distance raw autoritaire")
+    require(repair_body, "hasSevereRouteCounterConflict", "Repair bloque les détours GPS majeurs")
     forbid(
         repair_body,
         "guard !hasRouteGeometryConflict(",
@@ -122,13 +124,16 @@ else:
     )
 
 # D. Politique route: le compteur autoritaire confirme la distance; le GPS primaire
-# reste la provenance de route, le secondaire ne bouche que de vrais trous raw, et
-# aucun filtre ne peut fabriquer un nouveau trou >3 secondes.
+# reste la provenance de route, le secondaire ne bouche que de vrais trous raw ou une
+# fenêtre primaire prouvée corrompue par le compteur, sans jamais inventer de point.
 for token, label in [
     ("counterAgrees", "Validation indépendante des compteurs raw"),
     ("distanceReferenceSource", "Source de distance explicite"),
     ("mergeActiveGaps", "Fusion uniquement des trous actifs"),
     ("primaryRawPoints", "Fusion distingue trous raw et trous de filtre"),
+    ("counterSegmentOutlierFilter", "Filtre les excursions GPS multi-points prouvées par compteur"),
+    ("counterWindowHasDetour", "Fusion reconnaît une fenêtre primaire corrompue"),
+    ("rawPrimaryInterior", "Fusion inspecte l'intérieur raw primaire"),
     ("counterAwareFilter", "Filtrage bruit guidé par compteur raw"),
     ("nextRaw.timestamp - lastAccepted.timestamp > 3.0", "Filtre compteur ne crée pas de trou >3s"),
     ("denoiseForDistance", "Débruitage géométrique borné"),
@@ -145,7 +150,7 @@ for token, label in [
     require(iphone_v4, token, label)
 
 # Le canReconstruct produit est piloté par unicité + présence route + distance raw,
-# pas par une égalité artificielle polyline/distance ni par l'absence totale de trous GPS.
+# avec blocage supplémentaire des gros détours compteur/route, mais pas d'un trou GPS réel.
 can_start = iphone_v4.find("var canReconstruct: Bool")
 can_end = iphone_v4.find("    }\n\n    @Published", can_start)
 if can_start < 0 or can_end < 0:
@@ -153,8 +158,9 @@ if can_start < 0 or can_end < 0:
 else:
     can_body = iphone_v4[can_start:can_end]
     require(can_body, "!distanceConflict", "canReconstruct exige distance raw confirmée")
-    forbid(can_body, "!routeGeometryConflict", "Géométrie GPS ne bloque plus canReconstruct")
-    forbid(can_body, "!routeContinuityConflict", "Trou GPS réel ne bloque plus canReconstruct")
+    require(can_body, "!severeRouteCounterConflict", "canReconstruct bloque les gros détours GPS")
+    forbid(can_body, "!routeGeometryConflict", "Géométrie GPS modérée ne bloque pas canReconstruct")
+    forbid(can_body, "!routeContinuityConflict", "Trou GPS réel ne bloque pas canReconstruct")
 
 # E. Route HealthKit explicite et vérifiée.
 for token, label in [
@@ -241,6 +247,8 @@ for token, label in [
     ('case "errors"', "Endpoint erreurs"),
     ('case "logs"', "Endpoint logs"),
     ("recovery.inspect(sessionID: sessionID)", "Recovery distante réutilise inspection lecture seule"),
+    ("HistoricalRouteDiagnosticProbe().inspect", "Recovery expose le forensic GPS/compteur brut"),
+    ('"route_diagnostics"', "Recovery renvoie les fenêtres GPS/compteur"),
     ("isDisallowedNetworkPath", "Clients Wi-Fi/cellulaire refusés"),
     ("recentTelemetry", "Logs locaux bornés exposés à la demande"),
     ('"read_only": true', "Contrat API explicitement lecture seule"),
@@ -257,11 +265,35 @@ for token in [
 ]:
     forbid(diagnostic_api, token, "API diagnostic ne doit contenir aucune mutation HealthKit")
 
+# Le probe forensic est strictement lecture seule et garde les coordonnées privées hors réponse API.
+for token, label in [
+    ("HistoricalRouteDiagnosticProbe", "Probe historique forensic"),
+    ('source: "WATCH"', "GPS Watch inspecté"),
+    ('source: "IPHONE"', "GPS iPhone inspecté"),
+    ("counterEstimate", "Compteur Watch interpolé de façon bornée"),
+    ("counter_proven_detour", "Raison de fenêtre filtrable"),
+    ("bridge_outside_counter_budget", "Raison de non-filtrage explicite"),
+    ("path_excess_m", "Écart géométrie/compteur exposé"),
+]:
+    require(route_probe, token, label)
+for token in [
+    "HealthKit",
+    "healthStore",
+    "HKWorkout",
+    "HKSample",
+    "delete(",
+    "save(",
+]:
+    forbid(route_probe, token, "Probe forensic doit rester indépendant de toute mutation HealthKit")
+
 for token, label in [
     ("pymobiledevice3", "Client Windows réutilise pymobiledevice3 existant"),
     ("usbmux", "Transport client USB/usbmux"),
     ("wsl_diag_v1", "Client et app partagent le protocole versionné"),
     ("Get-FreeTcpPort", "Forward host utilise un port temporaire sans conflit"),
+    ("ROUTE DIAGNOSTICS (READ-ONLY)", "Client affiche le forensic route sans second terminal"),
+    ("WATCH GPS vs WATCH COUNTER", "Client affiche les fenêtres Watch"),
+    ("IPHONE GPS vs WATCH COUNTER", "Client affiche les fenêtres iPhone"),
     ("finally", "Forward usbmux toujours nettoyé"),
 ]:
     require(diagnostic_client, token, label)
@@ -278,16 +310,18 @@ print(" - managed non-restoration workout audit is read-only")
 print(" - Watch + iPhone raw GPS are audited independently")
 print(" - matching primary distance survives an incomplete secondary counter")
 print(" - pause-crossing legs are excluded from active route geometry")
-print(" - secondary GPS fills only holes already absent from the raw primary stream")
+print(" - secondary GPS fills only true raw holes or counter-proven corrupt primary windows")
 print(" - counter filtering and denoise cannot manufacture >3s active gaps")
 print(" - real GPS capture holes remain visible and are never interpolated")
 print(" - route geometry/continuity are quality diagnostics, not fake distance authorities")
 print(" - a matching raw counter remains mandatory before HealthKit writes")
+print(" - severe route/counter detours block HealthKit writes")
 print(" - explicit cleanup prevents accumulation of test workouts")
 print(" - cleanup is scoped to raw_restoration + exact session id")
 print(" - one v4 workout + one route + quantities are durably reread")
 print(" - perceived effort is explicitly related and reread")
 print(" - internal HealthKit reread is not physical validation")
 print(" - live Watch HKLiveWorkoutBuilder remains unchanged")
+print(" - read-only route forensic compares Watch/iPhone GPS against the Watch counter")
 print(" - read-only diagnostic API is lifecycle-bound and rejects Wi-Fi/cellular clients")
-print(" - WSL.ps1 provides one-shot USB status/recovery/errors/logs commands")
+print(" - WSL.ps1 provides one-shot USB status/recovery/errors/logs plus route forensic output")

@@ -237,6 +237,12 @@ final class DiagnosticService {
 
             var data = recoverySnapshot(sessionID: sessionID, recovery: recovery)
             data["timed_out"] = recovery.activeSessionID == sessionID
+            do {
+                let routeProbe = try HistoricalRouteDiagnosticProbe().inspect(sessionID: sessionID)
+                data["route_diagnostics"] = routeDiagnosticSnapshot(routeProbe)
+            } catch {
+                data["route_diagnostics_error"] = error.localizedDescription
+            }
             return envelope(ok: true, command: command, data: data)
 
         case "errors":
@@ -363,6 +369,48 @@ final class DiagnosticService {
             ]
         }
         return data
+    }
+
+    private func routeDiagnosticSnapshot(
+        _ result: HistoricalRouteDiagnosticProbe.Result
+    ) -> [String: Any] {
+        [
+            "counter_source": result.counterSource,
+            "watch_points": result.watchPointCount,
+            "iphone_points": result.phonePointCount,
+            "watch_counter_points": result.watchCounterPointCount,
+            "watch_windows": result.watchWindows.map(routeDiagnosticWindowSnapshot),
+            "iphone_windows": result.phoneWindows.map(routeDiagnosticWindowSnapshot),
+        ]
+    }
+
+    private func routeDiagnosticWindowSnapshot(
+        _ window: HistoricalRouteDiagnosticProbe.Window
+    ) -> [String: Any] {
+        let formatter = ISO8601DateFormatter()
+        return [
+            "source": window.source,
+            "start_timestamp": window.startTimestamp,
+            "end_timestamp": window.endTimestamp,
+            "start_iso": formatter.string(from: Date(timeIntervalSince1970: window.startTimestamp)),
+            "end_iso": formatter.string(from: Date(timeIntervalSince1970: window.endTimestamp)),
+            "duration_s": window.durationSeconds,
+            "point_count": window.pointCount,
+            "path_geometry_m": window.pathGeometryMeters,
+            "direct_geometry_m": window.directGeometryMeters,
+            "watch_counter_advance_m": window.counterAdvanceMeters,
+            "allowed_path_geometry_m": window.allowedPathGeometryMeters,
+            "bridge_allowed_geometry_m": window.bridgeAllowedGeometryMeters,
+            "path_excess_m": window.pathExcessMeters,
+            "detour_m": window.detourMeters,
+            "max_source_gap_s": window.maxSourceGapSeconds,
+            "max_counter_interpolation_gap_s": window.maxCounterInterpolationGapSeconds,
+            "bridge_within_counter_budget": window.bridgeWithinCounterBudget,
+            "path_excess_over_threshold": window.pathExcessOverThreshold,
+            "detour_over_threshold": window.detourOverThreshold,
+            "counter_proven_detour": window.counterProvenDetour,
+            "diagnosis": window.diagnosis,
+        ]
     }
 
     private func recentTelemetry(limit: Int, kind: String?) -> [[String: Any]] {

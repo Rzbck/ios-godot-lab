@@ -174,7 +174,9 @@ struct HistoricalRouteDiagnosticProbe {
                 continue
             }
 
-            let maxEndIndex = min(values.count - 1, startIndex + 180)
+            // The incident detour lasts roughly four minutes at ~1 Hz. Keep this probe
+            // broad enough to see both clean anchors around a long stale-coordinate run.
+            let maxEndIndex = min(values.count - 1, startIndex + 420)
             var pathGeometry = 0.0
             var maxGap = 0.0
             var maxAccuracy = start.horizontalAccuracy

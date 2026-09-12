@@ -25,6 +25,7 @@ def forbid(text: str, token: str, label: str) -> None:
 iphone_root = read("iphone/Sources/TrackerApp.swift")
 iphone_review = read("iphone/Sources/SessionReviewTimeline.swift")
 iphone_v4 = read("iphone/Sources/HistoricalHealthKitRepairV4.swift")
+iphone_hk_audit = read("iphone/Sources/HistoricalManagedWorkoutAudit.swift")
 iphone_fidelity = read("iphone/Sources/HistoricalHealthKitFullFidelity.swift")
 restore_packet = read("iphone/Sources/TrackerHealthRestorePacket.swift")
 iphone_reliable = read("iphone/Sources/WatchReliableRecovery.swift")
@@ -34,11 +35,27 @@ watch_restore = read("watch/Sources/WatchRestoreWorkflow.swift")
 watch_model = read("watch/Sources/SensorModel.swift")
 
 # A. Une seule surface produit active de mutation historique: v4 iPhone.
-require(iphone_root, "HistoricalHealthKitRepairV4View()", "Surface v4 montée")
+require(iphone_root, "HistoricalRecoveryDiagnosticHostView()", "Hôte récupération diagnostique monté")
+require(iphone_hk_audit, "HistoricalHealthKitRepairV4View()", "Surface v4 montée dans l'hôte")
 forbid(iphone_root, "HistoricalHealthKitRepairView()", "Ancienne v3 montée")
 require(iphone_root, 'Label("Récupération"', "Onglet Récupération visible")
 require(iphone_v4, "HistoricalHealthKitRepairV4Coordinator.shared", "Coordinateur v4")
 require(iphone_v4, 'Label(\n                    "Reconstruire proprement dans Santé"', "Action v4 visible")
+
+# Diagnostic du workout Tracker non-restauration: strictement lecture seule.
+for token, label in [
+    ("HistoricalManagedWorkoutAudit", "Audit workout Tracker non-restauration"),
+    ("HKSampleQuery", "Audit HealthKit par requête"),
+    ("managedKey", "Audit exige managed=true"),
+    ("sessionKey", "Audit exige session exacte"),
+    ("rawRestoreKey", "Audit distingue les restaurations"),
+    ("sourceRevision.source.bundleIdentifier", "Audit source du workout"),
+    ("selected_activity", "Audit activité sélectionnée live"),
+    ("healthkit_initial_activity", "Audit activité HealthKit initiale"),
+]:
+    require(iphone_hk_audit, token, label)
+for token in ["healthStore.delete(", "healthStore.save(", "HKWorkoutBuilder(", "HKWorkoutRouteBuilder("]:
+    forbid(iphone_hk_audit, token, "Audit HealthKit doit rester lecture seule")
 
 # Legacy UI reste lecture seule / redirigée.
 require(iphone_review, "Ce panneau ne modifie plus HealthKit", "Review legacy lecture seule")
@@ -187,6 +204,7 @@ if errors:
 
 print("TRACKER PRODUCT INVARIANTS: OK")
 print(" - active historical product surface: iPhone v4 only")
+print(" - managed non-restoration workout audit is read-only")
 print(" - Watch + iPhone raw GPS are audited independently")
 print(" - matching primary distance survives an incomplete secondary counter")
 print(" - pause-crossing legs are excluded from active route geometry")

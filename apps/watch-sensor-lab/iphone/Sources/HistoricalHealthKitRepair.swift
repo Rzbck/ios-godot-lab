@@ -32,6 +32,7 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
     private let algorithmKey = "com.rzbck.watchsensorlab.algorithm_version"
     private let buildKey = "com.rzbck.watchsensorlab.build_sha"
     private let generationKey = "com.rzbck.watchsensorlab.historical_generation"
+    private let attemptKey = "com.rzbck.watchsensorlab.historical_attempt_id"
     private let generation = "ios_historical_v2"
 
     private init() {}
@@ -81,19 +82,26 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                     )
                 }
 
-                // Idempotence: if this exact iPhone generation already exists,
-                // verify it instead of creating another copy.
+                // Idempotence only applies to a transaction that carries its own
+                // attempt identifier. Older v2 attempts without this identifier
+                // are deliberately not trusted after the route-finalization incident.
                 if let current = existing.first(where: {
                     ($0.metadata?[generationKey] as? String) == generation
                         && $0.workoutActivityType == targetActivity.healthKitType
-                }) {
-                    let currentRoute = try await generatedRoute(for: current)
+                        && (($0.metadata?[attemptKey] as? String)?.isEmpty == false)
+                }),
+                   let currentAttemptID = current.metadata?[attemptKey] as? String {
+                    let currentRoute = try await generatedRoute(
+                        for: current,
+                        attemptID: currentAttemptID
+                    )
                     statusBySession[sessionID] = "Relecture de la reconstruction iPhone existante…"
                     try await verifyDurably(
                         payload: payload,
                         activity: targetActivity,
                         workoutUUID: current.uuid,
-                        routeUUID: currentRoute?.uuid
+                        routeUUID: currentRoute?.uuid,
+                        attemptID: currentAttemptID
                     )
                     internallyVerifiedSessions.insert(sessionID)
                     statusBySession[sessionID] =
@@ -106,9 +114,11 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                         "Ancienne restauration détectée · conservée par sécurité pendant la reconstruction…"
                 }
 
+                let attemptID = UUID().uuidString
                 let created = try await createHistoricalWorkout(
                     payload: payload,
-                    activity: targetActivity
+                    activity: targetActivity,
+                    attemptID: attemptID
                 )
 
                 statusBySession[sessionID] = "Relectures HealthKit iPhone…"
@@ -116,7 +126,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                     payload: payload,
                     activity: targetActivity,
                     workoutUUID: created.workout.uuid,
-                    routeUUID: created.route?.uuid
+                    routeUUID: created.route?.uuid,
+                    attemptID: attemptID
                 )
 
                 // Deliberately no cleanup here. Internal API readback is not
@@ -239,7 +250,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
 
     private func createHistoricalWorkout(
         payload: TrackerHealthRestorePayload,
-        activity: ActivityKind
+        activity: ActivityKind,
+        attemptID: String
     ) async throws -> CreatedWorkout {
         let startDate = Date(timeIntervalSince1970: payload.startedAt)
         let endDate = Date(timeIntervalSince1970: payload.endedAt)
@@ -249,8 +261,12 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             throw RepairError.operation("données temporelles Tracker invalides")
         }
 
-        let samples = try makeSamples(payload: payload, activity: activity)
-        let events = makeEvents(payload: payload)
+        let samples = try makeSamples(
+            payload: payload,
+            activity: activity,
+            attemptID: attemptID
+        )
+        let events = makeEvents(payload: payload, attemptID: attemptID)
         let locations = makeLocations(payload: payload)
 
         let configuration = HKWorkoutConfiguration()
@@ -282,6 +298,7 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 algorithmKey: payload.sourceAlgorithmVersion ?? "tracker-raw-ios-v2",
                 buildKey: BuildInfo.gitSHA,
                 generationKey: generation,
+                attemptKey: attemptID,
                 "com.rzbck.watchsensorlab.raw_active_duration": payload.activeDuration,
                 "com.rzbck.watchsensorlab.raw_distance_m": payload.distanceMeters,
                 "com.rzbck.watchsensorlab.raw_pause_provenance": payload.pauseProvenance,
@@ -292,6 +309,18 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 try await add(events, to: builder)
             }
             if let routeBuilder, locations.count >= 2 {
+                // This route builder is owned by HKWorkoutBuilder. On current iOS,
+                // finishWorkout finalizes the attached series builder. Calling
+                // finishRoute afterwards causes the runtime error observed on device.
+                try await addMetadata([
+                    managedKey: true,
+                    sessionKey: payload.sessionID,
+                    rawRestoreKey: true,
+                    rawRestoreSchemaKey: payload.schema,
+                    rawRestoreSourceKey: "tracker_raw_ios_v2",
+                    generationKey: generation,
+                    attemptKey: attemptID,
+                ], to: routeBuilder)
                 try await insert(locations, into: routeBuilder)
             }
 
@@ -303,28 +332,43 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             }
             createdWorkout = workout
 
-            if let routeBuilder, locations.count >= 2 {
-                createdRoute = try await finish(
-                    routeBuilder,
-                    workout: workout,
-                    metadata: [
-                        managedKey: true,
-                        sessionKey: payload.sessionID,
-                        rawRestoreKey: true,
-                        rawRestoreSchemaKey: payload.schema,
-                        rawRestoreSourceKey: "tracker_raw_ios_v2",
-                        generationKey: generation,
-                    ]
+            if locations.count >= 2 {
+                guard routeBuilder != nil else {
+                    throw RepairError.operation(
+                        "HealthKit n’a pas fourni de route builder associé"
+                    )
+                }
+                createdRoute = try await waitForGeneratedRoute(
+                    for: workout,
+                    attemptID: attemptID
                 )
+                guard createdRoute != nil else {
+                    throw RepairError.operation(
+                        "route Santé absente après finalisation du workout"
+                    )
+                }
             }
 
             return CreatedWorkout(workout: workout, route: createdRoute)
         } catch {
-            // Roll back only objects created by THIS v2 attempt. Never touch
+            // Roll back only objects created by THIS attempt. Never touch
             // a pre-existing workout or the raw Tracker files.
+            if createdRoute == nil, let createdWorkout {
+                createdRoute = try? await generatedRoute(
+                    for: createdWorkout,
+                    attemptID: attemptID
+                )
+            }
+
             var rollback: [HKObject] = []
             if let createdRoute { rollback.append(createdRoute) }
             if let createdWorkout { rollback.append(createdWorkout) }
+            let createdSamples = (try? await generatedQuantitySamples(
+                payload: payload,
+                attemptID: attemptID
+            )) ?? []
+            rollback.append(contentsOf: createdSamples)
+
             if !rollback.isEmpty {
                 try? await delete(rollback)
             }
@@ -334,7 +378,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
 
     private func makeSamples(
         payload: TrackerHealthRestorePayload,
-        activity: ActivityKind
+        activity: ActivityKind,
+        attemptID: String
     ) throws -> [HKSample] {
         guard let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else {
             throw RepairError.operation("type HealthKit fréquence cardiaque indisponible")
@@ -357,7 +402,10 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 ),
                 start: date,
                 end: date,
-                metadata: generatedMetadata(sessionID: payload.sessionID)
+                metadata: generatedMetadata(
+                    sessionID: payload.sessionID,
+                    attemptID: attemptID
+                )
             )
         }
 
@@ -372,7 +420,10 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 quantity: HKQuantity(unit: .kilocalorie(), doubleValue: energy),
                 start: startDate,
                 end: endDate,
-                metadata: generatedMetadata(sessionID: payload.sessionID)
+                metadata: generatedMetadata(
+                    sessionID: payload.sessionID,
+                    attemptID: attemptID
+                )
             ))
         }
 
@@ -384,7 +435,10 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 quantity: HKQuantity(unit: .meter(), doubleValue: payload.distanceMeters),
                 start: startDate,
                 end: endDate,
-                metadata: generatedMetadata(sessionID: payload.sessionID)
+                metadata: generatedMetadata(
+                    sessionID: payload.sessionID,
+                    attemptID: attemptID
+                )
             ))
         }
 
@@ -394,16 +448,23 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         return samples
     }
 
-    private func generatedMetadata(sessionID: String) -> [String: Any] {
+    private func generatedMetadata(
+        sessionID: String,
+        attemptID: String
+    ) -> [String: Any] {
         [
             rawRestoreKey: true,
             sessionKey: sessionID,
             rawRestoreSourceKey: "tracker_raw_ios_v2",
             generationKey: generation,
+            attemptKey: attemptID,
         ]
     }
 
-    private func makeEvents(payload: TrackerHealthRestorePayload) -> [HKWorkoutEvent] {
+    private func makeEvents(
+        payload: TrackerHealthRestorePayload,
+        attemptID: String
+    ) -> [HKWorkoutEvent] {
         var result: [HKWorkoutEvent] = []
 
         for pause in payload.pauses.sorted(by: { $0.startedAt < $1.startedAt }) {
@@ -414,13 +475,18 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 continue
             }
 
+            let eventMetadata: [String: Any] = [
+                rawRestoreKey: true,
+                generationKey: generation,
+                attemptKey: attemptID,
+            ]
             result.append(HKWorkoutEvent(
                 type: .pause,
                 dateInterval: DateInterval(
                     start: Date(timeIntervalSince1970: pause.startedAt),
                     duration: 0
                 ),
-                metadata: [rawRestoreKey: true, generationKey: generation]
+                metadata: eventMetadata
             ))
 
             if pause.endedAt < payload.endedAt - 0.05 {
@@ -430,7 +496,7 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                         start: Date(timeIntervalSince1970: pause.endedAt),
                         duration: 0
                     ),
-                    metadata: [rawRestoreKey: true, generationKey: generation]
+                    metadata: eventMetadata
                 ))
             }
         }
@@ -504,18 +570,42 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         }
     }
 
-    private func generatedRoute(for workout: HKWorkout) async throws -> HKWorkoutRoute? {
+    private func generatedRoute(
+        for workout: HKWorkout,
+        attemptID: String
+    ) async throws -> HKWorkoutRoute? {
         let values = try await routes(for: workout)
         return values.first {
             ($0.metadata?[generationKey] as? String) == generation
+                && ($0.metadata?[attemptKey] as? String) == attemptID
         }
+    }
+
+    private func waitForGeneratedRoute(
+        for workout: HKWorkout,
+        attemptID: String
+    ) async throws -> HKWorkoutRoute? {
+        let delays: [UInt64] = [0, 400_000_000, 1_200_000_000]
+        for delay in delays {
+            if delay > 0 {
+                try await Task.sleep(nanoseconds: delay)
+            }
+            if let route = try await generatedRoute(
+                for: workout,
+                attemptID: attemptID
+            ) {
+                return route
+            }
+        }
+        return nil
     }
 
     private func verifyDurably(
         payload: TrackerHealthRestorePayload,
         activity: ActivityKind,
         workoutUUID: UUID,
-        routeUUID: UUID?
+        routeUUID: UUID?,
+        attemptID: String
     ) async throws {
         let delays: [UInt64] = [0, 1_200_000_000, 3_000_000_000]
         for delay in delays {
@@ -526,7 +616,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 payload: payload,
                 activity: activity,
                 workoutUUID: workoutUUID,
-                routeUUID: routeUUID
+                routeUUID: routeUUID,
+                attemptID: attemptID
             )
         }
     }
@@ -535,7 +626,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         payload: TrackerHealthRestorePayload,
         activity: ActivityKind,
         workoutUUID: UUID,
-        routeUUID: UUID?
+        routeUUID: UUID?,
+        attemptID: String
     ) async throws {
         let workouts = try await managedWorkouts(
             sessionID: payload.sessionID,
@@ -546,6 +638,7 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
               workout.workoutActivityType == activity.healthKitType,
               (workout.metadata?[rawRestoreKey] as? Bool) == true,
               (workout.metadata?[generationKey] as? String) == generation,
+              (workout.metadata?[attemptKey] as? String) == attemptID,
               abs(workout.startDate.timeIntervalSince1970 - payload.startedAt) <= 1,
               abs(workout.endDate.timeIntervalSince1970 - payload.endedAt) <= 1 else {
             throw RepairError.operation(
@@ -560,7 +653,10 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             )
         }
 
-        let generatedSamples = try await generatedQuantitySamples(payload: payload)
+        let generatedSamples = try await generatedQuantitySamples(
+            payload: payload,
+            attemptID: attemptID
+        )
         let expectedMinimum = payload.heartRates.count
             + ((payload.activeEnergyKcal ?? 0) > 0 ? 1 : 0)
             + (distanceIdentifier(for: activity) == nil ? 0 : 1)
@@ -595,7 +691,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             }
             let routeValues = try await routes(for: workout)
             guard let route = routeValues.first(where: { $0.uuid == routeUUID }),
-                  (route.metadata?[generationKey] as? String) == generation else {
+                  (route.metadata?[generationKey] as? String) == generation,
+                  (route.metadata?[attemptKey] as? String) == attemptID else {
                 throw RepairError.operation("route Santé non relue après restauration")
             }
             let locations = try await loadLocations(for: route)
@@ -608,7 +705,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
     }
 
     private func generatedQuantitySamples(
-        payload: TrackerHealthRestorePayload
+        payload: TrackerHealthRestorePayload,
+        attemptID: String
     ) async throws -> [HKSample] {
         let startDate = Date(timeIntervalSince1970: payload.startedAt)
             .addingTimeInterval(-1)
@@ -638,6 +736,7 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 ($0.metadata?[rawRestoreKey] as? Bool) == true
                     && ($0.metadata?[sessionKey] as? String) == payload.sessionID
                     && ($0.metadata?[generationKey] as? String) == generation
+                    && ($0.metadata?[attemptKey] as? String) == attemptID
             })
         }
         return result
@@ -711,6 +810,15 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         }
     }
 
+    private func addMetadata(
+        _ metadata: [String: Any],
+        to builder: HKWorkoutRouteBuilder
+    ) async throws {
+        try await checked {
+            completion in builder.addMetadata(metadata, completion: completion)
+        }
+    }
+
     private func add(_ samples: [HKSample], to builder: HKWorkoutBuilder) async throws {
         try await checked {
             completion in builder.add(samples, completion: completion)
@@ -749,22 +857,6 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                     continuation.resume(throwing: error)
                 } else {
                     continuation.resume(returning: workout)
-                }
-            }
-        }
-    }
-
-    private func finish(
-        _ builder: HKWorkoutRouteBuilder,
-        workout: HKWorkout,
-        metadata: [String: Any]
-    ) async throws -> HKWorkoutRoute? {
-        try await withCheckedThrowingContinuation { continuation in
-            builder.finishRoute(with: workout, metadata: metadata) { route, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: route)
                 }
             }
         }

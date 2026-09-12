@@ -143,10 +143,10 @@ try {
         limit    = $Limit
     }
     if (-not [string]::IsNullOrWhiteSpace($SessionId)) {
-        $Request.session_id = $SessionId
+        $Request['session_id'] = $SessionId
     }
     if (-not [string]::IsNullOrWhiteSpace($Kind)) {
-        $Request.kind = $Kind
+        $Request['kind'] = $Kind
     }
 
     $Writer.WriteLine(($Request | ConvertTo-Json -Compress -Depth 8))

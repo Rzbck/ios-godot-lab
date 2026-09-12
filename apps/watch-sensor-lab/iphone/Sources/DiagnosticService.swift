@@ -105,7 +105,7 @@ final class DiagnosticService {
                     return
                 }
                 self.receiveRequest(on: connection, buffer: Data())
-            case .failed, .cancelled:
+            case .failed(_), .cancelled:
                 break
             default:
                 break
@@ -257,7 +257,7 @@ final class DiagnosticService {
                 data: [
                     "records": recentTelemetry(limit: limit, kind: kind),
                     "limit": limit,
-                    "kind": kind as Any,
+                    "kind": kind.map { $0 as Any } ?? NSNull(),
                 ]
             )
 
@@ -339,10 +339,10 @@ final class DiagnosticService {
                 "iphone_filtered_points": audit.phoneFilteredPoints,
                 "watch_geometry_m": audit.watchGeometryMeters,
                 "iphone_geometry_m": audit.phoneGeometryMeters,
-                "watch_raw_distance_m": audit.watchRawDistanceMeters as Any,
-                "iphone_raw_distance_m": audit.phoneRawDistanceMeters as Any,
-                "distance_reference": audit.distanceReferenceSource as Any,
-                "chosen_source": audit.chosenSource as Any,
+                "watch_raw_distance_m": audit.watchRawDistanceMeters.map { $0 as Any } ?? NSNull(),
+                "iphone_raw_distance_m": audit.phoneRawDistanceMeters.map { $0 as Any } ?? NSNull(),
+                "distance_reference": audit.distanceReferenceSource.map { $0 as Any } ?? NSNull(),
+                "chosen_source": audit.chosenSource.map { $0 as Any } ?? NSNull(),
                 "chosen_points": audit.chosenPoints,
                 "selected_geometry_m": audit.selectedGeometryMeters,
                 "active_gaps_over_3s": audit.activeGapsOver3Seconds,

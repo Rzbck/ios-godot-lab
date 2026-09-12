@@ -42,6 +42,15 @@ enum HistoricalHealthKitFullFidelity {
         return (1...10).contains(value) ? value : nil
     }
 
+    static func setSavedPerceivedEffort(_ value: Int?, sessionID: String) {
+        let key = "tracker.perceivedEffort.\(sessionID)"
+        if let value, (1...10).contains(value) {
+            UserDefaults.standard.set(value, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
     static func requiredQuantityIdentifiers(
         payload: TrackerHealthRestorePayload,
         activity: ActivityKind,
@@ -71,7 +80,6 @@ enum HistoricalHealthKitFullFidelity {
     ) -> [String: Any] {
         let speedUnit = HKUnit.meter().unitDivided(by: .second())
         var metadata: [String: Any] = [
-            HKMetadataKeyWorkoutBrandName: "Watch Tracker",
             HKMetadataKeyIndoorWorkout: payload.locations.count < 2,
             HKMetadataKeyExternalUUID: "watchtracker-historical-\(payload.sessionID)-\(attemptID)",
             "com.rzbck.watchsensorlab.full_fidelity": true,

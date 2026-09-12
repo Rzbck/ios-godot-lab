@@ -110,35 +110,29 @@ final class WatchRecentHistoryStore: ObservableObject {
         }
     }
 
+    /// Local presentation update only. Historical HealthKit mutation is not
+    /// performed from the Watch anymore.
     func applyConfirmedActivity(
         sessionID: String,
         activity: ActivityKind
     ) {
-        guard !sessionID.isEmpty, !activity.isAutomatic else {
-            return
-        }
+        guard !sessionID.isEmpty, !activity.isAutomatic else { return }
 
         DispatchQueue.main.async {
-            guard
-                let index = self.activities.firstIndex(
-                    where: { $0.sessionID == sessionID }
-                )
-            else {
+            guard let index = self.activities.firstIndex(where: { $0.sessionID == sessionID }) else {
                 return
             }
 
             let current = self.activities[index]
-
-            self.activities[index] =
-                WatchRecentActivityDigest(
-                    sessionID: current.sessionID,
-                    activity: activity.rawValue,
-                    startedAt: current.startedAt,
-                    duration: current.duration,
-                    distanceMeters: current.distanceMeters,
-                    activeEnergyKcal: current.activeEnergyKcal,
-                    elevationGainMeters: current.elevationGainMeters
-                )
+            self.activities[index] = WatchRecentActivityDigest(
+                sessionID: current.sessionID,
+                activity: activity.rawValue,
+                startedAt: current.startedAt,
+                duration: current.duration,
+                distanceMeters: current.distanceMeters,
+                activeEnergyKcal: current.activeEnergyKcal,
+                elevationGainMeters: current.elevationGainMeters
+            )
 
             let persisted = WatchRecentHistoryEnvelopeV6(
                 activities: self.activities,
@@ -150,10 +144,7 @@ final class WatchRecentHistoryStore: ObservableObject {
             )
 
             if let encoded = try? JSONEncoder().encode(persisted) {
-                UserDefaults.standard.set(
-                    encoded,
-                    forKey: self.defaultsKey
-                )
+                UserDefaults.standard.set(encoded, forKey: self.defaultsKey)
             }
         }
     }
@@ -259,14 +250,7 @@ struct WatchRecentHistoryView: View {
 }
 
 private struct WatchHistoryActivityPage: View {
-    @EnvironmentObject private var model: SensorModel
-    @ObservedObject private var reconciler =
-        WatchAutoHealthReconciler.shared
-
     let activity: WatchRecentActivityDigest
-
-    @State private var showCorrection = false
-    @State private var correctedActivity: ActivityKind = .other
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -301,42 +285,13 @@ private struct WatchHistoryActivityPage: View {
                 )
             }
 
-            Button {
-                correctedActivity =
-                    activity.activityKind ?? .other
-
-                showCorrection = true
-            } label: {
-                Label(
-                    "Corriger le sport",
-                    systemImage: "pencil.circle.fill"
-                )
-                .font(.caption.weight(.bold))
+            Text("Correction historique : iPhone → Récupération")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-
-            if !reconciler.status.isEmpty {
-                Text(reconciler.status)
-                    .font(.system(size: 8))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
         }
         .padding(.horizontal, 4)
-        .sheet(isPresented: $showCorrection) {
-            WatchHistoricalCorrectionView(
-                sessionID: activity.sessionID,
-                selection: $correctedActivity
-            ) {
-                model.workflowCorrectHistoricalActivity(
-                    sessionID: activity.sessionID,
-                    activity: correctedActivity
-                )
-
-                showCorrection = false
-            }
-        }
     }
 
     private func watchHistoryMetric(_ value: String, _ label: String) -> some View {
@@ -353,55 +308,6 @@ private struct WatchHistoryActivityPage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
         .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-private struct WatchHistoricalCorrectionView: View {
-    let sessionID: String
-    @Binding var selection: ActivityKind
-    let confirm: () -> Void
-
-    private var activities: [ActivityKind] {
-        ActivityKind.allCases.filter {
-            !$0.isAutomatic
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Text("CORRIGER")
-                .font(.caption2.weight(.black))
-                .foregroundStyle(.secondary)
-
-            Picker(
-                "Sport",
-                selection: $selection
-            ) {
-                ForEach(activities) { activity in
-                    Text(activity.label)
-                        .tag(activity)
-                }
-            }
-
-            Button {
-                confirm()
-            } label: {
-                Label(
-                    "Valider",
-                    systemImage:
-                        "checkmark.shield.fill"
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-
-            Text("L’original reste intact tant que le remplacement Santé n’est pas vérifié.")
-                .font(.system(size: 8))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(.horizontal, 4)
     }
 }
 

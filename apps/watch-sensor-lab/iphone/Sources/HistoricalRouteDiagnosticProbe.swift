@@ -7,6 +7,8 @@ import Foundation
 /// counter, and reports the worst windows without deleting, rewriting or interpolating
 /// any coordinate.
 struct HistoricalRouteDiagnosticProbe {
+    static let pathExcessDiagnosticKey = "path_excess_m"
+
     struct Window: Equatable {
         let source: String
         let startTimestamp: TimeInterval

@@ -14,10 +14,11 @@ import SwiftUI
 /// - Tracker summary distance is compared independently with Watch/iPhone raw counters;
 /// - one incomplete secondary counter never invalidates a matching primary counter;
 /// - the source whose counter agrees with the summary is primary;
-/// - the secondary GPS source may only fill ACTIVE gaps in the primary route;
-/// - impossible spikes and accuracy-scale zigzags are removed without inventing points;
-/// - reconstruction stays blocked if the final route is still geometrically or
-///   temporally incoherent.
+/// - the secondary GPS source may only fill ACTIVE gaps that already exist in the raw primary stream;
+/// - counter-guided filtering may remove only local accuracy-scale wobble and must not create >3s gaps;
+/// - real capture holes are preserved: no coordinate is fabricated or interpolated;
+/// - route geometry and temporal continuity remain explicit quality diagnostics, while an
+///   authoritative matching raw distance counter remains the write gate for workout distance.
 @MainActor
 final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
     static let shared = HistoricalHealthKitRepairV4Coordinator()
@@ -49,8 +50,6 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 && normalWorkoutCount == 0
                 && chosenPoints >= 2
                 && !distanceConflict
-                && !routeGeometryConflict
-                && !routeContinuityConflict
         }
     }
 
@@ -151,15 +150,12 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                         "Aucun compteur raw fiable ne confirme la distance du résumé · aucune écriture Santé."
                 } else if choice.selected == nil {
                     statusBySession[sessionID] = "Aucune route GPS sûre après analyse Watch + iPhone."
-                } else if geometryConflict {
-                    statusBySession[sessionID] =
-                        "Route GPS encore incohérente avec la distance Tracker · aucune écriture Santé."
-                } else if continuityConflict {
-                    statusBySession[sessionID] =
-                        "Route GPS encore trop trouée pendant une phase active · aucune écriture Santé."
                 } else if let selected = choice.selected {
+                    let warning = (geometryConflict || continuityConflict)
+                        ? " · avertissement qualité route conservé (non bloquant, aucun point inventé)"
+                        : ""
                     statusBySession[sessionID] =
-                        "Diagnostic prêt · route \(selected.source), \(selected.points.count) points · aucune écriture Santé."
+                        "Diagnostic prêt · route \(selected.source), \(selected.points.count) points\(warning) · aucune écriture Santé."
                 }
             } catch {
                 statusBySession[sessionID] = "Diagnostic échoué · \(error.localizedDescription)"
@@ -269,19 +265,6 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 )
                 guard let selectedRoute = choice.selected, selectedRoute.points.count >= 2 else {
                     throw V4Error.operation("aucune route GPS sûre après filtrage")
-                }
-                guard !hasRouteGeometryConflict(
-                    summaryMeters: summary.distanceMeters,
-                    route: selectedRoute
-                ) else {
-                    throw V4Error.operation(
-                        "géométrie route/distance Tracker incohérente ; reconstruction bloquée"
-                    )
-                }
-                guard !hasRouteContinuityConflict(selectedRoute) else {
-                    throw V4Error.operation(
-                        "route GPS trop trouée pendant une phase active ; reconstruction bloquée"
-                    )
                 }
 
                 try await requestRepairAuthorization(
@@ -513,19 +496,24 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
 
         let primary: CleanRoute
         let secondary: CleanRoute
+        let primaryRawPoints: [RawPoint]
         if watchTrusted && !phoneTrusted {
             primary = watch
             secondary = phone
+            primaryRawPoints = raw.watch
         } else if phoneTrusted && !watchTrusted {
             primary = phone
             secondary = watch
+            primaryRawPoints = raw.phone
         } else if routeScore(watch, summaryMeters: summaryDistanceMeters)
                     <= routeScore(phone, summaryMeters: summaryDistanceMeters) {
             primary = watch
             secondary = phone
+            primaryRawPoints = raw.watch
         } else {
             primary = phone
             secondary = watch
+            primaryRawPoints = raw.phone
         }
 
         guard primary.points.count >= 2 else {
@@ -536,6 +524,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         let merged = mergeActiveGaps(
             primary: primary,
             secondary: secondary,
+            primaryRawPoints: primaryRawPoints,
             pauses: raw.pauses,
             activity: activity
         )
@@ -614,70 +603,84 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         return route
     }
 
-    /// Uses the cumulative raw distance only as a noise discriminator. It never
-    /// rewrites the distance or coordinates. This is useful for the trusted Watch
-    /// stream where a stationary GPS wobble can otherwise add hundreds of metres.
+    /// Uses the cumulative raw distance only as a local noise discriminator. It never
+    /// rewrites distance or coordinates, and it never skips a point when that would
+    /// create a filter-induced gap longer than three seconds. Comparisons are made
+    /// against immediate raw neighbours, not the last accepted point, so removals do
+    /// not cascade into artificial holes.
     private func counterAwareFilter(_ points: [RawPoint]) -> [RawPoint] {
-        guard points.count >= 3 else { return points }
-        var accepted: [RawPoint] = [points[0]]
+        let ordered = deduplicate(points)
+        guard ordered.count >= 3 else { return ordered }
+        var accepted: [RawPoint] = [ordered[0]]
 
-        for point in points.dropFirst() {
-            guard let last = accepted.last else {
-                accepted.append(point)
-                continue
-            }
-            let deltaTime = point.timestamp - last.timestamp
-            guard deltaTime > 0 else { continue }
-
-            guard let previousDistance = last.cumulativeDistanceMeters,
-                  let currentDistance = point.cumulativeDistanceMeters,
-                  currentDistance >= previousDistance else {
-                accepted.append(point)
+        for index in 1..<(ordered.count - 1) {
+            let previousRaw = ordered[index - 1]
+            let current = ordered[index]
+            let nextRaw = ordered[index + 1]
+            guard let lastAccepted = accepted.last else {
+                accepted.append(current)
                 continue
             }
 
-            let rawDelta = currentDistance - previousDistance
-            let geometryDelta = distance(last, point)
-            let accuracyBudget = min(
-                40,
-                max(8, last.horizontalAccuracy + point.horizontalAccuracy)
+            // Never let this local noise filter manufacture a >3s hole.
+            if nextRaw.timestamp - lastAccepted.timestamp > 3.0 {
+                accepted.append(current)
+                continue
+            }
+
+            guard let previousDistance = previousRaw.cumulativeDistanceMeters,
+                  let currentDistance = current.cumulativeDistanceMeters,
+                  let nextDistance = nextRaw.cumulativeDistanceMeters,
+                  currentDistance >= previousDistance,
+                  nextDistance >= currentDistance else {
+                accepted.append(current)
+                continue
+            }
+
+            let counterAdvance = nextDistance - previousDistance
+            let before = distance(previousRaw, current) + distance(current, nextRaw)
+            let bridge = distance(previousRaw, nextRaw)
+            let detour = before - bridge
+            let deviation = perpendicularDeviation(current, from: previousRaw, to: nextRaw)
+            let noiseEnvelope = min(
+                30,
+                max(6, current.horizontalAccuracy * 1.5)
             )
 
-            if deltaTime <= 10,
-               geometryDelta > rawDelta * 2.5 + accuracyBudget {
+            // Only remove a local accuracy-scale wobble while the authoritative
+            // counter barely advances across the same immediate triplet.
+            if nextRaw.timestamp - previousRaw.timestamp <= 3.0,
+               counterAdvance < 1.5,
+               detour > 0.25,
+               deviation <= noiseEnvelope {
                 continue
             }
 
-            // If the authoritative distance did not meaningfully advance, do not
-            // keep a sub-3.5-second location whose movement is inside GPS accuracy.
-            if deltaTime <= 3.5,
-               rawDelta < 0.75,
-               geometryDelta <= accuracyBudget {
-                continue
-            }
-
-            accepted.append(point)
+            accepted.append(current)
         }
 
-        if let last = points.last,
+        if let last = ordered.last,
            accepted.last?.timestamp != last.timestamp {
             accepted.append(last)
         }
         return deduplicate(accepted)
     }
 
-    /// Fill only ACTIVE holes in the primary route with already-sanitized points
-    /// from the secondary device. A secondary point is accepted only when the
-    /// chain remains kinematically plausible at both ends.
+    /// Fill only ACTIVE holes that already exist in the raw primary stream. A gap
+    /// created by filtering is deliberately left to the primary route instead of
+    /// being backfilled from the secondary device. A secondary point is accepted only
+    /// when the chain remains kinematically plausible at both ends.
     private func mergeActiveGaps(
         primary: CleanRoute,
         secondary: CleanRoute,
+        primaryRawPoints: [RawPoint],
         pauses: [TrackerHealthRestorePause],
         activity: ActivityKind
     ) -> CleanRoute {
         guard primary.points.count >= 2, secondary.points.count >= 2 else { return primary }
         let speedLimit = maximumPlausibleSpeed(activity) * 1.15
         let primaryPoints = primary.points.sorted { $0.timestamp < $1.timestamp }
+        let rawPrimary = deduplicate(primaryRawPoints)
         let secondaryPoints = secondary.points.sorted { $0.timestamp < $1.timestamp }
         var merged: [RawPoint] = []
         var inserted = 0
@@ -692,6 +695,15 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             let gap = end.timestamp - start.timestamp
             guard gap > 3,
                   !intervalOverlapsPause(start.timestamp, end.timestamp, pauses: pauses) else {
+                continue
+            }
+
+            // Only fill a hole that was already absent from the raw primary stream.
+            // If raw primary points exist inside this interval, the hole was created
+            // by our filtering and must not be replaced with a second sensor source.
+            guard !rawPrimary.contains(where: {
+                $0.timestamp > start.timestamp && $0.timestamp < end.timestamp
+            }) else {
                 continue
             }
 
@@ -734,9 +746,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         )
     }
 
-    /// Reduce only accuracy-scale zigzags until active route geometry is close to
-    /// the authoritative Tracker distance. A point is removable only if bridging
-    /// its neighbours stays within a short time gap and plausible sport speed.
+    /// Reduce only accuracy-scale zigzags. A point is removable only if bridging
+    /// its neighbours stays within three seconds and plausible sport speed, so this
+    /// simplifier cannot create a new >3s active gap. Reaching the Tracker distance
+    /// is a best-effort quality goal, not a reason to invent or over-delete GPS data.
     private func denoiseForDistance(
         route: CleanRoute,
         targetDistanceMeters: Double,
@@ -760,7 +773,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 let point = points[index]
                 let next = points[index + 1]
 
-                guard next.timestamp - previous.timestamp <= 4.25,
+                guard next.timestamp - previous.timestamp <= 3.0,
                       !intervalOverlapsPause(previous.timestamp, next.timestamp, pauses: pauses),
                       impliedSpeed(previous, next) <= speedLimit else {
                     continue
@@ -870,20 +883,19 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
     ) -> Bool {
         guard summaryMeters > 100 else { return false }
 
-        // One authoritative match is enough. A secondary counter can be partial
-        // (as observed on the incident: Watch 2.80 km, iPhone 0.11 km) and must
-        // not veto the matching source.
+        // A matching authoritative counter is mandatory. A secondary counter can be
+        // partial (as observed on the incident: Watch 2.80 km, iPhone 0.11 km) and
+        // must not veto the matching source, but absence of any match blocks writes.
         if counterAgrees(summaryMeters: summaryMeters, rawMeters: watchRawMeters)
             || counterAgrees(summaryMeters: summaryMeters, rawMeters: phoneRawMeters) {
             return false
         }
-
-        let usable = [watchRawMeters, phoneRawMeters]
-            .compactMap { $0 }
-            .filter { $0 > 100 }
-        return !usable.isEmpty
+        return true
     }
 
+    /// Diagnostic only. HealthKit route geometry is not used as the workout-distance
+    /// authority; the matching raw Tracker counter is. This warning stays visible so
+    /// GPS quality regressions remain observable without fabricating coordinates.
     private func hasRouteGeometryConflict(
         summaryMeters: Double,
         route: CleanRoute?
@@ -893,6 +905,9 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         return abs(route.geometryMeters - summaryMeters) > tolerance
     }
 
+    /// Diagnostic only. A real capture hole is preserved instead of interpolated.
+    /// It remains visible in audit/telemetry but does not invalidate a route whose
+    /// distance is independently confirmed by an authoritative raw counter.
     private func hasRouteContinuityConflict(_ route: CleanRoute?) -> Bool {
         guard let route else { return false }
         return route.maxActiveGapSeconds > 20
@@ -1047,7 +1062,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 "com.rzbck.watchsensorlab.route_filtered_point_count": route.points.count,
                 "com.rzbck.watchsensorlab.route_geometry_m": route.geometryMeters,
                 "com.rzbck.watchsensorlab.route_filter_strategy":
-                    "primary_counter_secondary_gap_fill_accuracy_denoise",
+                    "trusted_counter_conservative_filter_true_raw_gap_fill_no_interpolation",
             ]
             for (key, value) in HistoricalHealthKitFullFidelity.workoutMetadata(
                 summary: summary,
@@ -1768,8 +1783,11 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 limit: HKObjectQueryNoLimit,
                 sortDescriptors: nil
             ) { _, samples, error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume(returning: samples ?? []) }
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: samples ?? [])
+                }
             }
             healthStore.execute(query)
         }
@@ -2000,12 +2018,12 @@ private struct HistoricalRepairV4Card: View {
                             .foregroundStyle(.red)
                     }
                     if audit.routeGeometryConflict {
-                        Text("GÉOMÉTRIE ROUTE INCOHÉRENTE · écriture bloquée")
-                            .foregroundStyle(.red)
+                        Text("QUALITÉ ROUTE · géométrie GPS ≠ distance Tracker · diagnostic non bloquant")
+                            .foregroundStyle(.yellow)
                     }
                     if audit.routeContinuityConflict {
-                        Text("TROU GPS ACTIF TROP LONG · écriture bloquée")
-                            .foregroundStyle(.red)
+                        Text("QUALITÉ ROUTE · trou GPS réel conservé · aucun point inventé · diagnostic non bloquant")
+                            .foregroundStyle(.yellow)
                     }
                 }
                 .font(.caption2.monospacedDigit())
@@ -2125,7 +2143,7 @@ private struct HistoricalRepairV4Card: View {
             Button("Annuler", role: .cancel) {}
         } message: {
             Text(
-                "La reconstruction reste bloquée tant qu’une ancienne restauration ou une incohérence de distance/route existe."
+                "La reconstruction exige une distance raw confirmée et zéro restauration existante. Les trous GPS réels restent visibles et ne sont jamais interpolés."
             )
         }
     }

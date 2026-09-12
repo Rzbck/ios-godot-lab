@@ -16,6 +16,7 @@ watch_model = (
     root / "watch/Sources/SensorModel.swift"
 ).read_text(encoding="utf-8")
 
+
 def ui_source(folder: Path) -> str:
     parts = []
 
@@ -29,11 +30,17 @@ def ui_source(folder: Path) -> str:
 
     return "\n".join(parts)
 
+
 iphone_ui = ui_source(root / "iphone/Sources")
 watch_ui = ui_source(root / "watch/Sources")
 
 errors = []
 
+# Cross-device parity is intentionally limited to the LIVE workout workflow.
+# Historical HealthKit mutation is no longer a shared iPhone/Watch capability:
+# it has one active product surface on iPhone only. The legacy protocol member
+# may remain temporarily while the migration is hardware-validated, but no UI
+# is required (or allowed by CHECK_PRODUCT_INVARIANTS.py) to expose it.
 required_capabilities = [
     "activitySelection",
     "start",
@@ -43,7 +50,6 @@ required_capabilities = [
     "finishReview",
     "finishDisposition",
     "purge",
-    "historicalActivityCorrection",
 ]
 
 for capability in required_capabilities:
@@ -83,7 +89,6 @@ required_ui_tokens = [
     "workflowResume",
     "workflowFinish",
     "workflowFinishReview",
-    "workflowCorrectHistoricalActivity",
 ]
 
 for token in required_ui_tokens:
@@ -142,7 +147,9 @@ if errors:
     sys.exit(1)
 
 print("TRACKER WORKFLOW PARITY: OK")
-print("Shared capabilities:")
+print("Shared LIVE capabilities:")
 
 for capability in required_capabilities:
     print(f" - {capability}")
+
+print("Historical HealthKit mutation: iPhone-only product surface")

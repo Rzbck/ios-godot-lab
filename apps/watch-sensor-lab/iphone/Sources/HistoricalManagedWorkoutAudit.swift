@@ -41,6 +41,11 @@ final class HistoricalManagedWorkoutAudit: ObservableObject {
         guard !isLoading else { return }
         isLoading = true
         status = "Audit HealthKit lecture seule…"
+        AppTelemetry.shared.action(
+            "healthkit_managed_workout_audit_refresh",
+            screen: "recovery",
+            fields: ["summary_count": summaries.count]
+        )
 
         Task {
             defer { isLoading = false }
@@ -53,8 +58,40 @@ final class HistoricalManagedWorkoutAudit: ObservableObject {
                 status = records.isEmpty
                     ? "Aucun workout Tracker non-restauration détecté."
                     : "\(records.count) workout(s) Tracker non-restauration détecté(s) par HealthKit."
+
+                AppTelemetry.shared.snapshot(
+                    "healthkit_managed_workout_audit",
+                    screen: "recovery",
+                    fields: [
+                        "count": records.count,
+                        "status": status,
+                        "records": records.map { record in
+                            [
+                                "session_id": record.sessionID,
+                                "uuid": record.id.uuidString,
+                                "activity_label": record.activityLabel,
+                                "activity_hk_raw": record.activityRawValue,
+                                "start": record.startDate,
+                                "end": record.endDate,
+                                "duration_s": record.duration,
+                                "source_bundle": record.sourceBundle,
+                                "source_version": record.sourceVersion ?? "none",
+                                "selected_activity": record.selectedActivity ?? "none",
+                                "healthkit_initial_activity": record.initialHealthActivity ?? "none",
+                                "algorithm_version": record.algorithmVersion ?? "none",
+                                "historical_generation": record.generation ?? "none",
+                                "raw_restoration": record.rawRestoration,
+                            ] as [String: Any]
+                        },
+                    ]
+                )
             } catch {
                 status = "Audit HealthKit échoué · \(error.localizedDescription)"
+                AppTelemetry.shared.error(
+                    "healthkit_managed_workout_audit_failed",
+                    screen: "recovery",
+                    error: error
+                )
             }
         }
     }
@@ -129,6 +166,11 @@ struct HistoricalRecoveryDiagnosticHostView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Button {
                         expanded.toggle()
+                        AppTelemetry.shared.action(
+                            "healthkit_managed_workout_audit_toggle",
+                            screen: "recovery",
+                            fields: ["expanded": expanded, "count": audit.records.count]
+                        )
                     } label: {
                         HStack {
                             Label(
@@ -169,6 +211,7 @@ struct HistoricalRecoveryDiagnosticHostView: View {
             HistoricalHealthKitRepairV4View()
         }
         .task {
+            AppTelemetry.shared.event("screen_appeared", screen: "recovery")
             audit.refresh(summaries: store.listSummaries())
         }
     }

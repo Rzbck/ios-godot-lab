@@ -149,7 +149,7 @@ struct HistoricalRecoveryDiagnosticHostView: View {
                                 Text("UUID \(record.id.uuidString)")
                                 Text("Type \(record.activityLabel) · HK \(record.activityRawValue)")
                                 Text(
-                                    "Début \(record.startDate.formatted(.iso8601)) · durée \(String(format: \"%.1f\", record.duration)) s"
+                                    "Début \(record.startDate.formatted(date: .numeric, time: .standard)) · durée \(String(format: \"%.1f\", record.duration)) s"
                                 )
                                 Text("Source \(record.sourceBundle) · version \(record.sourceVersion ?? "—")")
                                 Text("selected_activity \(record.selectedActivity ?? "—")")

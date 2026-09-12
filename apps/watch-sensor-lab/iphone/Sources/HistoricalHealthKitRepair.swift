@@ -198,23 +198,21 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         // Write authorization is checkable and mandatory for every type we save.
         for type in shareTypes {
             let status = healthStore.authorizationStatus(for: type)
-            guard status == .sharingAuthorized else {
-                switch status {
-                case .notDetermined:
-                    throw RepairError.operation(
-                        "autorisation d’écriture Santé non déterminée pour \(type.identifier)"
-                    )
-                case .sharingDenied:
-                    throw RepairError.operation(
-                        "écriture Santé refusée pour \(type.identifier)"
-                    )
-                case .sharingAuthorized:
-                    break
-                @unknown default:
-                    throw RepairError.operation(
-                        "autorisation Santé inconnue pour \(type.identifier)"
-                    )
-                }
+            switch status {
+            case .sharingAuthorized:
+                continue
+            case .notDetermined:
+                throw RepairError.operation(
+                    "autorisation d’écriture Santé non déterminée pour \(type.identifier)"
+                )
+            case .sharingDenied:
+                throw RepairError.operation(
+                    "écriture Santé refusée pour \(type.identifier)"
+                )
+            @unknown default:
+                throw RepairError.operation(
+                    "autorisation Santé inconnue pour \(type.identifier)"
+                )
             }
         }
     }

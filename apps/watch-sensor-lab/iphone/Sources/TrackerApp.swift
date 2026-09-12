@@ -86,7 +86,7 @@ private struct TrackerRootView: View {
                 .tag(TrackerAppSection.history)
                 .tabItem { Label("Historique", systemImage: "clock.arrow.circlepath") }
 
-            HistoricalHealthKitRepairV4View()
+            HistoricalRecoveryDiagnosticHostView()
                 .tag(TrackerAppSection.recovery)
                 .tabItem { Label("Récupération", systemImage: "arrow.clockwise.heart.fill") }
         }

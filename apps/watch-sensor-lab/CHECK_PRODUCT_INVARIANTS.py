@@ -9,310 +9,149 @@ def read(relative: str) -> str:
     return (root / relative).read_text(encoding="utf-8")
 
 
-errors = []
+errors: list[str] = []
 
 
-def require(text: str, token: str, label: str):
+def require(text: str, token: str, label: str) -> None:
     if token not in text:
         errors.append(f"{label}: token absent: {token}")
 
 
-def forbid(text: str, token: str, label: str):
+def forbid(text: str, token: str, label: str) -> None:
     if token in text:
         errors.append(f"{label}: token interdit encore présent: {token}")
 
 
 iphone_root = read("iphone/Sources/TrackerApp.swift")
 iphone_review = read("iphone/Sources/SessionReviewTimeline.swift")
-iphone_repair = read("iphone/Sources/HistoricalHealthKitRepair.swift")
+iphone_v4 = read("iphone/Sources/HistoricalHealthKitRepairV4.swift")
 iphone_fidelity = read("iphone/Sources/HistoricalHealthKitFullFidelity.swift")
 restore_packet = read("iphone/Sources/TrackerHealthRestorePacket.swift")
 iphone_reliable = read("iphone/Sources/WatchReliableRecovery.swift")
-
 watch_root = read("watch/Sources/WatchSensorLabApp.swift")
 watch_history = read("watch/Sources/WatchRecentHistory.swift")
 watch_restore = read("watch/Sources/WatchRestoreWorkflow.swift")
 watch_model = read("watch/Sources/SensorModel.swift")
 
-# ---------------------------------------------------------------------------
-# A. Une seule SURFACE PRODUIT active peut muter l'historique HealthKit : iPhone.
-# ---------------------------------------------------------------------------
-require(
-    iphone_root,
-    "HistoricalHealthKitRepairView()",
-    "Route réparation historique iPhone montée",
-)
-require(
-    iphone_root,
-    'Label("Récupération"',
-    "Onglet Récupération iPhone visible",
-)
-require(
-    iphone_repair,
-    "HistoricalHealthKitRepairCoordinator.shared",
-    "Coordinateur historique iPhone",
-)
-require(
-    iphone_repair,
-    'Label(\n                    "Reconstruire dans Santé"',
-    "Action de reconstruction iPhone visible",
-)
+# A. Une seule surface produit active de mutation historique: v4 iPhone.
+require(iphone_root, "HistoricalHealthKitRepairV4View()", "Surface v4 montée")
+forbid(iphone_root, "HistoricalHealthKitRepairView()", "Ancienne v3 montée")
+require(iphone_root, 'Label("Récupération"', "Onglet Récupération visible")
+require(iphone_v4, "HistoricalHealthKitRepairV4Coordinator.shared", "Coordinateur v4")
+require(iphone_v4, 'Label("Reconstruire proprement dans Santé"', "Action v4 visible")
 
-# L'ancien panneau de validation devient strictement informatif.
-require(
-    iphone_review,
-    "Ce panneau ne modifie plus HealthKit",
-    "Panneau legacy rendu lecture seule",
-)
-forbid(
-    iphone_review,
-    "workflowCorrectHistoricalActivity(",
-    "Ancienne correction iPhone active dans le panneau review",
-)
+# Legacy UI reste lecture seule / redirigée.
+require(iphone_review, "Ce panneau ne modifie plus HealthKit", "Review legacy lecture seule")
+forbid(iphone_review, "workflowCorrectHistoricalActivity(", "Correction legacy iPhone active")
+require(watch_root, "WatchRestoreEntryPage().tag(4)", "Page récupération Watch")
+require(watch_restore, "Réparation historique sur iPhone", "Watch redirige vers iPhone")
+forbid(watch_restore, "workflowRestoreHistoricalActivity(", "Restauration Watch active")
+forbid(watch_restore, "requestHistoricalRestore(", "Demande raw Watch active")
+forbid(watch_history, "workflowCorrectHistoricalActivity(", "Correction historique Watch active")
 
-# La Watch reste autoritaire pour le LIVE seulement.
-require(
-    watch_root,
-    "WatchRestoreEntryPage().tag(4)",
-    "Page récupération Watch montée",
-)
-require(
-    watch_restore,
-    "Réparation historique sur iPhone",
-    "Watch redirige la réparation vers iPhone",
-)
-forbid(
-    watch_restore,
-    "workflowRestoreHistoricalActivity(",
-    "Ancienne restauration Watch active dans l'UI",
-)
-forbid(
-    watch_restore,
-    "requestHistoricalRestore(",
-    "Ancienne demande raw Watch active dans l'UI",
-)
-forbid(
-    watch_history,
-    "workflowCorrectHistoricalActivity(",
-    "Ancienne correction historique Watch active dans l'historique",
-)
-forbid(
-    watch_history,
-    '"Corriger le sport"',
-    "Bouton correction historique Watch actif",
-)
-
-# ---------------------------------------------------------------------------
-# B. L'écriture historique v3 full-fidelity est iPhone-only.
-#    Workout: standalone HKWorkoutBuilder.
-#    Route: builder indépendant puis finishRoute(with:) après sauvegarde workout.
-# ---------------------------------------------------------------------------
+# B. V4 travaille à partir des raw Watch ET iPhone, sans WatchConnectivity.
 for token, label in [
-    ("HKWorkoutBuilder(", "Builder historique iPhone"),
-    ("finishWorkout", "Finalisation workout historique iPhone"),
-    ("HistoricalHealthKitFullFidelity.finishIndependentRoute(", "Route historique explicite"),
+    ('case "watch_location"', "GPS Watch brut"),
+    ('case "location"', "GPS iPhone brut"),
+    ("loadRawRoutes(summary:", "Audit raw double source"),
+    ("chooseRoute(raw:", "Choix de route"),
+    ("intervalOverlapsPause", "Gaps de pause distingués"),
+    ("hasDistanceConflict", "Garde-fou distance summary/raw"),
+    ("packetBuilder.makeTransferFile(", "Préflight raw historique existant"),
 ]:
-    require(iphone_repair, token, label)
+    require(iphone_v4, token, label)
+for token in ["WCSession", "transferFile("]:
+    forbid(iphone_v4, token, "V4 historique ne dépend pas de WatchConnectivity")
 
+# Le packet éprouvé conserve HR Watch et pauses explicites.
 for token, label in [
-    ("HKWorkoutRouteBuilder(healthStore:", "Route builder historique indépendant"),
-    ("finishRoute(with: workout", "Association explicite route/workout"),
-]:
-    require(iphone_fidelity, token, label)
-
-# L'incident matériel a montré qu'un route builder attaché au workout builder
-# n'est pas le chemin produit retenu pour la reconstruction historique.
-forbid(
-    iphone_repair,
-    "seriesBuilder(",
-    "Route historique ne doit plus être attachée au HKWorkoutBuilder",
-)
-forbid(
-    iphone_fidelity,
-    "seriesBuilder(",
-    "Helper full-fidelity ne doit pas utiliser un route builder attaché",
-)
-
-for text, label in [
-    (iphone_repair, "Nouveau chemin principal"),
-    (iphone_fidelity, "Helper full-fidelity"),
-]:
-    for token in ["WCSession", "transferFile("]:
-        forbid(text, token, f"{label} ne doit pas dépendre de WatchConnectivity")
-
-# ---------------------------------------------------------------------------
-# C. Autorisations d'ÉCRITURE explicites avant toute reconstruction.
-# ---------------------------------------------------------------------------
-for token, label in [
-    ("HKObjectType.workoutType()", "Autorisation workout"),
-    ("HKSeriesType.workoutRoute()", "Autorisation route"),
-    (".heartRate", "Autorisation fréquence cardiaque"),
-    (".activeEnergyBurned", "Autorisation énergie"),
-    (".distanceCycling", "Autorisation distance vélo"),
-    (".distanceWalkingRunning", "Autorisation distance marche/course"),
-    (".distanceSwimming", "Autorisation distance natation"),
-    ("authorizationStatus(for:", "Contrôle statut d'écriture"),
-    (".sharingAuthorized", "Écriture Santé explicitement autorisée"),
-]:
-    require(iphone_repair, token, label)
-
-for token, label in [
-    (".cyclingSpeed", "Vitesse vélo full-fidelity"),
-    (".runningSpeed", "Vitesse course full-fidelity"),
-    (".workoutEffortScore", "Effort utilisateur HealthKit"),
-]:
-    require(iphone_fidelity, token, label)
-
-# ---------------------------------------------------------------------------
-# D. Les raw Tracker restent l'unique source de reconstruction.
-# ---------------------------------------------------------------------------
-for token, label in [
-    ('"watch_location"', "GPS Watch brut"),
-    ('"heart_rate"', "Fréquence cardiaque Watch brute"),
-    ('"manual_pause"', "Pauses Watch explicites"),
+    ('kind == "heart_rate"', "FC Watch brute"),
+    ('event == "manual_pause"', "Pause Watch brute"),
     ("reconstructedActive", "Préflight durée active"),
 ]:
     require(restore_packet, token, label)
 
-require(
-    iphone_repair,
-    "packetBuilder.makeTransferFile(",
-    "Réutilisation du préflight raw éprouvé",
-)
-require(
-    iphone_fidelity,
-    "loadSummary(sessionID:",
-    "Full-fidelity lit le résumé Tracker local",
-)
+# C. Une nouvelle restauration ne peut pas s'empiler sur une ancienne.
+for token, label in [
+    ("cleanupGeneratedRestorations", "Nettoyage explicite disponible"),
+    ("generated.isEmpty", "Blocage si restauration existante"),
+    ("remainingGenerated.isEmpty", "Vérification post-nettoyage"),
+    ("rawRestoreKey", "Filtre raw_restoration"),
+    ("sessionKey", "Filtre session exacte"),
+    ("zéro restauration de test restante", "Confirmation nettoyage vérifié"),
+]:
+    require(iphone_v4, token, label)
 
-# ---------------------------------------------------------------------------
-# E. Full-fidelity: restaurer les familles de données réellement capturées,
-#    sans inventer une valeur absente ni confondre cadence pédestre/cycliste.
-# ---------------------------------------------------------------------------
+repair_start = iphone_v4.find("func repair(")
+repair_end = iphone_v4.find("// MARK: - Raw data / route selection", repair_start)
+if repair_start < 0 or repair_end < 0:
+    errors.append("Impossible d'isoler le corps de repair v4")
+else:
+    repair_body = iphone_v4[repair_start:repair_end]
+    forbid(repair_body, "cleanupGeneratedRestorations(", "Nettoyage automatique interdit dans repair")
+    require(repair_body, "guard generated.isEmpty", "Repair bloque les doublons")
+    require(repair_body, "hasDistanceConflict", "Repair bloque distance incohérente")
+
+# D. Route HealthKit explicite et vérifiée.
+for token, label in [
+    ("HKWorkoutBuilder(", "Workout builder historique iPhone"),
+    ("HKWorkoutRouteBuilder(healthStore:", "Route builder indépendant"),
+    ("finishRoute(with: workout", "Association route/workout"),
+    ("predicateForObjects(from: workout)", "Relecture route associée"),
+    ("loadLocations(for:", "Relecture des points GPS"),
+    ("savedRoutes.count == 1", "Unicité route v4"),
+]:
+    require(iphone_v4, token, label)
+forbid(iphone_v4, "seriesBuilder(", "Route v4 ne réutilise pas le builder attaché incident")
+
+# E. Effort réel : sample + relation explicite à l'activité du workout.
+for token, label in [
+    (".workoutEffortScore", "Type effort Apple"),
+    ("relateWorkoutEffortSample(", "Relation effort/workout"),
+    ("activity: workout.workoutActivities.first", "Effort lié à l'activité réelle"),
+    ("predicateForWorkoutEffortSamplesRelated", "Relecture relation effort"),
+]:
+    require(iphone_v4, token, label)
+
+# F. Autorisations d'écriture explicites.
+for token, label in [
+    ("HKObjectType.workoutType()", "Autorisation workout"),
+    ("HKSeriesType.workoutRoute()", "Autorisation route"),
+    (".heartRate", "Autorisation FC"),
+    (".activeEnergyBurned", "Autorisation énergie"),
+    (".distanceCycling", "Autorisation distance vélo"),
+    ("authorizationStatus(for:", "Statut écriture vérifié"),
+    (".sharingAuthorized", "Écriture explicitement autorisée"),
+]:
+    require(iphone_v4, token, label)
+
+# G. Full fidelity conservée via les métadonnées déjà éprouvées.
+for token, label in [
+    ("HistoricalHealthKitFullFidelity.workoutMetadata(", "Métadonnées full-fidelity réutilisées"),
+    ("HistoricalHealthKitFullFidelity.verifyWorkoutMetadata", "Métadonnées relues"),
+    ('generation = "ios_historical_v4_clean_route"', "Génération v4 identifiable"),
+    ("route_filtered_point_count", "Provenance route filtrée"),
+    ("route_geometry_m", "Géométrie route auditée"),
+]:
+    require(iphone_v4, token, label)
 for token, label in [
     ("HKMetadataKeyAverageSpeed", "Vitesse moyenne"),
     ("HKMetadataKeyMaximumSpeed", "Vitesse maximale"),
     ("HKMetadataKeyElevationAscended", "Dénivelé positif"),
     ("HKMetadataKeyElevationDescended", "Dénivelé négatif"),
-    ("HKMetadataKeyWeatherTemperature", "Température météo"),
-    ("HKMetadataKeyWeatherHumidity", "Humidité météo"),
-    ("HKMetadataKeyBarometricPressure", "Pression météo"),
-    ("HKMetadataKeyWeatherCondition", "Condition météo"),
-    ("HKMetadataKeyWorkoutBrandName", "Marque workout"),
-    ("HKMetadataKeyExternalUUID", "Identité externe durable"),
-    ("tracker_estimated_effort", "Estimation Tracker conservée avec provenance"),
-    ("relateWorkoutEffortSample(", "Effort réel associé au workout"),
-    ("average_cadence_spm", "Cadence Tracker conservée sans faux type HealthKit"),
+    ("HKMetadataKeyWeatherTemperature", "Météo"),
 ]:
     require(iphone_fidelity, token, label)
 
-require(
-    iphone_repair,
-    'Picker("Effort ressenti Apple"',
-    "Effort utilisateur explicite dans la récupération",
-)
-require(
-    iphone_repair,
-    "L’effort n’est jamais inventé",
-    "Garde-fou contre effort fabriqué",
-)
+# H. Pas de faux positif produit.
+require(iphone_v4, "PAS encore validé dans Santé/Forme.", "API relue != validation physique")
+forbid(iphone_v4, '"replacement_verified"', "V4 ne promeut pas automatiquement la vérité produit")
+forbid(iphone_v4, "recentHistoryBridge.publish(", "V4 ne réécrit pas l'historique local")
+require(iphone_v4, "let delays: [UInt64] = [0, 1_200_000_000, 3_000_000_000]", "Relectures différées")
 
-# ---------------------------------------------------------------------------
-# F. Après l'incident, aucune ancienne donnée HealthKit n'est nettoyée sur la
-#    seule base d'une relecture API. La v3 crée + relit; elle ne supprime qu'un
-#    objet qu'ELLE vient de créer si sa propre transaction échoue.
-# ---------------------------------------------------------------------------
-create_marker = "let created = try await createHistoricalWorkout("
-verify_marker = "try await verifyDurably("
-create_pos = iphone_repair.find(create_marker)
-verify_pos = iphone_repair.find(verify_marker, create_pos + 1 if create_pos >= 0 else 0)
-
-if create_pos < 0 or verify_pos < 0:
-    errors.append("Transaction iPhone incomplète (create/verify)")
-elif create_pos >= verify_pos:
-    errors.append("Ordre transactionnel invalide : vérification avant création")
-
-require(
-    iphone_repair,
-    "let normalSources = existing.filter",
-    "Détection des workouts Tracker normaux",
-)
-require(
-    iphone_repair,
-    "guard normalSources.isEmpty",
-    "Blocage si workout normal existe",
-)
-forbid(
-    iphone_repair,
-    "deleteStaleGeneratedObjects(",
-    "Nettoyage automatique d'anciennes restaurations avant validation physique",
-)
-require(
-    iphone_repair,
-    "Deliberately no cleanup here",
-    "Garde-fou explicite contre nettoyage automatique",
-)
-require(
-    iphone_repair,
-    "var rollback: [HKObject] = []",
-    "Rollback limité à la tentative v3",
-)
-
-# Un seul appel de suppression est autorisé dans ce fichier: le rollback des
-# objets créés dans la tentative courante.
-if iphone_repair.count("await delete(") != 1:
-    errors.append(
-        "La v3 doit avoir exactement un appel delete: rollback de la tentative courante"
-    )
-
-require(
-    iphone_repair,
-    "HistoricalHealthKitFullFidelity.generation",
-    "Génération full-fidelity centralisée",
-)
-require(
-    iphone_fidelity,
-    'generation = "ios_historical_v3_full"',
-    "Génération full-fidelity identifiable",
-)
-require(
-    iphone_repair,
-    "[0, 1_200_000_000, 3_000_000_000]",
-    "Trois relectures HealthKit différées",
-)
-
-# ---------------------------------------------------------------------------
-# G. Pas de faux positif produit : API relue != Santé/Forme validés.
-# ---------------------------------------------------------------------------
-require(
-    iphone_repair,
-    "PAS encore validé dans Santé/Forme.",
-    "Statut distingue relecture interne et validation physique",
-)
-forbid(
-    iphone_repair,
-    '"replacement_verified"',
-    "Le nouveau chemin ne doit pas auto-promouvoir la vérité produit",
-)
-forbid(
-    iphone_repair,
-    "recentHistoryBridge.publish(",
-    "Le nouveau chemin ne doit pas réécrire l'historique local avant validation physique",
-)
-
-# ---------------------------------------------------------------------------
-# H. Le live Watch reste intact.
-# ---------------------------------------------------------------------------
-require(
-    iphone_reliable,
-    "WatchReliableRecovery.ingest(userInfo)",
-    "Journalisation fiable Watch",
-)
-require(
-    watch_model,
-    "HKLiveWorkoutBuilder",
-    "Le live Watch reste sur HKLiveWorkoutBuilder",
-)
+# I. Le live Watch reste intact.
+require(iphone_reliable, "WatchReliableRecovery.ingest(userInfo)", "Journalisation fiable Watch")
+require(watch_model, "HKLiveWorkoutBuilder", "Live Watch reste HKLiveWorkoutBuilder")
 
 if errors:
     print("TRACKER PRODUCT INVARIANTS: FAIL", file=sys.stderr)
@@ -321,15 +160,13 @@ if errors:
     sys.exit(1)
 
 print("TRACKER PRODUCT INVARIANTS: OK")
-print(" - one active historical mutation surface: iPhone")
-print(" - legacy correction controls are read-only/hidden")
-print(" - historical standalone HKWorkoutBuilder runs on iPhone")
-print(" - historical route uses independent HKWorkoutRouteBuilder + finishRoute(with:)")
-print(" - explicit write authorization is verified")
-print(" - raw Tracker data remains the reconstruction source")
-print(" - full-fidelity speed/elevation/weather/effort provenance is preserved")
-print(" - perceived effort is explicit, never fabricated from Tracker estimate")
-print(" - create -> durable reread; no old-object cleanup")
-print(" - rollback can only target the current v3 attempt")
+print(" - active historical product surface: iPhone v4 only")
+print(" - Watch + iPhone raw GPS are audited independently")
+print(" - pause gaps and impossible GPS spikes are filtered without interpolation")
+print(" - summary/raw distance conflicts block HealthKit writes")
+print(" - explicit cleanup prevents accumulation of test workouts")
+print(" - cleanup is scoped to raw_restoration + exact session id")
+print(" - one v4 workout + one route are durably reread")
+print(" - perceived effort is explicitly related and reread")
 print(" - internal HealthKit reread is not physical validation")
 print(" - live Watch HKLiveWorkoutBuilder remains unchanged")

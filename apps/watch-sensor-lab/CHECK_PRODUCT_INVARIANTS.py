@@ -2,513 +2,282 @@
 from pathlib import Path
 import sys
 
-# Device artifact request: raw restore UI + end-to-end invariants passed CI.
 root = Path(__file__).resolve().parent
+
 
 def read(relative: str) -> str:
     return (root / relative).read_text(encoding="utf-8")
 
+
 errors = []
+
 
 def require(text: str, token: str, label: str):
     if token not in text:
         errors.append(f"{label}: token absent: {token}")
 
+
+def forbid(text: str, token: str, label: str):
+    if token in text:
+        errors.append(f"{label}: token interdit encore présent: {token}")
+
+
 iphone_root = read("iphone/Sources/TrackerApp.swift")
 iphone_history = read("iphone/Sources/HealthWorkoutHistory.swift")
 iphone_review = read("iphone/Sources/SessionReviewTimeline.swift")
-iphone_model = read("iphone/Sources/TrackerModel.swift")
-iphone_reliable = read("iphone/Sources/WatchReliableRecovery.swift")
-iphone_restore = read("iphone/Sources/TrackerRestoreRecovery.swift")
+iphone_repair = read("iphone/Sources/HistoricalHealthKitRepair.swift")
 restore_packet = read("iphone/Sources/TrackerHealthRestorePacket.swift")
-phone_bridge = read("iphone/Sources/PhoneRecentHistoryBridge.swift")
+iphone_reliable = read("iphone/Sources/WatchReliableRecovery.swift")
 
 watch_root = read("watch/Sources/WatchSensorLabApp.swift")
 watch_history = read("watch/Sources/WatchRecentHistory.swift")
 watch_restore = read("watch/Sources/WatchRestoreWorkflow.swift")
 watch_model = read("watch/Sources/SensorModel.swift")
-reconciler = read("watch/Sources/WatchAutoHealthReconciler.swift")
 
-# ------------------------------------------------------------
-# A. Les surfaces doivent être RÉELLEMENT montées.
-# ------------------------------------------------------------
-
+# ---------------------------------------------------------------------------
+# A. Une seule surface active peut MUTER l'historique HealthKit : iPhone.
+# ---------------------------------------------------------------------------
 require(
     iphone_root,
-    "HistoryEntryView()",
-    "Route iPhone historique"
+    "HistoricalHealthKitRepairView()",
+    "Route réparation historique iPhone montée",
 )
-
-require(
-    iphone_history,
-    "HealthWorkoutHistoryView()",
-    "Entrée historique iPhone"
-)
-
-require(
-    iphone_history,
-    "ActivityReviewCard(",
-    "Correction historique dans la fiche iPhone active"
-)
-
-require(
-    iphone_review,
-    "tracker.workflowCorrectHistoricalActivity(",
-    "Action correction iPhone"
-)
-
-require(
-    watch_root,
-    "WatchVisualRecentPage(showHistory: $showHistory)",
-    "Route Watch récentes"
-)
-
-require(
-    watch_root,
-    "WatchRecentHistoryView()",
-    "Historique Watch monté"
-)
-
-require(
-    watch_history,
-    "model.workflowCorrectHistoricalActivity(",
-    "Action correction Watch"
-)
-
-# La restauration est la fonction critique de l'incident 2026-09-11.
-# Elle doit être réellement atteignable sur LES DEUX appareils.
-require(
-    iphone_root,
-    "TrackerRestoreRecoveryView()",
-    "Route restauration iPhone montée"
-)
-
 require(
     iphone_root,
     'Label("Récupération"',
-    "Onglet restauration iPhone visible"
+    "Onglet Récupération iPhone visible",
 )
-
 require(
-    iphone_restore,
-    "TrackerRestoreCandidateCard",
-    "Carte restauration iPhone présente"
+    iphone_repair,
+    "HistoricalHealthKitRepairCoordinator.shared",
+    "Coordinateur unique historique iPhone",
 )
-
 require(
-    iphone_restore,
-    '"Restaurer dans Santé"',
-    "Action restauration iPhone visible"
+    iphone_repair,
+    'Label("Reconstruire dans Santé"',
+    "Action de reconstruction iPhone visible",
 )
 
+# L'ancien panneau de validation peut rester visible comme information, mais il
+# ne doit plus déclencher le backend Watch historique.
 require(
-    iphone_restore,
-    "tracker.workflowRestoreHistoricalActivity(",
-    "UI restauration iPhone appelle le workflow"
+    iphone_review,
+    "Ce panneau ne modifie plus HealthKit",
+    "Panneau legacy rendu lecture seule",
+)
+forbid(
+    iphone_review,
+    "workflowCorrectHistoricalActivity(",
+    "Ancienne correction iPhone active",
 )
 
-require(
-    iphone_restore,
-    "restoreHistoricalActivityFromRaw(",
-    "Workflow restauration iPhone appelle le backend raw"
-)
-
+# La Watch reste autoritaire pour le LIVE seulement. Les surfaces historiques
+# Watch doivent être informatives et ne plus envoyer de mutation HealthKit.
 require(
     watch_root,
     "WatchRestoreEntryPage().tag(4)",
-    "Route restauration Watch montée"
+    "Page récupération Watch montée",
 )
-
 require(
     watch_restore,
-    'Text("RÉCUPÉRATION")',
-    "Page restauration Watch visible"
+    "Réparation historique sur iPhone",
+    "Watch redirige la réparation vers iPhone",
 )
-
-require(
+forbid(
     watch_restore,
-    '"Restaurer depuis Tracker"',
-    "Action restauration Watch visible"
+    "workflowRestoreHistoricalActivity(",
+    "Ancienne restauration Watch active",
 )
-
-require(
-    watch_restore,
-    "model.workflowRestoreHistoricalActivity(",
-    "UI restauration Watch appelle le workflow"
-)
-
-require(
+forbid(
     watch_restore,
     "requestHistoricalRestore(",
-    "Workflow restauration Watch demande les raw à l'iPhone"
+    "Ancienne demande raw Watch active",
 )
-
-# ------------------------------------------------------------
-# B. Une correction confirmée doit converger sur les 2 devices.
-# ------------------------------------------------------------
-
-require(
+forbid(
     watch_history,
-    "func applyConfirmedActivity(",
-    "Mise à jour locale Watch après correction"
+    "workflowCorrectHistoricalActivity(",
+    "Ancienne correction historique Watch active",
+)
+forbid(
+    watch_history,
+    '"Corriger le sport"',
+    "Bouton correction historique Watch actif",
 )
 
+# ---------------------------------------------------------------------------
+# B. L'écriture historique doit utiliser HKWorkoutBuilder SUR IPHONE.
+#    Aucun transfert vers la Watch ne fait partie du nouveau chemin.
+# ---------------------------------------------------------------------------
 require(
-    reconciler,
-    "WatchRecentHistoryStore.shared",
-    "Reconciler -> historique Watch"
+    iphone_repair,
+    "HKWorkoutBuilder(",
+    "Builder historique iPhone",
 )
-
 require(
-    iphone_model,
-    "recentHistoryBridge.publish(",
-    "iPhone republie après résultat Watch"
+    iphone_repair,
+    "HKWorkoutRouteBuilder",
+    "Route builder historique iPhone",
 )
-
 require(
-    phone_bridge,
-    "healthBySession",
-    "Digest Watch utilise aussi la vérité HealthKit"
+    iphone_repair,
+    "finishWorkout",
+    "Finalisation workout historique iPhone",
+)
+forbid(
+    iphone_repair,
+    "WCSession",
+    "Le nouveau chemin historique ne doit pas dépendre de WatchConnectivity",
+)
+forbid(
+    iphone_repair,
+    "transferFile(",
+    "Le nouveau chemin historique ne doit pas transférer les raw à la Watch",
 )
 
-require(
-    iphone_model,
-    '"replacement_verified"',
-    "Persistance correction iPhone"
-)
-
-# ------------------------------------------------------------
-# C. Transaction HealthKit :
-#    créer -> relire/vérifier -> seulement ensuite supprimer.
-# ------------------------------------------------------------
-
-marker = "private func repairHistoricalActivityTransaction("
-start = reconciler.find(marker)
-
-if start < 0:
-    errors.append("Transaction correction HealthKit absente")
-else:
-    tx = reconciler[start:]
-
-    create = tx.find(
-        "createHistoricalCorrectionWorkout("
-    )
-
-    verify = tx.find(
-        "let verifiedWorkouts"
-    )
-
-    delete_original = tx.find(
-        "try await deleteObjects(sourceWorkouts)"
-    )
-
-    rollback = tx.find(
-        "try? await deleteObjects(replacementObjects)"
-    )
-
-    if min(create, verify, delete_original, rollback) < 0:
-        errors.append(
-            "Transaction HealthKit incomplète "
-            "(create/verify/delete/rollback)"
-        )
-    elif not (
-        create < verify < delete_original
-    ):
-        errors.append(
-            "Ordre transactionnel invalide : "
-            "la suppression précède la vérification"
-        )
-
-# ------------------------------------------------------------
-# D. Les deux appareils doivent appeler le workflow COMMUN
-#    pour la correction historique.
-# ------------------------------------------------------------
-
-for text, name in [
-    (iphone_review, "iPhone"),
-    (watch_history, "Watch"),
+# ---------------------------------------------------------------------------
+# C. Autorisations d'ÉCRITURE explicites avant toute reconstruction.
+# ---------------------------------------------------------------------------
+for token, label in [
+    ("HKObjectType.workoutType()", "Autorisation workout"),
+    ("HKSeriesType.workoutRoute()", "Autorisation route"),
+    (".heartRate", "Autorisation fréquence cardiaque"),
+    (".activeEnergyBurned", "Autorisation énergie"),
+    (".distanceCycling", "Autorisation distance vélo"),
+    (".distanceWalkingRunning", "Autorisation distance marche/course"),
+    (".distanceSwimming", "Autorisation distance natation"),
+    ("authorizationStatus(for:", "Contrôle statut d'écriture"),
+    (".sharingAuthorized", "Écriture Santé explicitement autorisée"),
 ]:
-    require(
-        text,
-        "workflowCorrectHistoricalActivity",
-        f"Workflow commun {name}"
-    )
+    require(iphone_repair, token, label)
 
-# ------------------------------------------------------------
-# E. Incident 2026-09-11 :
-#    une demande utilisateur n'est PAS une vérité HealthKit.
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# D. Raw Tracker reste la source de reconstruction.
+# ---------------------------------------------------------------------------
+for token, label in [
+    ('"watch_location"', "GPS Watch brut"),
+    ('"heart_rate"', "Fréquence cardiaque Watch brute"),
+    ('"manual_pause"', "Pauses Watch explicites"),
+    ("reconstructedActive", "Préflight durée active"),
+]:
+    require(restore_packet, token, label)
 
 require(
-    phone_bridge,
-    'healthKitSyncState == "replacement_verified"',
-    "Digest Watch refuse replacement_requested"
+    iphone_repair,
+    "packetBuilder.makeTransferFile(",
+    "Réutilisation du préflight raw éprouvé",
 )
 
+# ---------------------------------------------------------------------------
+# E. Transaction : créer -> relire durablement -> seulement ensuite nettoyer
+#    les ANCIENNES RESTAURATIONS GÉNÉRÉES. Jamais un workout normal.
+# ---------------------------------------------------------------------------
+repair_marker = "let created = try await createHistoricalWorkout("
+verify_marker = "try await verifyDurably("
+delete_marker = "try await deleteStaleGeneratedObjects("
+
+create_pos = iphone_repair.find(repair_marker)
+verify_pos = iphone_repair.find(verify_marker, create_pos + 1 if create_pos >= 0 else 0)
+delete_pos = iphone_repair.find(delete_marker, verify_pos + 1 if verify_pos >= 0 else 0)
+
+if min(create_pos, verify_pos, delete_pos) < 0:
+    errors.append("Transaction iPhone incomplète (create/verify/delete)")
+elif not (create_pos < verify_pos < delete_pos):
+    errors.append("Ordre transactionnel invalide : nettoyage avant vérification")
+
 require(
-    iphone_review,
-    'review.healthKitSyncState == "replacement_verified"',
-    "ActivityReviewStore refuse une correction non vérifiée"
+    iphone_repair,
+    "let nonRestoreSources = existing.filter",
+    "Préservation des workouts Tracker normaux",
+)
+require(
+    iphone_repair,
+    "guard nonRestoreSources.isEmpty",
+    "Blocage si workout normal existe",
+)
+require(
+    iphone_repair,
+    "staleWorkouts.allSatisfy",
+    "Suppression limitée aux objets raw générés",
+)
+require(
+    iphone_repair,
+    "rawRestoreKey",
+    "Traçabilité restauration raw",
+)
+require(
+    iphone_repair,
+    'generation = "ios_historical_v2"',
+    "Génération iPhone identifiable",
+)
+require(
+    iphone_repair,
+    "rollback",
+    "Rollback du workout nouvellement créé",
 )
 
+# Trois relectures espacées protègent contre un callback de création trop tôt.
 require(
-    reconciler,
-    "cloneQuantitySamples(",
-    "Replacement HealthKit clone les quantity samples"
+    iphone_repair,
+    "[0, 1_200_000_000, 3_000_000_000]",
+    "Relectures HealthKit différées",
 )
 
+# ---------------------------------------------------------------------------
+# F. Pas de faux positif produit : une relecture API n'est pas encore une
+#    validation Santé/Forme physique. L'ancien état replacement_verified ne
+#    doit jamais être écrit par le nouveau coordinateur.
+# ---------------------------------------------------------------------------
 require(
-    reconciler,
-    '"com.rzbck.watchsensorlab.reconstructed_sample"',
-    "Samples reconstruits traçables"
+    iphone_repair,
+    "HealthKit écrit et relu sur iPhone · vérifie maintenant Santé puis Forme.",
+    "Statut produit distingue relecture et validation physique",
 )
-
-require(
-    reconciler,
-    "var shareTypes: Set<HKSampleType>",
-    "Autorisation écriture quantity samples"
+forbid(
+    iphone_repair,
+    '"replacement_verified"',
+    "Le nouveau chemin ne doit pas auto-promouvoir la vérité produit",
 )
-
-# ------------------------------------------------------------
-# F. Une validation AVANT suppression ne suffit pas.
-#    Il faut une seconde relecture APRES suppression.
-# ------------------------------------------------------------
-
-if start >= 0:
-    tx = reconciler[start:]
-
-    delete_original = tx.find(
-        "try await deleteObjects(sourceWorkouts)"
-    )
-
-    post_delete = tx.find(
-        "var postDeleteWorkouts"
-    )
-
-    durable_samples = tx.find(
-        "let postDeleteSamples"
-    )
-
-    if min(
-        delete_original,
-        post_delete,
-        durable_samples,
-    ) < 0:
-        errors.append(
-            "Transaction HealthKit sans vérification finale "
-            "post-suppression"
-        )
-    elif not (
-        delete_original
-        < post_delete
-        < durable_samples
-    ):
-        errors.append(
-            "Ordre invalide de la relecture finale HealthKit"
-        )
-
-require(
-    reconciler,
-    "let postDeleteAutoWorkouts",
-    "Réconciliation Auto relue après suppression"
-)
-
-require(
-    iphone_model,
-    '"replacement_failed_source_missing"',
-    "Échec distingue source absente et original conservé"
-)
-
-require(
-    iphone_model,
+forbid(
+    iphone_repair,
     "recentHistoryBridge.publish(",
-    "Échec republie la vérité vers Watch"
+    "Le nouveau chemin ne doit pas modifier l'historique local avant validation physique",
 )
 
-# ------------------------------------------------------------
-# G. Restauration raw Tracker -> HealthKit.
-# ------------------------------------------------------------
-
-require(
-    restore_packet,
-    '"watch_location"',
-    "Restauration privilégie le GPS Watch"
-)
-
-require(
-    restore_packet,
-    '"heart_rate"',
-    "Restauration conserve la fréquence cardiaque"
-)
-
-require(
-    restore_packet,
-    '"manual_pause"',
-    "Restauration utilise les pauses Watch explicites"
-)
-
-require(
-    restore_packet,
-    "reconstructedActive",
-    "Restauration vérifie la durée active avant transfert"
-)
-
-require(
-    iphone_model,
-    "session.transferFile(",
-    "iPhone transfère la restauration comme fichier"
-)
-
+# ---------------------------------------------------------------------------
+# G. Les événements Watch fiables du live restent inchangés.
+# ---------------------------------------------------------------------------
 require(
     iphone_reliable,
     "didReceiveUserInfo",
-    "iPhone reçoit les événements Watch durables"
+    "Réception fiable Watch",
 )
-
 require(
     iphone_reliable,
     "WatchReliableRecovery.ingest(userInfo)",
-    "Événement Watch durable journalisé"
+    "Journalisation fiable Watch",
 )
 
-require(
-    iphone_reliable,
-    "receiveWC(userInfo)",
-    "Événement Watch durable injecté dans le modèle produit"
-)
-
-if (
-    iphone_model + iphone_reliable
-).count("didReceiveUserInfo") != 1:
-    errors.append(
-        "iPhone doit avoir exactement un récepteur "
-        "WCSession didReceiveUserInfo"
-    )
-
+# Le vieux backend peut encore exister pendant la migration, mais aucune UI
+# active ne doit pouvoir l'atteindre. Il sera supprimé après validation physique
+# du nouveau chemin iPhone.
 require(
     watch_model,
-    "didReceive file: WCSessionFile",
-    "Watch reçoit le paquet de restauration"
-)
-
-require(
-    reconciler,
-    "restoreHistoricalActivityTransaction(",
-    "Transaction restauration raw présente"
-)
-
-require(
-    reconciler,
-    "verifyRawRestoration(",
-    "Restauration relue dans HealthKit"
-)
-
-require(
-    reconciler,
-    "700_000_000",
-    "Restauration possède une seconde relecture différée"
-)
-
-restore_marker = (
-    "private func restoreHistoricalActivityTransaction("
-)
-
-restore_start = reconciler.find(restore_marker)
-
-if restore_start < 0:
-    errors.append(
-        "Transaction restauration raw absente"
-    )
-else:
-    restore_tx = reconciler[restore_start:]
-
-    next_marker = restore_tx.find(
-        "private func makeRawRestoreSamples("
-    )
-
-    if next_marker >= 0:
-        restore_tx = restore_tx[:next_marker]
-
-    if "deleteObjects(sourceWorkouts)" in restore_tx:
-        errors.append(
-            "Restauration raw ne doit jamais supprimer "
-            "un workout source"
-        )
-
-    if "deleteObjects(existing)" in restore_tx:
-        errors.append(
-            "Restauration raw ne doit jamais supprimer "
-            "un workout existant"
-        )
-
-    compact_restore_tx = "".join(restore_tx.split())
-
-    if "deleteObjects(createdObjects)" not in compact_restore_tx:
-        errors.append(
-            "Restauration raw sans rollback des objets créés"
-        )
-
-# ------------------------------------------------------------
-# H. Le chemin de restauration doit rester cohérent de bout en bout.
-# ------------------------------------------------------------
-
-iphone_restore_compact = "".join(iphone_restore.split())
-watch_restore_compact = "".join(watch_restore.split())
-watch_model_compact = "".join(watch_model.split())
-iphone_model_compact = "".join(iphone_model.split())
-
-require(
-    iphone_restore_compact,
-    "tracker.workflowRestoreHistoricalActivity(",
-    "Chaîne restauration iPhone UI -> workflow"
-)
-
-require(
-    iphone_restore_compact,
-    "restoreHistoricalActivityFromRaw(",
-    "Chaîne restauration iPhone workflow -> raw"
-)
-
-require(
-    watch_restore_compact,
-    "model.workflowRestoreHistoricalActivity(",
-    "Chaîne restauration Watch UI -> workflow"
-)
-
-require(
-    watch_restore_compact,
-    "requestHistoricalRestore(",
-    "Chaîne restauration Watch workflow -> iPhone"
-)
-
-require(
-    watch_model_compact,
-    'request.command="restore_historical_activity"',
-    "Commande restauration Watch -> iPhone"
-)
-
-require(
-    iphone_model_compact,
-    'message.command=="restore_historical_activity"',
-    "Commande restauration reçue par iPhone"
+    "HKLiveWorkoutBuilder",
+    "Le live Watch reste sur HKLiveWorkoutBuilder",
 )
 
 if errors:
-    print(
-        "TRACKER PRODUCT INVARIANTS: FAIL",
-        file=sys.stderr
-    )
-
+    print("TRACKER PRODUCT INVARIANTS: FAIL", file=sys.stderr)
     for error in errors:
         print(f" - {error}", file=sys.stderr)
-
     sys.exit(1)
 
 print("TRACKER PRODUCT INVARIANTS: OK")
-print(" - mounted iPhone historical correction")
-print(" - mounted Watch historical correction")
-print(" - cross-device correction convergence")
-print(" - HealthKit create/verify/delete ordering")
-print(" - mounted iPhone raw HealthKit restoration")
-print(" - mounted Watch raw HealthKit restoration")
-print(" - end-to-end raw restore command path")
+print(" - single active historical HealthKit mutation surface: iPhone")
+print(" - Watch historical mutation UI disabled")
+print(" - iPhone HKWorkoutBuilder + route reconstruction")
+print(" - explicit write authorization checks")
+print(" - create/verify-before-cleanup ordering")
+print(" - normal Tracker workout deletion blocked")
+print(" - no automatic replacement_verified promotion")
+print(" - live Watch HKLiveWorkoutBuilder preserved")

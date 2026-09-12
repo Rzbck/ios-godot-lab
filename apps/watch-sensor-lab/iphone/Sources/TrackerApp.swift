@@ -101,6 +101,10 @@ private struct TrackerRootView: View {
             .onAppear {
                 telemetry.start(tracker: tracker)
                 telemetry.setScreen(selection.telemetryName)
+                DiagnosticService.shared.start(tracker: tracker)
+            }
+            .onDisappear {
+                DiagnosticService.shared.stop()
             }
             .task {
                 WatchReliableRecovery.refreshAllAvailableSummaries()
@@ -108,6 +112,11 @@ private struct TrackerRootView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 telemetry.scenePhaseChanged(String(describing: phase))
+                if phase == .active {
+                    DiagnosticService.shared.start(tracker: tracker)
+                } else {
+                    DiagnosticService.shared.stop()
+                }
             }
             .onChange(of: selection) { previous, current in
                 telemetry.setScreen(

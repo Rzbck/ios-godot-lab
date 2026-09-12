@@ -29,6 +29,8 @@ iphone_hk_audit = read("iphone/Sources/HistoricalManagedWorkoutAudit.swift")
 iphone_fidelity = read("iphone/Sources/HistoricalHealthKitFullFidelity.swift")
 restore_packet = read("iphone/Sources/TrackerHealthRestorePacket.swift")
 iphone_reliable = read("iphone/Sources/WatchReliableRecovery.swift")
+diagnostic_api = read("iphone/Sources/DiagnosticService.swift")
+diagnostic_client = read("WSL.ps1")
 watch_root = read("watch/Sources/WatchSensorLabApp.swift")
 watch_history = read("watch/Sources/WatchRecentHistory.swift")
 watch_restore = read("watch/Sources/WatchRestoreWorkflow.swift")
@@ -222,6 +224,48 @@ require(
 require(iphone_reliable, "WatchReliableRecovery.ingest(userInfo)", "Journalisation fiable Watch")
 require(watch_model, "HKLiveWorkoutBuilder", "Live Watch reste HKLiveWorkoutBuilder")
 
+# K. API diagnostic USB locale: un seul client Windows, lecture seule, aucune
+# mutation HealthKit distante. L'API est démarrée uniquement avec le shell produit
+# et arrêtée quand l'app quitte le premier plan.
+for token, label in [
+    ("DiagnosticService.shared.start(tracker: tracker)", "API diagnostic démarrée avec TrackerModel"),
+    ("DiagnosticService.shared.stop()", "API diagnostic arrêtée hors premier plan"),
+]:
+    require(iphone_root, token, label)
+
+for token, label in [
+    ('protocolName = "wsl_diag_v1"', "Version de protocole diagnostic"),
+    ("devicePort: UInt16 = 37991", "Port device diagnostic stable"),
+    ('case "status"', "Endpoint status"),
+    ('case "recovery"', "Endpoint recovery"),
+    ('case "errors"', "Endpoint erreurs"),
+    ('case "logs"', "Endpoint logs"),
+    ("recovery.inspect(sessionID: sessionID)", "Recovery distante réutilise inspection lecture seule"),
+    ("isDisallowedNetworkPath", "Clients Wi-Fi/cellulaire refusés"),
+    ("recentTelemetry", "Logs locaux bornés exposés à la demande"),
+    ('"read_only": true', "Contrat API explicitement lecture seule"),
+]:
+    require(diagnostic_api, token, label)
+
+for token in [
+    "cleanupGeneratedRestorations(",
+    "repair(",
+    "healthStore.delete(",
+    "healthStore.save(",
+    "HKWorkoutBuilder(",
+    "HKWorkoutRouteBuilder(",
+]:
+    forbid(diagnostic_api, token, "API diagnostic ne doit contenir aucune mutation HealthKit")
+
+for token, label in [
+    ("pymobiledevice3", "Client Windows réutilise pymobiledevice3 existant"),
+    ("usbmux", "Transport client USB/usbmux"),
+    ("wsl_diag_v1", "Client et app partagent le protocole versionné"),
+    ("Get-FreeTcpPort", "Forward host utilise un port temporaire sans conflit"),
+    ("finally", "Forward usbmux toujours nettoyé"),
+]:
+    require(diagnostic_client, token, label)
+
 if errors:
     print("TRACKER PRODUCT INVARIANTS: FAIL", file=sys.stderr)
     for error in errors:
@@ -245,3 +289,5 @@ print(" - one v4 workout + one route + quantities are durably reread")
 print(" - perceived effort is explicitly related and reread")
 print(" - internal HealthKit reread is not physical validation")
 print(" - live Watch HKLiveWorkoutBuilder remains unchanged")
+print(" - read-only diagnostic API is lifecycle-bound and rejects Wi-Fi/cellular clients")
+print(" - WSL.ps1 provides one-shot USB status/recovery/errors/logs commands")

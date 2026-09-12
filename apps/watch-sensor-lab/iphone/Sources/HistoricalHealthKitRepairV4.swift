@@ -14,11 +14,13 @@ import SwiftUI
 /// - Tracker summary distance is compared independently with Watch/iPhone raw counters;
 /// - one incomplete secondary counter never invalidates a matching primary counter;
 /// - the source whose counter agrees with the summary is primary;
+/// - trusted cumulative distance rejects isolated stale-coordinate excursions, even across long gaps;
 /// - the secondary GPS source may only fill ACTIVE gaps that already exist in the raw primary stream;
-/// - counter-guided filtering may remove only local accuracy-scale wobble and must not create >3s gaps;
+/// - a secondary gap fill must also fit the authoritative primary counter distance budget;
+/// - counter-guided local denoising must not create >3s gaps;
 /// - real capture holes are preserved: no coordinate is fabricated or interpolated;
-/// - route geometry and temporal continuity remain explicit quality diagnostics, while an
-///   authoritative matching raw distance counter remains the write gate for workout distance.
+/// - ordinary geometry/continuity warnings stay diagnostic, but a gross route-distance excess
+///   blocks HealthKit writes so an obvious out-and-back detour cannot be promoted to Fitness.
 @MainActor
 final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
     static let shared = HistoricalHealthKitRepairV4Coordinator()
@@ -44,12 +46,20 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         let distanceConflict: Bool
         let routeGeometryConflict: Bool
         let routeContinuityConflict: Bool
+        let severeRouteCounterConflict: Bool
+        let generatedWorkoutActivityTypeRawValue: Int?
+        let generatedTargetActivity: String?
+        let generatedWorkoutBrandName: String?
+        let generatedEffortScore: Double?
+        let generatedEffortSampleCount: Int
+        let savedPerceivedEffort: Int?
 
         var canReconstruct: Bool {
             generatedWorkoutCount == 0
                 && normalWorkoutCount == 0
                 && chosenPoints >= 2
                 && !distanceConflict
+                && !severeRouteCounterConflict
         }
     }
 
@@ -110,11 +120,29 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                     route: choice.selected
                 )
                 let continuityConflict = hasRouteContinuityConflict(choice.selected)
+                let severeCounterConflict = hasSevereRouteCounterConflict(
+                    summaryMeters: summary.distanceMeters,
+                    route: choice.selected
+                )
                 let distanceReference = distanceReferenceSource(
                     summaryMeters: summary.distanceMeters,
                     watchRawMeters: raw.watchRawDistanceMeters,
                     phoneRawMeters: raw.phoneRawDistanceMeters
                 )
+
+                let generatedWorkout = generated.first
+                var generatedEffortScore: Double?
+                var generatedEffortSampleCount = 0
+                if #available(iOS 18.0, *), let generatedWorkout {
+                    let samples = try await effortSamples(for: generatedWorkout)
+                        .compactMap { $0 as? HKQuantitySample }
+                    generatedEffortSampleCount = samples.count
+                    let attemptID = generatedWorkout.metadata?[attemptKey] as? String
+                    let matching = samples.first {
+                        attemptID == nil || ($0.metadata?[attemptKey] as? String) == attemptID
+                    }
+                    generatedEffortScore = matching?.quantity.doubleValue(for: .appleEffortScore())
+                }
 
                 auditBySession[sessionID] = Audit(
                     summaryDistanceMeters: summary.distanceMeters,
@@ -136,7 +164,18 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                     normalWorkoutCount: normal.count,
                     distanceConflict: conflict,
                     routeGeometryConflict: geometryConflict,
-                    routeContinuityConflict: continuityConflict
+                    routeContinuityConflict: continuityConflict,
+                    severeRouteCounterConflict: severeCounterConflict,
+                    generatedWorkoutActivityTypeRawValue: generatedWorkout.map {
+                        Int($0.workoutActivityType.rawValue)
+                    },
+                    generatedTargetActivity: generatedWorkout?.metadata?[correctionTargetKey] as? String,
+                    generatedWorkoutBrandName: generatedWorkout?.metadata?[HKMetadataKeyWorkoutBrandName] as? String,
+                    generatedEffortScore: generatedEffortScore,
+                    generatedEffortSampleCount: generatedEffortSampleCount,
+                    savedPerceivedEffort: HistoricalHealthKitFullFidelity.savedPerceivedEffort(
+                        sessionID: sessionID
+                    )
                 )
 
                 if !normal.isEmpty {
@@ -148,6 +187,9 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 } else if conflict {
                     statusBySession[sessionID] =
                         "Aucun compteur raw fiable ne confirme la distance du résumé · aucune écriture Santé."
+                } else if severeCounterConflict {
+                    statusBySession[sessionID] =
+                        "Route GPS contient encore un détour incompatible avec le compteur Tracker · écriture bloquée."
                 } else if choice.selected == nil {
                     statusBySession[sessionID] = "Aucune route GPS sûre après analyse Watch + iPhone."
                 } else if let selected = choice.selected {
@@ -265,6 +307,14 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 )
                 guard let selectedRoute = choice.selected, selectedRoute.points.count >= 2 else {
                     throw V4Error.operation("aucune route GPS sûre après filtrage")
+                }
+                guard !hasSevereRouteCounterConflict(
+                    summaryMeters: summary.distanceMeters,
+                    route: selectedRoute
+                ) else {
+                    throw V4Error.operation(
+                        "route GPS contient encore un détour incompatible avec le compteur Tracker"
+                    )
                 }
 
                 try await requestRepairAuthorization(
@@ -552,6 +602,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         let speedLimit = maximumPlausibleSpeed(activity)
         var values = deduplicate(points).filter { !isPaused($0.timestamp, pauses: pauses) }
 
+        if targetDistanceMeters != nil {
+            values = counterIsolatedOutlierFilter(values, pauses: pauses)
+        }
+
         // Remove isolated impossible spikes. Only raw points are discarded; no
         // interpolated coordinate is ever fabricated.
         var didChange = true
@@ -601,6 +655,59 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             )
         }
         return route
+    }
+
+    /// Remove an isolated stale coordinate when the trusted cumulative distance proves
+    /// both legs through that point impossible while the direct neighbour bridge fits.
+    /// This is allowed across a long time gap because the counter, not elapsed time,
+    /// is the evidence. No replacement coordinate is fabricated.
+    private func counterIsolatedOutlierFilter(
+        _ points: [RawPoint],
+        pauses: [TrackerHealthRestorePause]
+    ) -> [RawPoint] {
+        var values = deduplicate(points)
+        guard values.count >= 3 else { return values }
+
+        var didChange = true
+        while didChange, values.count >= 3 {
+            didChange = false
+            var nextValues: [RawPoint] = [values[0]]
+            for index in 1..<(values.count - 1) {
+                let previous = nextValues.last ?? values[index - 1]
+                let current = values[index]
+                let next = values[index + 1]
+
+                if !intervalOverlapsPause(previous.timestamp, next.timestamp, pauses: pauses),
+                   !counterLegIsConsistent(previous, current),
+                   !counterLegIsConsistent(current, next),
+                   counterLegIsConsistent(previous, next) {
+                    didChange = true
+                    continue
+                }
+                nextValues.append(current)
+            }
+            if let last = values.last { nextValues.append(last) }
+            values = deduplicate(nextValues)
+        }
+        return values
+    }
+
+    /// A straight-line displacement cannot legitimately exceed the cumulative sport
+    /// distance over the same interval by a large margin. Accuracy allowance covers
+    /// normal GPS noise and minor timestamp skew without legitimising stale excursions.
+    private func counterLegIsConsistent(_ start: RawPoint, _ end: RawPoint) -> Bool {
+        guard let startDistance = start.cumulativeDistanceMeters,
+              let endDistance = end.cumulativeDistanceMeters,
+              endDistance >= startDistance else {
+            return true
+        }
+        let counterAdvance = endDistance - startDistance
+        let accuracyBudget = min(
+            80,
+            max(12, start.horizontalAccuracy + end.horizontalAccuracy)
+        )
+        let allowedGeometry = counterAdvance * 1.20 + accuracyBudget
+        return distance(start, end) <= allowedGeometry
     }
 
     /// Uses the cumulative raw distance only as a local noise discriminator. It never
@@ -669,7 +776,8 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
     /// Fill only ACTIVE holes that already exist in the raw primary stream. A gap
     /// created by filtering is deliberately left to the primary route instead of
     /// being backfilled from the secondary device. A secondary point is accepted only
-    /// when the chain remains kinematically plausible at both ends.
+    /// when the chain remains kinematically plausible at both ends and its total
+    /// geometry fits the trusted primary cumulative-distance budget for that gap.
     private func mergeActiveGaps(
         primary: CleanRoute,
         secondary: CleanRoute,
@@ -728,7 +836,8 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 bridge.removeLast()
             }
             guard let last = bridge.last,
-                  impliedSpeed(last, end) <= speedLimit else {
+                  impliedSpeed(last, end) <= speedLimit,
+                  bridgeFitsPrimaryCounter(start: start, bridge: bridge, end: end) else {
                 continue
             }
             merged.append(contentsOf: bridge)
@@ -744,6 +853,30 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
             points: deduplicate(merged),
             pauses: pauses
         )
+    }
+
+    private func bridgeFitsPrimaryCounter(
+        start: RawPoint,
+        bridge: [RawPoint],
+        end: RawPoint
+    ) -> Bool {
+        guard let startDistance = start.cumulativeDistanceMeters,
+              let endDistance = end.cumulativeDistanceMeters,
+              endDistance >= startDistance else {
+            return true
+        }
+
+        let counterAdvance = endDistance - startDistance
+        let chain = [start] + bridge + [end]
+        let geometry = zip(chain, chain.dropFirst()).reduce(0.0) {
+            $0 + distance($1.0, $1.1)
+        }
+        let maxAccuracy = chain.map(\.horizontalAccuracy).max() ?? 0
+        let accuracyBudget = min(
+            120,
+            max(25, start.horizontalAccuracy + end.horizontalAccuracy + maxAccuracy)
+        )
+        return geometry <= counterAdvance * 1.25 + accuracyBudget
     }
 
     /// Reduce only accuracy-scale zigzags. A point is removable only if bridging
@@ -893,9 +1026,8 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         return true
     }
 
-    /// Diagnostic only. HealthKit route geometry is not used as the workout-distance
-    /// authority; the matching raw Tracker counter is. This warning stays visible so
-    /// GPS quality regressions remain observable without fabricating coordinates.
+    /// Diagnostic warning. HealthKit route geometry is not the workout-distance
+    /// authority; the matching raw Tracker counter is. Moderate mismatch stays visible.
     private func hasRouteGeometryConflict(
         summaryMeters: Double,
         route: CleanRoute?
@@ -903,6 +1035,19 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         guard summaryMeters > 100, let route, route.geometryMeters > 0 else { return false }
         let tolerance = max(220, summaryMeters * 0.15)
         return abs(route.geometryMeters - summaryMeters) > tolerance
+    }
+
+    /// Safety gate for the failure observed in Fitness: an old/stale coordinate can
+    /// create a large out-and-back detour while the total workout counter remains
+    /// correct. Only a large positive excess is blocking; a short route caused by
+    /// honest missing GPS remains allowed and is reported by continuity diagnostics.
+    private func hasSevereRouteCounterConflict(
+        summaryMeters: Double,
+        route: CleanRoute?
+    ) -> Bool {
+        guard summaryMeters > 100, let route, route.geometryMeters > 0 else { return false }
+        let toleratedExcess = max(350, summaryMeters * 0.20)
+        return route.geometryMeters - summaryMeters > toleratedExcess
     }
 
     /// Diagnostic only. A real capture hole is preserved instead of interpolated.
@@ -1062,7 +1207,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 "com.rzbck.watchsensorlab.route_filtered_point_count": route.points.count,
                 "com.rzbck.watchsensorlab.route_geometry_m": route.geometryMeters,
                 "com.rzbck.watchsensorlab.route_filter_strategy":
-                    "trusted_counter_conservative_filter_true_raw_gap_fill_no_interpolation",
+                    "trusted_counter_outlier_rejection_counter_bounded_true_raw_gap_fill_no_interpolation",
             ]
             for (key, value) in HistoricalHealthKitFullFidelity.workoutMetadata(
                 summary: summary,
@@ -2013,12 +2158,30 @@ private struct HistoricalRepairV4Card: View {
                         "Gaps actifs >3s : \(audit.activeGapsOver3Seconds) · max \(String(format: "%.1f", audit.maxActiveGapSeconds))s"
                     )
                     Text("Restaurations HealthKit : \(audit.generatedWorkoutCount)")
+                    if let rawType = audit.generatedWorkoutActivityTypeRawValue {
+                        Text("Type HK restauration : \(rawType) · cible \(audit.generatedTargetActivity ?? "inconnue")")
+                    }
+                    if let brand = audit.generatedWorkoutBrandName {
+                        Text("Brand HK restauration : \(brand)")
+                    }
+                    if let score = audit.generatedEffortScore {
+                        Text(String(format: "Effort Apple relié : %.0f / 10 (%d sample)", score, audit.generatedEffortSampleCount))
+                    } else if audit.generatedWorkoutCount > 0 {
+                        Text("Effort Apple relié : absent (\(audit.generatedEffortSampleCount) sample)")
+                    }
+                    if let saved = audit.savedPerceivedEffort {
+                        Text("Effort choisi mémorisé : \(saved) / 10")
+                    }
                     if audit.distanceConflict {
                         Text("DISTANCE SUMMARY/RAW NON CONFIRMÉE · écriture bloquée")
                             .foregroundStyle(.red)
                     }
+                    if audit.severeRouteCounterConflict {
+                        Text("ROUTE/COMPTEUR INCOHÉRENTS · détour GPS important · écriture bloquée")
+                            .foregroundStyle(.red)
+                    }
                     if audit.routeGeometryConflict {
-                        Text("QUALITÉ ROUTE · géométrie GPS ≠ distance Tracker · diagnostic non bloquant")
+                        Text("QUALITÉ ROUTE · géométrie GPS ≠ distance Tracker · diagnostic visible")
                             .foregroundStyle(.yellow)
                     }
                     if audit.routeContinuityConflict {
@@ -2071,6 +2234,12 @@ private struct HistoricalRepairV4Card: View {
                 }
             }
             .pickerStyle(.menu)
+            .onChange(of: perceivedEffort) { _, value in
+                HistoricalHealthKitFullFidelity.setSavedPerceivedEffort(
+                    value,
+                    sessionID: summary.sessionID
+                )
+            }
 
             Button {
                 confirmRepair = true
@@ -2143,7 +2312,7 @@ private struct HistoricalRepairV4Card: View {
             Button("Annuler", role: .cancel) {}
         } message: {
             Text(
-                "La reconstruction exige une distance raw confirmée et zéro restauration existante. Les trous GPS réels restent visibles et ne sont jamais interpolés."
+                "La reconstruction exige une distance raw confirmée, une route sans détour majeur et zéro restauration existante. Les trous GPS réels restent visibles et ne sont jamais interpolés."
             )
         }
     }

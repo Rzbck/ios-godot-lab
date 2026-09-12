@@ -86,6 +86,40 @@ function Connect-DiagnosticPort {
     return $null
 }
 
+function Show-RouteDiagnosticWindows {
+    param(
+        [string]$Title,
+        [object[]]$Windows
+    )
+
+    Write-Host ''
+    Write-Host $Title
+    if ($null -eq $Windows -or @($Windows).Count -eq 0) {
+        Write-Host 'Aucune fenêtre GPS/compteur significative.'
+        return
+    }
+
+    $Rows = foreach ($Window in @($Windows)) {
+        [pscustomobject]@{
+            source          = $Window.source
+            start           = $Window.start_iso
+            end             = $Window.end_iso
+            duration_s      = [math]::Round([double]$Window.duration_s, 1)
+            points          = $Window.point_count
+            gps_m           = [math]::Round([double]$Window.path_geometry_m, 1)
+            counter_m       = [math]::Round([double]$Window.watch_counter_advance_m, 1)
+            excess_m        = [math]::Round([double]$Window.path_excess_m, 1)
+            detour_m        = [math]::Round([double]$Window.detour_m, 1)
+            direct_m        = [math]::Round([double]$Window.direct_geometry_m, 1)
+            max_gap_s       = [math]::Round([double]$Window.max_source_gap_s, 1)
+            bridge_ok       = $Window.bridge_within_counter_budget
+            filterable      = $Window.counter_proven_detour
+            diagnosis       = $Window.diagnosis
+        }
+    }
+    $Rows | Format-Table -AutoSize -Wrap
+}
+
 if ($Command -eq 'recovery' -and [string]::IsNullOrWhiteSpace($SessionId)) {
     throw 'Usage: .\apps\watch-sensor-lab\WSL.ps1 recovery <session_id>'
 }
@@ -152,7 +186,7 @@ try {
     $Writer.WriteLine(($Request | ConvertTo-Json -Compress -Depth 8))
     $ResponseLine = $Reader.ReadLine()
     if ([string]::IsNullOrWhiteSpace($ResponseLine)) {
-        throw "L'API diagnostic a fermé la connexion sans réponse. Vérifie que l'app installée contient bien la dernière version de DiagnosticService."
+        throw "L'API diagnostic a fermé la connexion sans réponse. Vérifie que l'app est ouverte au premier plan et que le build installé correspond au HEAD attendu."
     }
 
     $Response = $ResponseLine | ConvertFrom-Json
@@ -214,6 +248,32 @@ try {
             }
             else {
                 Write-Host 'AUDIT = aucune donnée retournée'
+            }
+
+            $RouteDiagnosticsProperty = $Data.PSObject.Properties['route_diagnostics']
+            if ($null -ne $RouteDiagnosticsProperty -and $null -ne $RouteDiagnosticsProperty.Value) {
+                $RouteDiagnostics = $RouteDiagnosticsProperty.Value
+                Write-Host ''
+                Write-Host 'ROUTE DIAGNOSTICS (READ-ONLY)'
+                [pscustomobject]@{
+                    counter_source       = $RouteDiagnostics.counter_source
+                    watch_points         = $RouteDiagnostics.watch_points
+                    iphone_points        = $RouteDiagnostics.iphone_points
+                    watch_counter_points = $RouteDiagnostics.watch_counter_points
+                } | Format-List *
+
+                Show-RouteDiagnosticWindows `
+                    -Title 'WATCH GPS vs WATCH COUNTER - WORST WINDOWS' `
+                    -Windows @($RouteDiagnostics.watch_windows)
+                Show-RouteDiagnosticWindows `
+                    -Title 'IPHONE GPS vs WATCH COUNTER - WORST WINDOWS' `
+                    -Windows @($RouteDiagnostics.iphone_windows)
+            }
+            else {
+                $RouteErrorProperty = $Data.PSObject.Properties['route_diagnostics_error']
+                if ($null -ne $RouteErrorProperty -and $RouteErrorProperty.Value) {
+                    Write-Host ("ROUTE DIAGNOSTICS ERROR = {0}" -f $RouteErrorProperty.Value)
+                }
             }
         }
 

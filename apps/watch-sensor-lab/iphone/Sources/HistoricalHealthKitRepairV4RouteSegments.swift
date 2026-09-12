@@ -72,9 +72,9 @@ extension HistoricalHealthKitRepairV4Coordinator {
         return makeCleanRoute(source: sourceName, points: deduplicate(merged), pauses: pauses)
     }
 
-    /// Preserve the richer reconstruction but cut only joins that are physically
-    /// impossible. Route samples on both sides survive; HealthKit receives separate
-    /// HKWorkoutRoute objects and therefore has no straight segment to draw between them.
+    /// Preserve the richer reconstruction but cut joins that would otherwise make
+    /// Fitness invent a straight line across a pause or a real capture hole. Points
+    /// on both sides survive; HealthKit receives separate HKWorkoutRoute objects.
     func segmentRouteForHealthKit(
         route: CleanRoute,
         pauses: [TrackerHealthRestorePause],
@@ -109,13 +109,21 @@ extension HistoricalHealthKitRepairV4Coordinator {
         pauses: [TrackerHealthRestorePause],
         activity: ActivityKind
     ) -> Bool {
+        // Never ask Fitness to draw a connector across an explicit pause. The two
+        // valid traces remain associated with the same workout as separate routes.
         if intervalOverlapsPause(start.timestamp, end.timestamp, pauses: pauses) {
-            // Keep authentic pause-crossing timing in one logical trace. Fitness can
-            // render the time gap as dotted; we only split active impossible joins.
-            return false
+            return true
         }
+
         let delta = end.timestamp - start.timestamp
         guard delta > 0 else { return true }
+
+        // A >20 s active hole is real missing GPS, not evidence for a straight path.
+        // This is the exact class of gap that produced the long red connector in the
+        // physical Fitness screenshot. Preserve both sides and cut only the join.
+        if delta > 20 {
+            return true
+        }
 
         let geometry = distance(start, end)
         let accuracyBudget = min(
@@ -308,5 +316,4 @@ extension HistoricalHealthKitRepairV4Coordinator {
         guard let route else { return false }
         return route.maxActiveGapSeconds > 20
     }
-
 }

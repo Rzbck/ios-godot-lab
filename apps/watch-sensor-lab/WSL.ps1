@@ -86,6 +86,25 @@ function Connect-DiagnosticPort {
     return $null
 }
 
+function Format-DiagnosticTimestamp {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return '?'
+    }
+
+    try {
+        $Parsed = [System.DateTimeOffset]::Parse(
+            [string]$Value,
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+        return $Parsed.ToUniversalTime().ToString("HH:mm:ss'Z'")
+    }
+    catch {
+        return [string]$Value
+    }
+}
+
 function Show-RouteDiagnosticWindows {
     param(
         [string]$Title,
@@ -99,25 +118,33 @@ function Show-RouteDiagnosticWindows {
         return
     }
 
-    $Rows = foreach ($Window in @($Windows)) {
-        [pscustomobject]@{
-            source          = $Window.source
-            start           = $Window.start_iso
-            end             = $Window.end_iso
-            duration_s      = [math]::Round([double]$Window.duration_s, 1)
-            points          = $Window.point_count
-            gps_m           = [math]::Round([double]$Window.path_geometry_m, 1)
-            counter_m       = [math]::Round([double]$Window.watch_counter_advance_m, 1)
-            excess_m        = [math]::Round([double]$Window.path_excess_m, 1)
-            detour_m        = [math]::Round([double]$Window.detour_m, 1)
-            direct_m        = [math]::Round([double]$Window.direct_geometry_m, 1)
-            max_gap_s       = [math]::Round([double]$Window.max_source_gap_s, 1)
-            bridge_ok       = $Window.bridge_within_counter_budget
-            filterable      = $Window.counter_proven_detour
-            diagnosis       = $Window.diagnosis
-        }
+    $Index = 0
+    foreach ($Window in @($Windows)) {
+        $Index++
+        $Start = Format-DiagnosticTimestamp $Window.start_iso
+        $End = Format-DiagnosticTimestamp $Window.end_iso
+        $Duration = [math]::Round([double]$Window.duration_s, 1)
+        $Gps = [math]::Round([double]$Window.path_geometry_m, 1)
+        $Counter = [math]::Round([double]$Window.watch_counter_advance_m, 1)
+        $Excess = [math]::Round([double]$Window.path_excess_m, 1)
+        $Detour = [math]::Round([double]$Window.detour_m, 1)
+        $Direct = [math]::Round([double]$Window.direct_geometry_m, 1)
+        $Allowed = [math]::Round([double]$Window.allowed_path_geometry_m, 1)
+        $BridgeAllowed = [math]::Round([double]$Window.bridge_allowed_geometry_m, 1)
+        $MaxGap = [math]::Round([double]$Window.max_source_gap_s, 1)
+        $CounterGap = [math]::Round([double]$Window.max_counter_interpolation_gap_s, 1)
+        $BridgeOk = [bool]$Window.bridge_within_counter_budget
+        $Filterable = [bool]$Window.counter_proven_detour
+
+        Write-Host ("[{0}] {1}  {2} -> {3}  {4:N1}s  {5} pts" -f `
+            $Index, $Window.source, $Start, $End, $Duration, $Window.point_count)
+        Write-Host ("    GPS={0:N1} m | counter={1:N1} m | excess={2:N1} m | detour={3:N1} m | direct={4:N1} m" -f `
+            $Gps, $Counter, $Excess, $Detour, $Direct)
+        Write-Host ("    budgets: path<={0:N1} m | bridge<={1:N1} m | source_gap={2:N1}s | counter_gap={3:N1}s" -f `
+            $Allowed, $BridgeAllowed, $MaxGap, $CounterGap)
+        Write-Host ("    decision: bridge_ok={0} | filterable={1} | diagnosis={2}" -f `
+            $BridgeOk, $Filterable, $Window.diagnosis)
     }
-    $Rows | Format-Table -AutoSize -Wrap
 }
 
 if ($Command -eq 'recovery' -and [string]::IsNullOrWhiteSpace($SessionId)) {

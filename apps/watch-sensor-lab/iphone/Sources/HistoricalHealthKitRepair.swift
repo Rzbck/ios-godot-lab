@@ -33,11 +33,15 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
     private let buildKey = "com.rzbck.watchsensorlab.build_sha"
     private let generationKey = "com.rzbck.watchsensorlab.historical_generation"
     private let attemptKey = "com.rzbck.watchsensorlab.historical_attempt_id"
-    private let generation = "ios_historical_v2"
+    private let generation = HistoricalHealthKitFullFidelity.generation
 
     private init() {}
 
-    func repair(sessionID: String, targetActivity: ActivityKind) {
+    func repair(
+        sessionID: String,
+        targetActivity: ActivityKind,
+        perceivedEffort: Int? = nil
+    ) {
         guard activeSessionID == nil else {
             statusBySession[sessionID] = "Une réparation Santé est déjà en cours."
             return
@@ -49,7 +53,7 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
 
         activeSessionID = sessionID
         internallyVerifiedSessions.remove(sessionID)
-        statusBySession[sessionID] = "Préflight des données brutes Tracker…"
+        statusBySession[sessionID] = "Préflight full-fidelity des données brutes Tracker…"
 
         Task {
             defer { activeSessionID = nil }
@@ -63,7 +67,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 statusBySession[sessionID] = "Autorisation d’écriture Santé sur iPhone…"
                 try await requestAndVerifyAuthorization(
                     for: payload,
-                    activity: targetActivity
+                    activity: targetActivity,
+                    perceivedEffort: perceivedEffort
                 )
 
                 statusBySession[sessionID] = "Inspection HealthKit avant écriture…"
@@ -82,9 +87,9 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                     )
                 }
 
-                // Idempotence only applies to a transaction that carries its own
-                // attempt identifier. Older v2 attempts without this identifier
-                // are deliberately not trusted after the route-finalization incident.
+                // Idempotence only applies to the current full-fidelity generation.
+                // Older generated restorations are deliberately retained until a
+                // human has validated the v3 replacement in both Health and Fitness.
                 if let current = existing.first(where: {
                     ($0.metadata?[generationKey] as? String) == generation
                         && $0.workoutActivityType == targetActivity.healthKitType
@@ -95,46 +100,49 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                         for: current,
                         attemptID: currentAttemptID
                     )
-                    statusBySession[sessionID] = "Relecture de la reconstruction iPhone existante…"
+                    statusBySession[sessionID] = "Relecture de la reconstruction full-fidelity existante…"
                     try await verifyDurably(
                         payload: payload,
                         activity: targetActivity,
                         workoutUUID: current.uuid,
                         routeUUID: currentRoute?.uuid,
-                        attemptID: currentAttemptID
+                        attemptID: currentAttemptID,
+                        perceivedEffort: perceivedEffort
                     )
                     internallyVerifiedSessions.insert(sessionID)
                     statusBySession[sessionID] =
-                        "HealthKit iPhone relu · PAS encore validé dans Santé/Forme."
+                        "HealthKit full-fidelity relu · PAS encore validé dans Santé/Forme."
                     return
                 }
 
                 if existing.contains(where: { ($0.metadata?[rawRestoreKey] as? Bool) == true }) {
                     statusBySession[sessionID] =
-                        "Ancienne restauration détectée · conservée par sécurité pendant la reconstruction…"
+                        "Ancienne restauration détectée · conservée par sécurité pendant la reconstruction v3…"
                 }
 
                 let attemptID = UUID().uuidString
                 let created = try await createHistoricalWorkout(
                     payload: payload,
                     activity: targetActivity,
-                    attemptID: attemptID
+                    attemptID: attemptID,
+                    perceivedEffort: perceivedEffort
                 )
 
-                statusBySession[sessionID] = "Relectures HealthKit iPhone…"
+                statusBySession[sessionID] = "Relectures HealthKit full-fidelity…"
                 try await verifyDurably(
                     payload: payload,
                     activity: targetActivity,
                     workoutUUID: created.workout.uuid,
                     routeUUID: created.route?.uuid,
-                    attemptID: attemptID
+                    attemptID: attemptID,
+                    perceivedEffort: perceivedEffort
                 )
 
                 // Deliberately no cleanup here. Internal API readback is not
                 // enough evidence to delete anything after the previous incident.
                 internallyVerifiedSessions.insert(sessionID)
                 statusBySession[sessionID] =
-                    "HealthKit écrit et relu sur iPhone · PAS encore validé dans Santé/Forme."
+                    "HealthKit full-fidelity écrit et relu · PAS encore validé dans Santé/Forme."
             } catch {
                 statusBySession[sessionID] =
                     "Réparation échouée · \(error.localizedDescription)"
@@ -160,7 +168,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
 
     private func requestAndVerifyAuthorization(
         for payload: TrackerHealthRestorePayload,
-        activity: ActivityKind
+        activity: ActivityKind,
+        perceivedEffort: Int?
     ) async throws {
         guard HKHealthStore.isHealthDataAvailable() else {
             throw RepairError.operation("HealthKit indisponible sur cet appareil")
@@ -175,7 +184,11 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             HKSeriesType.workoutRoute(),
         ]
 
-        for identifier in requiredQuantityIdentifiers(for: payload, activity: activity) {
+        for identifier in requiredQuantityIdentifiers(
+            for: payload,
+            activity: activity,
+            perceivedEffort: perceivedEffort
+        ) {
             guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else {
                 throw RepairError.operation(
                     "type HealthKit requis indisponible: \(identifier.rawValue)"
@@ -230,7 +243,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
 
     private func requiredQuantityIdentifiers(
         for payload: TrackerHealthRestorePayload,
-        activity: ActivityKind
+        activity: ActivityKind,
+        perceivedEffort: Int?
     ) -> [HKQuantityTypeIdentifier] {
         var values: [HKQuantityTypeIdentifier] = [.heartRate]
         if (payload.activeEnergyKcal ?? 0) > 0 {
@@ -240,7 +254,12 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
            let distance = distanceIdentifier(for: activity) {
             values.append(distance)
         }
-        return values
+        values.append(contentsOf: HistoricalHealthKitFullFidelity.requiredQuantityIdentifiers(
+            payload: payload,
+            activity: activity,
+            perceivedEffort: perceivedEffort
+        ))
+        return Array(Set(values))
     }
 
     private struct CreatedWorkout {
@@ -251,7 +270,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
     private func createHistoricalWorkout(
         payload: TrackerHealthRestorePayload,
         activity: ActivityKind,
-        attemptID: String
+        attemptID: String,
+        perceivedEffort: Int?
     ) async throws -> CreatedWorkout {
         let startDate = Date(timeIntervalSince1970: payload.startedAt)
         let endDate = Date(timeIntervalSince1970: payload.endedAt)
@@ -261,11 +281,24 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             throw RepairError.operation("données temporelles Tracker invalides")
         }
 
-        let samples = try makeSamples(
+        let summary = try HistoricalHealthKitFullFidelity.loadSummary(
+            sessionID: payload.sessionID
+        )
+        var samples = try makeSamples(
             payload: payload,
             activity: activity,
             attemptID: attemptID
         )
+        let sampleMetadata = generatedMetadata(
+            sessionID: payload.sessionID,
+            attemptID: attemptID
+        )
+        samples.append(contentsOf: HistoricalHealthKitFullFidelity.makeSpeedSamples(
+            payload: payload,
+            activity: activity,
+            metadata: sampleMetadata
+        ))
+
         let events = makeEvents(payload: payload, attemptID: attemptID)
         let locations = makeLocations(payload: payload)
 
@@ -278,50 +311,43 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             configuration: configuration,
             device: nil
         )
-        let routeBuilder = builder.seriesBuilder(
-            for: HKSeriesType.workoutRoute()
-        ) as? HKWorkoutRouteBuilder
 
         var createdWorkout: HKWorkout?
         var createdRoute: HKWorkoutRoute?
+        var createdEffort: HKQuantitySample?
 
         do {
             try await begin(builder, at: startDate)
-            try await addMetadata([
+
+            var workoutMetadata: [String: Any] = [
                 managedKey: true,
                 sessionKey: payload.sessionID,
                 rawRestoreKey: true,
                 rawRestoreSchemaKey: payload.schema,
-                rawRestoreSourceKey: "tracker_raw_ios_v2",
+                rawRestoreSourceKey: HistoricalHealthKitFullFidelity.source,
                 correctionTargetKey: activity.rawValue,
                 masterActivityKey: activity.rawValue,
-                algorithmKey: payload.sourceAlgorithmVersion ?? "tracker-raw-ios-v2",
+                algorithmKey: payload.sourceAlgorithmVersion ?? "tracker-raw-ios-v3-full",
                 buildKey: BuildInfo.gitSHA,
                 generationKey: generation,
                 attemptKey: attemptID,
                 "com.rzbck.watchsensorlab.raw_active_duration": payload.activeDuration,
                 "com.rzbck.watchsensorlab.raw_distance_m": payload.distanceMeters,
                 "com.rzbck.watchsensorlab.raw_pause_provenance": payload.pauseProvenance,
-            ], to: builder)
+            ]
+            for (key, value) in HistoricalHealthKitFullFidelity.workoutMetadata(
+                summary: summary,
+                payload: payload,
+                activity: activity,
+                attemptID: attemptID
+            ) {
+                workoutMetadata[key] = value
+            }
+            try await addMetadata(workoutMetadata, to: builder)
 
             try await add(samples, to: builder)
             if !events.isEmpty {
                 try await add(events, to: builder)
-            }
-            if let routeBuilder, locations.count >= 2 {
-                // This route builder is owned by HKWorkoutBuilder. On current iOS,
-                // finishWorkout finalizes the attached series builder. Calling
-                // finishRoute afterwards causes the runtime error observed on device.
-                try await addMetadata([
-                    managedKey: true,
-                    sessionKey: payload.sessionID,
-                    rawRestoreKey: true,
-                    rawRestoreSchemaKey: payload.schema,
-                    rawRestoreSourceKey: "tracker_raw_ios_v2",
-                    generationKey: generation,
-                    attemptKey: attemptID,
-                ], to: routeBuilder)
-                try await insert(locations, into: routeBuilder)
             }
 
             try await end(builder, at: endDate)
@@ -333,21 +359,24 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             createdWorkout = workout
 
             if locations.count >= 2 {
-                guard routeBuilder != nil else {
-                    throw RepairError.operation(
-                        "HealthKit n’a pas fourni de route builder associé"
+                createdRoute = try await HistoricalHealthKitFullFidelity.finishIndependentRoute(
+                    healthStore: healthStore,
+                    workout: workout,
+                    locations: locations,
+                    metadata: HistoricalHealthKitFullFidelity.routeMetadata(
+                        sessionID: payload.sessionID,
+                        schema: payload.schema,
+                        attemptID: attemptID
                     )
-                }
-                createdRoute = try await waitForGeneratedRoute(
-                    for: workout,
-                    attemptID: attemptID
                 )
-                guard createdRoute != nil else {
-                    throw RepairError.operation(
-                        "route Santé absente après finalisation du workout"
-                    )
-                }
             }
+
+            createdEffort = try await HistoricalHealthKitFullFidelity.savePerceivedEffort(
+                healthStore: healthStore,
+                workout: workout,
+                perceivedEffort: perceivedEffort,
+                metadata: sampleMetadata
+            )
 
             return CreatedWorkout(workout: workout, route: createdRoute)
         } catch {
@@ -361,16 +390,18 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             }
 
             var rollback: [HKObject] = []
+            if let createdEffort { rollback.append(createdEffort) }
             if let createdRoute { rollback.append(createdRoute) }
             if let createdWorkout { rollback.append(createdWorkout) }
             let createdSamples = (try? await generatedQuantitySamples(
                 payload: payload,
+                activity: activity,
                 attemptID: attemptID
             )) ?? []
             rollback.append(contentsOf: createdSamples)
 
             if !rollback.isEmpty {
-                try? await delete(rollback)
+                try? await delete(Array(Dictionary(grouping: rollback, by: \.uuid).values.compactMap(\.first)))
             }
             throw error
         }
@@ -455,7 +486,7 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         [
             rawRestoreKey: true,
             sessionKey: sessionID,
-            rawRestoreSourceKey: "tracker_raw_ios_v2",
+            rawRestoreSourceKey: HistoricalHealthKitFullFidelity.source,
             generationKey: generation,
             attemptKey: attemptID,
         ]
@@ -581,31 +612,13 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         }
     }
 
-    private func waitForGeneratedRoute(
-        for workout: HKWorkout,
-        attemptID: String
-    ) async throws -> HKWorkoutRoute? {
-        let delays: [UInt64] = [0, 400_000_000, 1_200_000_000]
-        for delay in delays {
-            if delay > 0 {
-                try await Task.sleep(nanoseconds: delay)
-            }
-            if let route = try await generatedRoute(
-                for: workout,
-                attemptID: attemptID
-            ) {
-                return route
-            }
-        }
-        return nil
-    }
-
     private func verifyDurably(
         payload: TrackerHealthRestorePayload,
         activity: ActivityKind,
         workoutUUID: UUID,
         routeUUID: UUID?,
-        attemptID: String
+        attemptID: String,
+        perceivedEffort: Int?
     ) async throws {
         let delays: [UInt64] = [0, 1_200_000_000, 3_000_000_000]
         for delay in delays {
@@ -617,7 +630,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 activity: activity,
                 workoutUUID: workoutUUID,
                 routeUUID: routeUUID,
-                attemptID: attemptID
+                attemptID: attemptID,
+                perceivedEffort: perceivedEffort
             )
         }
     }
@@ -627,7 +641,8 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         activity: ActivityKind,
         workoutUUID: UUID,
         routeUUID: UUID?,
-        attemptID: String
+        attemptID: String,
+        perceivedEffort: Int?
     ) async throws {
         let workouts = try await managedWorkouts(
             sessionID: payload.sessionID,
@@ -646,6 +661,14 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             )
         }
 
+        let summary = try HistoricalHealthKitFullFidelity.loadSummary(
+            sessionID: payload.sessionID
+        )
+        try HistoricalHealthKitFullFidelity.verifyWorkoutMetadata(
+            workout: workout,
+            summary: summary
+        )
+
         let durationTolerance = max(20, payload.activeDuration * 0.04)
         guard abs(workout.duration - payload.activeDuration) <= durationTolerance else {
             throw RepairError.operation(
@@ -655,11 +678,17 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
 
         let generatedSamples = try await generatedQuantitySamples(
             payload: payload,
+            activity: activity,
             attemptID: attemptID
+        )
+        let speedExpected = HistoricalHealthKitFullFidelity.expectedSpeedSampleCount(
+            payload: payload,
+            activity: activity
         )
         let expectedMinimum = payload.heartRates.count
             + ((payload.activeEnergyKcal ?? 0) > 0 ? 1 : 0)
             + (distanceIdentifier(for: activity) == nil ? 0 : 1)
+            + speedExpected
 
         guard generatedSamples.count >= expectedMinimum else {
             throw RepairError.operation(
@@ -684,6 +713,18 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             }
         }
 
+        if speedExpected > 0,
+           let speedID = HistoricalHealthKitFullFidelity.speedIdentifier(for: activity),
+           let speedType = HKQuantityType.quantityType(forIdentifier: speedID) {
+            let speedCount = generatedSamples
+                .compactMap { $0 as? HKQuantitySample }
+                .filter { $0.quantityType == speedType }
+                .count
+            guard speedCount >= max(1, Int(Double(speedExpected) * 0.90)) else {
+                throw RepairError.operation("échantillons de vitesse manquants après relecture")
+            }
+        }
+
         let expectedLocations = makeLocations(payload: payload).count
         if expectedLocations >= 2 {
             guard let routeUUID else {
@@ -702,10 +743,18 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 )
             }
         }
+
+        try await HistoricalHealthKitFullFidelity.verifyPerceivedEffort(
+            healthStore: healthStore,
+            workout: workout,
+            perceivedEffort: perceivedEffort,
+            attemptID: attemptID
+        )
     }
 
     private func generatedQuantitySamples(
         payload: TrackerHealthRestorePayload,
+        activity: ActivityKind,
         attemptID: String
     ) async throws -> [HKSample] {
         let startDate = Date(timeIntervalSince1970: payload.startedAt)
@@ -719,15 +768,18 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         )
 
         var result: [HKSample] = []
-        let identifiers: [HKQuantityTypeIdentifier] = [
+        var identifiers: [HKQuantityTypeIdentifier] = [
             .heartRate,
             .activeEnergyBurned,
             .distanceWalkingRunning,
             .distanceCycling,
             .distanceSwimming,
         ]
+        if let speed = HistoricalHealthKitFullFidelity.speedIdentifier(for: activity) {
+            identifiers.append(speed)
+        }
 
-        for identifier in identifiers {
+        for identifier in Array(Set(identifiers)) {
             guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else {
                 continue
             }
@@ -810,15 +862,6 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
         }
     }
 
-    private func addMetadata(
-        _ metadata: [String: Any],
-        to builder: HKWorkoutRouteBuilder
-    ) async throws {
-        try await checked {
-            completion in builder.addMetadata(metadata, completion: completion)
-        }
-    }
-
     private func add(_ samples: [HKSample], to builder: HKWorkoutBuilder) async throws {
         try await checked {
             completion in builder.add(samples, completion: completion)
@@ -831,22 +874,6 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
     ) async throws {
         try await checked {
             completion in builder.addWorkoutEvents(events, completion: completion)
-        }
-    }
-
-    private func insert(
-        _ locations: [CLLocation],
-        into builder: HKWorkoutRouteBuilder
-    ) async throws {
-        let chunkSize = 200
-        var offset = 0
-        while offset < locations.count {
-            let upper = min(offset + chunkSize, locations.count)
-            let chunk = Array(locations[offset..<upper])
-            try await checked {
-                completion in builder.insertRouteData(chunk, completion: completion)
-            }
-            offset = upper
         }
     }
 
@@ -929,7 +956,7 @@ struct HistoricalHealthKitRepairView: View {
                                 .font(.headline.weight(.bold))
 
                                 Text(
-                                    "Reconstruction historique sur l’iPhone. Les données Tracker brutes restent intactes. Aucun ancien workout n’est supprimé automatiquement. La relecture API n’est pas une validation finale : vérifie ensuite Santé et Forme."
+                                    "Reconstruction historique full-fidelity sur l’iPhone : workout, cardio, énergie, distance, vitesse, dénivelé, météo, pauses, route GPS et effort ressenti lorsqu’il est renseigné. Les raw Tracker restent intacts et aucun ancien workout n’est supprimé automatiquement."
                                 )
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -966,6 +993,7 @@ private struct HistoricalRepairCard: View {
     let summary: TrackerSummary
 
     @State private var selection: ActivityKind?
+    @State private var perceivedEffort: Int?
     @State private var confirming = false
 
     private var activities: [ActivityKind] {
@@ -1021,6 +1049,20 @@ private struct HistoricalRepairCard: View {
             }
             .pickerStyle(.menu)
 
+            Picker("Effort ressenti Apple", selection: $perceivedEffort) {
+                Text("Non renseigné").tag(Optional<Int>.none)
+                ForEach(1...10, id: \.self) { value in
+                    Text("\(value) / 10").tag(Optional(value))
+                }
+            }
+            .pickerStyle(.menu)
+
+            Text(
+                "L’effort n’est jamais inventé : une valeur 1–10 est écrite dans Santé seulement si elle a été enregistrée auparavant ou si tu la renseignes ici. L’estimation Tracker reste conservée séparément avec sa provenance."
+            )
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+
             Button {
                 confirming = true
             } label: {
@@ -1048,6 +1090,13 @@ private struct HistoricalRepairCard: View {
             .white.opacity(0.06),
             in: RoundedRectangle(cornerRadius: 20)
         )
+        .onAppear {
+            if perceivedEffort == nil {
+                perceivedEffort = HistoricalHealthKitFullFidelity.savedPerceivedEffort(
+                    sessionID: summary.sessionID
+                )
+            }
+        }
         .confirmationDialog(
             "Reconstruire cette séance dans Santé ?",
             isPresented: $confirming,
@@ -1057,14 +1106,15 @@ private struct HistoricalRepairCard: View {
                 Button("Reconstruire en \(selection.label)") {
                     coordinator.repair(
                         sessionID: summary.sessionID,
-                        targetActivity: selection
+                        targetActivity: selection,
+                        perceivedEffort: perceivedEffort
                     )
                 }
             }
             Button("Annuler", role: .cancel) {}
         } message: {
             Text(
-                "Les raw Tracker sont la source. Aucun ancien workout n’est supprimé automatiquement. Après la relecture interne, la présence dans Santé et Forme doit encore être vérifiée manuellement."
+                "Les raw Tracker sont la source. Une nouvelle génération full-fidelity est créée ; les anciennes restaurations restent intactes jusqu’à validation physique dans Santé et Forme."
             )
         }
     }

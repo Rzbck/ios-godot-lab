@@ -140,10 +140,16 @@ function Wait-ForExactBuild {
 
         if (-not $TriggeredHere) {
             Write-Host 'No retained exact-HEAD device artifact exists. Triggering exact current-HEAD device build...' -ForegroundColor Yellow
-            & gh workflow run $WorkflowName `
+            # Capture gh stdout locally. PowerShell functions emit uncaptured stdout as
+            # pipeline output; letting the dispatch URL escape here polluted $Run and
+            # later caused a missing databaseId property after a successful build.
+            $DispatchOutput = & gh workflow run $WorkflowName `
                 --repo $RepositoryName `
                 --ref $BranchName
             Assert-NativeSuccess 'gh workflow run'
+            if ($DispatchOutput) {
+                Write-Host ("DISPATCH    = " + (($DispatchOutput | ForEach-Object { [string]$_ }) -join ' ')) -ForegroundColor DarkGray
+            }
             $TriggeredHere = $true
             Start-Sleep -Seconds 3
             continue

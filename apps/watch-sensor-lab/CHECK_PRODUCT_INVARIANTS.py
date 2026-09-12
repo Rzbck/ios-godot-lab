@@ -107,27 +107,52 @@ else:
     repair_body = iphone_v4[repair_start:repair_end]
     forbid(repair_body, "cleanupGeneratedRestorations(", "Nettoyage automatique interdit dans repair")
     require(repair_body, "guard generated.isEmpty", "Repair bloque les doublons")
-    require(repair_body, "hasDistanceConflict", "Repair bloque distance non confirmée")
-    require(repair_body, "hasRouteGeometryConflict", "Repair bloque géométrie incohérente")
-    require(repair_body, "hasRouteContinuityConflict", "Repair bloque trous GPS actifs")
+    require(repair_body, "hasDistanceConflict", "Repair exige une distance raw autoritaire")
+    forbid(
+        repair_body,
+        "guard !hasRouteGeometryConflict(",
+        "La géométrie GPS diagnostique ne doit pas bloquer une distance raw confirmée",
+    )
+    forbid(
+        repair_body,
+        "guard !hasRouteContinuityConflict(",
+        "Un trou réel diagnostiqué ne doit pas provoquer d'interpolation ni bloquer une distance raw confirmée",
+    )
 
-# D. Politique route: un compteur secondaire incomplet ne peut plus veto un
-# compteur primaire cohérent; la route primaire peut être complétée avec le GPS
-# secondaire puis débruitée sans inventer de coordonnées.
+# D. Politique route: le compteur autoritaire confirme la distance; le GPS primaire
+# reste la provenance de route, le secondaire ne bouche que de vrais trous raw, et
+# aucun filtre ne peut fabriquer un nouveau trou >3 secondes.
 for token, label in [
     ("counterAgrees", "Validation indépendante des compteurs raw"),
     ("distanceReferenceSource", "Source de distance explicite"),
     ("mergeActiveGaps", "Fusion uniquement des trous actifs"),
+    ("primaryRawPoints", "Fusion distingue trous raw et trous de filtre"),
     ("counterAwareFilter", "Filtrage bruit guidé par compteur raw"),
+    ("nextRaw.timestamp - lastAccepted.timestamp > 3.0", "Filtre compteur ne crée pas de trou >3s"),
     ("denoiseForDistance", "Débruitage géométrique borné"),
+    ("next.timestamp - previous.timestamp <= 3.0", "Débruitage ne crée pas de trou >3s"),
     ("perpendicularDeviation", "Suppression limitée au bruit de précision"),
     ("activePairs = pairs.filter", "Géométrie exclut les intervalles de pause"),
-    ("route.maxActiveGapSeconds > 20", "Trou actif long bloque la reconstruction"),
-    ("summaryMeters * 0.15", "Tolérance géométrique explicite"),
+    ("route.maxActiveGapSeconds > 20", "Trou actif long reste diagnostiqué"),
+    ("summaryMeters * 0.15", "Alerte géométrique explicite"),
     ("watchRawMeters: raw.watchRawDistanceMeters", "Compteur Watch évalué séparément"),
     ("phoneRawMeters: raw.phoneRawDistanceMeters", "Compteur iPhone évalué séparément"),
+    ("return true", "Absence de compteur raw autoritaire bloque l'écriture"),
+    ("diagnostic non bloquant", "UI distingue qualité route et garde-fou d'écriture"),
 ]:
     require(iphone_v4, token, label)
+
+# Le canReconstruct produit est piloté par unicité + présence route + distance raw,
+# pas par une égalité artificielle polyline/distance ni par l'absence totale de trous GPS.
+can_start = iphone_v4.find("var canReconstruct: Bool")
+can_end = iphone_v4.find("    }\n\n    @Published", can_start)
+if can_start < 0 or can_end < 0:
+    errors.append("Impossible d'isoler canReconstruct v4")
+else:
+    can_body = iphone_v4[can_start:can_end]
+    require(can_body, "!distanceConflict", "canReconstruct exige distance raw confirmée")
+    forbid(can_body, "!routeGeometryConflict", "Géométrie GPS ne bloque plus canReconstruct")
+    forbid(can_body, "!routeContinuityConflict", "Trou GPS réel ne bloque plus canReconstruct")
 
 # E. Route HealthKit explicite et vérifiée.
 for token, label in [
@@ -171,6 +196,7 @@ for token, label in [
     ("route_filtered_point_count", "Provenance route filtrée"),
     ("route_geometry_m", "Géométrie route auditée"),
     ("route_filter_strategy", "Stratégie de route durable"),
+    ("true_raw_gap_fill_no_interpolation", "Stratégie sans interpolation explicite"),
 ]:
     require(iphone_v4, token, label)
 for token, label in [
@@ -208,9 +234,11 @@ print(" - managed non-restoration workout audit is read-only")
 print(" - Watch + iPhone raw GPS are audited independently")
 print(" - matching primary distance survives an incomplete secondary counter")
 print(" - pause-crossing legs are excluded from active route geometry")
-print(" - secondary GPS can fill active gaps without fabricated coordinates")
-print(" - accuracy-scale zigzags are reduced while short temporal continuity is preserved")
-print(" - route geometry and long active gaps block unsafe HealthKit writes")
+print(" - secondary GPS fills only holes already absent from the raw primary stream")
+print(" - counter filtering and denoise cannot manufacture >3s active gaps")
+print(" - real GPS capture holes remain visible and are never interpolated")
+print(" - route geometry/continuity are quality diagnostics, not fake distance authorities")
+print(" - a matching raw counter remains mandatory before HealthKit writes")
 print(" - explicit cleanup prevents accumulation of test workouts")
 print(" - cleanup is scoped to raw_restoration + exact session id")
 print(" - one v4 workout + one route + quantities are durably reread")

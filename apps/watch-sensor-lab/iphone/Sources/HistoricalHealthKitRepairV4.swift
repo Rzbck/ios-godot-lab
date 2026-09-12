@@ -14,8 +14,8 @@ import SwiftUI
 /// - Tracker summary distance is compared independently with Watch/iPhone raw counters;
 /// - one incomplete secondary counter never invalidates a matching primary counter;
 /// - the source whose counter agrees with the summary is primary;
-/// - trusted cumulative distance rejects isolated stale-coordinate excursions, even across long gaps;
-/// - the secondary GPS source may only fill ACTIVE gaps that already exist in the raw primary stream;
+/// - trusted cumulative distance rejects isolated and multi-point stale-coordinate excursions;
+/// - the secondary GPS source may only fill ACTIVE gaps that are raw holes or counter-proven corrupt windows;
 /// - a secondary gap fill must also fit the authoritative primary counter distance budget;
 /// - counter-guided local denoising must not create >3s gaps;
 /// - real capture holes are preserved: no coordinate is fabricated or interpolated;
@@ -604,6 +604,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
 
         if targetDistanceMeters != nil {
             values = counterIsolatedOutlierFilter(values, pauses: pauses)
+            values = counterSegmentOutlierFilter(values, pauses: pauses)
         }
 
         // Remove isolated impossible spikes. Only raw points are discarded; no
@@ -692,6 +693,130 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         return values
     }
 
+    /// Remove a contiguous stale-coordinate excursion, not only one isolated point.
+    /// A candidate window is removed only when its raw polyline grossly exceeds the
+    /// trusted cumulative counter while the direct bridge between the window anchors
+    /// remains compatible with that same counter. This preserves real curves whose
+    /// counter advances with the route, and never fabricates replacement coordinates.
+    private func counterSegmentOutlierFilter(
+        _ points: [RawPoint],
+        pauses: [TrackerHealthRestorePause]
+    ) -> [RawPoint] {
+        var values = deduplicate(points)
+        guard values.count >= 4 else { return values }
+
+        var didChange = true
+        while didChange, values.count >= 4 {
+            didChange = false
+            var bestRange: Range<Int>?
+            var bestScore = 0.0
+
+            for startIndex in 0..<(values.count - 2) {
+                let maxEndIndex = min(values.count - 1, startIndex + 65)
+                var pathGeometry = 0.0
+
+                for endIndex in (startIndex + 1)...maxEndIndex {
+                    pathGeometry += distance(values[endIndex - 1], values[endIndex])
+                    guard endIndex >= startIndex + 2 else { continue }
+
+                    let start = values[startIndex]
+                    let end = values[endIndex]
+                    if intervalOverlapsPause(start.timestamp, end.timestamp, pauses: pauses) {
+                        break
+                    }
+                    guard let metrics = counterWindowMetrics(
+                        start: start,
+                        interior: Array(values[(startIndex + 1)..<endIndex]),
+                        end: end,
+                        pathGeometry: pathGeometry
+                    ), metrics.isCounterProvenDetour else {
+                        continue
+                    }
+
+                    let interiorCount = max(1, endIndex - startIndex - 1)
+                    let score = metrics.pathExcess / Double(interiorCount)
+                    if score > bestScore {
+                        bestScore = score
+                        bestRange = (startIndex + 1)..<endIndex
+                    }
+                }
+            }
+
+            if let bestRange {
+                values.removeSubrange(bestRange)
+                didChange = true
+            }
+        }
+
+        return deduplicate(values)
+    }
+
+    private struct CounterWindowMetrics {
+        let pathExcess: Double
+        let detour: Double
+        let directGeometry: Double
+        let bridgeAllowedGeometry: Double
+        let minimumExcess: Double
+        let minimumDetour: Double
+
+        var isCounterProvenDetour: Bool {
+            pathExcess > minimumExcess
+                && detour > minimumDetour
+                && directGeometry <= bridgeAllowedGeometry
+        }
+    }
+
+    private func counterWindowMetrics(
+        start: RawPoint,
+        interior: [RawPoint],
+        end: RawPoint,
+        pathGeometry suppliedPathGeometry: Double? = nil
+    ) -> CounterWindowMetrics? {
+        guard let startDistance = start.cumulativeDistanceMeters,
+              let endDistance = end.cumulativeDistanceMeters,
+              endDistance >= startDistance else {
+            return nil
+        }
+
+        let chain = [start] + interior + [end]
+        let pathGeometry = suppliedPathGeometry ?? zip(chain, chain.dropFirst()).reduce(0.0) {
+            $0 + distance($1.0, $1.1)
+        }
+        let directGeometry = distance(start, end)
+        let counterAdvance = endDistance - startDistance
+        let maxAccuracy = chain.map(\.horizontalAccuracy).max() ?? 0
+        let accuracyBudget = min(
+            140,
+            max(25, start.horizontalAccuracy + end.horizontalAccuracy + maxAccuracy)
+        )
+        let allowedPathGeometry = counterAdvance * 1.35 + accuracyBudget
+        let bridgeAllowedGeometry = counterAdvance * 1.20 + accuracyBudget
+
+        return CounterWindowMetrics(
+            pathExcess: pathGeometry - allowedPathGeometry,
+            detour: pathGeometry - directGeometry,
+            directGeometry: directGeometry,
+            bridgeAllowedGeometry: bridgeAllowedGeometry,
+            minimumExcess: max(70, counterAdvance * 0.20),
+            minimumDetour: max(60, counterAdvance * 0.15)
+        )
+    }
+
+    private func counterWindowHasDetour(
+        start: RawPoint,
+        interior: [RawPoint],
+        end: RawPoint
+    ) -> Bool {
+        guard let metrics = counterWindowMetrics(
+            start: start,
+            interior: interior,
+            end: end
+        ) else {
+            return false
+        }
+        return metrics.isCounterProvenDetour
+    }
+
     /// A straight-line displacement cannot legitimately exceed the cumulative sport
     /// distance over the same interval by a large margin. Accuracy allowance covers
     /// normal GPS noise and minor timestamp skew without legitimising stale excursions.
@@ -773,11 +898,10 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         return deduplicate(accepted)
     }
 
-    /// Fill only ACTIVE holes that already exist in the raw primary stream. A gap
-    /// created by filtering is deliberately left to the primary route instead of
-    /// being backfilled from the secondary device. A secondary point is accepted only
-    /// when the chain remains kinematically plausible at both ends and its total
-    /// geometry fits the trusted primary cumulative-distance budget for that gap.
+    /// Fill ACTIVE holes that were truly absent from the raw primary stream, plus
+    /// gaps created by deliberately removing a counter-proven corrupt primary segment.
+    /// Other filter-created gaps remain primary-only. A secondary chain must stay
+    /// kinematically plausible and fit the trusted primary cumulative-distance budget.
     private func mergeActiveGaps(
         primary: CleanRoute,
         secondary: CleanRoute,
@@ -806,12 +930,15 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 continue
             }
 
-            // Only fill a hole that was already absent from the raw primary stream.
-            // If raw primary points exist inside this interval, the hole was created
-            // by our filtering and must not be replaced with a second sensor source.
-            guard !rawPrimary.contains(where: {
+            let rawPrimaryInterior = rawPrimary.filter {
                 $0.timestamp > start.timestamp && $0.timestamp < end.timestamp
-            }) else {
+            }
+            if !rawPrimaryInterior.isEmpty,
+               !counterWindowHasDetour(
+                    start: start,
+                    interior: rawPrimaryInterior,
+                    end: end
+               ) {
                 continue
             }
 
@@ -1207,7 +1334,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 "com.rzbck.watchsensorlab.route_filtered_point_count": route.points.count,
                 "com.rzbck.watchsensorlab.route_geometry_m": route.geometryMeters,
                 "com.rzbck.watchsensorlab.route_filter_strategy":
-                    "trusted_counter_outlier_rejection_counter_bounded_true_raw_gap_fill_no_interpolation",
+                    "trusted_counter_segment_outlier_rejection_counter_bounded_true_raw_gap_fill_no_interpolation",
             ]
             for (key, value) in HistoricalHealthKitFullFidelity.workoutMetadata(
                 summary: summary,

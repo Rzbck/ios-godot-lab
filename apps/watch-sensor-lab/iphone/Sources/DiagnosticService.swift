@@ -352,6 +352,13 @@ final class DiagnosticService {
                 "distance_conflict": audit.distanceConflict,
                 "route_geometry_conflict": audit.routeGeometryConflict,
                 "route_continuity_conflict": audit.routeContinuityConflict,
+                "severe_route_counter_conflict": audit.severeRouteCounterConflict,
+                "generated_workout_activity_type_raw": audit.generatedWorkoutActivityTypeRawValue.map { $0 as Any } ?? NSNull(),
+                "generated_target_activity": audit.generatedTargetActivity.map { $0 as Any } ?? NSNull(),
+                "generated_workout_brand_name": audit.generatedWorkoutBrandName.map { $0 as Any } ?? NSNull(),
+                "generated_effort_score": audit.generatedEffortScore.map { $0 as Any } ?? NSNull(),
+                "generated_effort_sample_count": audit.generatedEffortSampleCount,
+                "saved_perceived_effort": audit.savedPerceivedEffort.map { $0 as Any } ?? NSNull(),
                 "can_reconstruct": audit.canReconstruct,
             ]
         }

@@ -12,6 +12,7 @@ targets:
     sources:
       - path: Sources
       - path: ../Shared/TrackerShared.swift
+      - path: ../Shared/TelemetryShared.swift
       - path: Assets.xcassets
     preBuildScripts:
       - name: Generate App Icon

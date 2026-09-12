@@ -597,7 +597,7 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
             }
             let routeValues = try await routes(for: workout)
             guard let route = routeValues.first(where: { $0.uuid == routeUUID }),
-                  ($0ReplacementGeneration(route)) else {
+                  (route.metadata?[generationKey] as? String) == generation else {
                 throw RepairError.operation("route Santé non relue après restauration")
             }
             let locations = try await loadLocations(for: route)
@@ -607,10 +607,6 @@ final class HistoricalHealthKitRepairCoordinator: ObservableObject {
                 )
             }
         }
-    }
-
-    private func $0ReplacementGeneration(_ route: HKWorkoutRoute) -> Bool {
-        (route.metadata?[generationKey] as? String) == generation
     }
 
     private func generatedQuantitySamples(

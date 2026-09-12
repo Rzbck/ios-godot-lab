@@ -1,5 +1,6 @@
 import SwiftUI
 
+// Historical repair v2 candidate: CI/device artifact is required before hardware use.
 /// Historical HealthKit mutation is intentionally iPhone-only.
 ///
 /// Live workouts remain Watch-owned. Apple documents standalone

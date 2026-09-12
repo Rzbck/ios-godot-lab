@@ -25,6 +25,7 @@ def forbid(text: str, token: str, label: str):
 iphone_root = read("iphone/Sources/TrackerApp.swift")
 iphone_review = read("iphone/Sources/SessionReviewTimeline.swift")
 iphone_repair = read("iphone/Sources/HistoricalHealthKitRepair.swift")
+iphone_fidelity = read("iphone/Sources/HistoricalHealthKitFullFidelity.swift")
 restore_packet = read("iphone/Sources/TrackerHealthRestorePacket.swift")
 iphone_reliable = read("iphone/Sources/WatchReliableRecovery.swift")
 
@@ -102,21 +103,42 @@ forbid(
 )
 
 # ---------------------------------------------------------------------------
-# B. L'écriture historique v2 utilise HKWorkoutBuilder SUR IPHONE.
-#    Aucun transfert vers la Watch ne fait partie du nouveau chemin.
+# B. L'écriture historique v3 full-fidelity est iPhone-only.
+#    Workout: standalone HKWorkoutBuilder.
+#    Route: builder indépendant puis finishRoute(with:) après sauvegarde workout.
 # ---------------------------------------------------------------------------
 for token, label in [
     ("HKWorkoutBuilder(", "Builder historique iPhone"),
-    ("HKWorkoutRouteBuilder", "Route builder historique iPhone"),
     ("finishWorkout", "Finalisation workout historique iPhone"),
+    ("HistoricalHealthKitFullFidelity.finishIndependentRoute(", "Route historique explicite"),
 ]:
     require(iphone_repair, token, label)
 
 for token, label in [
-    ("WCSession", "Le nouveau chemin ne doit pas dépendre de WatchConnectivity"),
-    ("transferFile(", "Le nouveau chemin ne doit pas transférer les raw à la Watch"),
+    ("HKWorkoutRouteBuilder(healthStore:", "Route builder historique indépendant"),
+    ("finishRoute(with: workout", "Association explicite route/workout"),
 ]:
-    forbid(iphone_repair, token, label)
+    require(iphone_fidelity, token, label)
+
+# L'incident matériel a montré qu'un route builder attaché au workout builder
+# n'est pas le chemin produit retenu pour la reconstruction historique.
+forbid(
+    iphone_repair,
+    "seriesBuilder(",
+    "Route historique ne doit plus être attachée au HKWorkoutBuilder",
+)
+forbid(
+    iphone_fidelity,
+    "seriesBuilder(",
+    "Helper full-fidelity ne doit pas utiliser un route builder attaché",
+)
+
+for text, label in [
+    (iphone_repair, "Nouveau chemin principal"),
+    (iphone_fidelity, "Helper full-fidelity"),
+]:
+    for token in ["WCSession", "transferFile("]:
+        forbid(text, token, f"{label} ne doit pas dépendre de WatchConnectivity")
 
 # ---------------------------------------------------------------------------
 # C. Autorisations d'ÉCRITURE explicites avant toute reconstruction.
@@ -134,6 +156,13 @@ for token, label in [
 ]:
     require(iphone_repair, token, label)
 
+for token, label in [
+    (".cyclingSpeed", "Vitesse vélo full-fidelity"),
+    (".runningSpeed", "Vitesse course full-fidelity"),
+    (".workoutEffortScore", "Effort utilisateur HealthKit"),
+]:
+    require(iphone_fidelity, token, label)
+
 # ---------------------------------------------------------------------------
 # D. Les raw Tracker restent l'unique source de reconstruction.
 # ---------------------------------------------------------------------------
@@ -150,10 +179,47 @@ require(
     "packetBuilder.makeTransferFile(",
     "Réutilisation du préflight raw éprouvé",
 )
+require(
+    iphone_fidelity,
+    "loadSummary(sessionID:",
+    "Full-fidelity lit le résumé Tracker local",
+)
 
 # ---------------------------------------------------------------------------
-# E. Après l'incident, aucune ancienne donnée HealthKit n'est nettoyée sur la
-#    seule base d'une relecture API. La v2 crée + relit; elle ne supprime qu'un
+# E. Full-fidelity: restaurer les familles de données réellement capturées,
+#    sans inventer une valeur absente ni confondre cadence pédestre/cycliste.
+# ---------------------------------------------------------------------------
+for token, label in [
+    ("HKMetadataKeyAverageSpeed", "Vitesse moyenne"),
+    ("HKMetadataKeyMaximumSpeed", "Vitesse maximale"),
+    ("HKMetadataKeyElevationAscended", "Dénivelé positif"),
+    ("HKMetadataKeyElevationDescended", "Dénivelé négatif"),
+    ("HKMetadataKeyWeatherTemperature", "Température météo"),
+    ("HKMetadataKeyWeatherHumidity", "Humidité météo"),
+    ("HKMetadataKeyBarometricPressure", "Pression météo"),
+    ("HKMetadataKeyWeatherCondition", "Condition météo"),
+    ("HKMetadataKeyWorkoutBrandName", "Marque workout"),
+    ("HKMetadataKeyExternalUUID", "Identité externe durable"),
+    ("tracker_estimated_effort", "Estimation Tracker conservée avec provenance"),
+    ("relateWorkoutEffortSample(", "Effort réel associé au workout"),
+    ("average_cadence_spm", "Cadence Tracker conservée sans faux type HealthKit"),
+]:
+    require(iphone_fidelity, token, label)
+
+require(
+    iphone_repair,
+    'Picker("Effort ressenti Apple"',
+    "Effort utilisateur explicite dans la récupération",
+)
+require(
+    iphone_repair,
+    "L’effort n’est jamais inventé",
+    "Garde-fou contre effort fabriqué",
+)
+
+# ---------------------------------------------------------------------------
+# F. Après l'incident, aucune ancienne donnée HealthKit n'est nettoyée sur la
+#    seule base d'une relecture API. La v3 crée + relit; elle ne supprime qu'un
 #    objet qu'ELLE vient de créer si sa propre transaction échoue.
 # ---------------------------------------------------------------------------
 create_marker = "let created = try await createHistoricalWorkout("
@@ -189,20 +255,25 @@ require(
 require(
     iphone_repair,
     "var rollback: [HKObject] = []",
-    "Rollback limité à la tentative v2",
+    "Rollback limité à la tentative v3",
 )
 
 # Un seul appel de suppression est autorisé dans ce fichier: le rollback des
 # objets créés dans la tentative courante.
 if iphone_repair.count("await delete(") != 1:
     errors.append(
-        "La v2 doit avoir exactement un appel delete: rollback de la tentative courante"
+        "La v3 doit avoir exactement un appel delete: rollback de la tentative courante"
     )
 
 require(
     iphone_repair,
-    'generation = "ios_historical_v2"',
-    "Génération iPhone identifiable",
+    "HistoricalHealthKitFullFidelity.generation",
+    "Génération full-fidelity centralisée",
+)
+require(
+    iphone_fidelity,
+    'generation = "ios_historical_v3_full"',
+    "Génération full-fidelity identifiable",
 )
 require(
     iphone_repair,
@@ -211,7 +282,7 @@ require(
 )
 
 # ---------------------------------------------------------------------------
-# F. Pas de faux positif produit : API relue != Santé/Forme validés.
+# G. Pas de faux positif produit : API relue != Santé/Forme validés.
 # ---------------------------------------------------------------------------
 require(
     iphone_repair,
@@ -230,7 +301,7 @@ forbid(
 )
 
 # ---------------------------------------------------------------------------
-# G. Le live Watch reste intact.
+# H. Le live Watch reste intact.
 # ---------------------------------------------------------------------------
 require(
     iphone_reliable,
@@ -252,10 +323,13 @@ if errors:
 print("TRACKER PRODUCT INVARIANTS: OK")
 print(" - one active historical mutation surface: iPhone")
 print(" - legacy correction controls are read-only/hidden")
-print(" - historical HKWorkoutBuilder + route run on iPhone")
+print(" - historical standalone HKWorkoutBuilder runs on iPhone")
+print(" - historical route uses independent HKWorkoutRouteBuilder + finishRoute(with:)")
 print(" - explicit write authorization is verified")
 print(" - raw Tracker data remains the reconstruction source")
+print(" - full-fidelity speed/elevation/weather/effort provenance is preserved")
+print(" - perceived effort is explicit, never fabricated from Tracker estimate")
 print(" - create -> durable reread; no old-object cleanup")
-print(" - rollback can only target the current v2 attempt")
+print(" - rollback can only target the current v3 attempt")
 print(" - internal HealthKit reread is not physical validation")
 print(" - live Watch HKLiveWorkoutBuilder remains unchanged")

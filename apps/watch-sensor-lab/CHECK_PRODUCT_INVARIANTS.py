@@ -38,7 +38,7 @@ require(iphone_root, "HistoricalHealthKitRepairV4View()", "Surface v4 montée")
 forbid(iphone_root, "HistoricalHealthKitRepairView()", "Ancienne v3 montée")
 require(iphone_root, 'Label("Récupération"', "Onglet Récupération visible")
 require(iphone_v4, "HistoricalHealthKitRepairV4Coordinator.shared", "Coordinateur v4")
-require(iphone_v4, 'Label("Reconstruire proprement dans Santé"', "Action v4 visible")
+require(iphone_v4, 'Label(\n                    "Reconstruire proprement dans Santé"', "Action v4 visible")
 
 # Legacy UI reste lecture seule / redirigée.
 require(iphone_review, "Ce panneau ne modifie plus HealthKit", "Review legacy lecture seule")
@@ -54,7 +54,7 @@ for token, label in [
     ('case "watch_location"', "GPS Watch brut"),
     ('case "location"', "GPS iPhone brut"),
     ("loadRawRoutes(summary:", "Audit raw double source"),
-    ("chooseRoute(raw:", "Choix de route"),
+    ("chooseRoute(", "Choix de route"),
     ("intervalOverlapsPause", "Gaps de pause distingués"),
     ("hasDistanceConflict", "Garde-fou distance summary/raw"),
     ("packetBuilder.makeTransferFile(", "Préflight raw historique existant"),
@@ -90,9 +90,29 @@ else:
     repair_body = iphone_v4[repair_start:repair_end]
     forbid(repair_body, "cleanupGeneratedRestorations(", "Nettoyage automatique interdit dans repair")
     require(repair_body, "guard generated.isEmpty", "Repair bloque les doublons")
-    require(repair_body, "hasDistanceConflict", "Repair bloque distance incohérente")
+    require(repair_body, "hasDistanceConflict", "Repair bloque distance non confirmée")
+    require(repair_body, "hasRouteGeometryConflict", "Repair bloque géométrie incohérente")
+    require(repair_body, "hasRouteContinuityConflict", "Repair bloque trous GPS actifs")
 
-# D. Route HealthKit explicite et vérifiée.
+# D. Politique route: un compteur secondaire incomplet ne peut plus veto un
+# compteur primaire cohérent; la route primaire peut être complétée avec le GPS
+# secondaire puis débruitée sans inventer de coordonnées.
+for token, label in [
+    ("counterAgrees", "Validation indépendante des compteurs raw"),
+    ("distanceReferenceSource", "Source de distance explicite"),
+    ("mergeActiveGaps", "Fusion uniquement des trous actifs"),
+    ("counterAwareFilter", "Filtrage bruit guidé par compteur raw"),
+    ("denoiseForDistance", "Débruitage géométrique borné"),
+    ("perpendicularDeviation", "Suppression limitée au bruit de précision"),
+    ("activePairs = pairs.filter", "Géométrie exclut les intervalles de pause"),
+    ("route.maxActiveGapSeconds > 20", "Trou actif long bloque la reconstruction"),
+    ("summaryMeters * 0.15", "Tolérance géométrique explicite"),
+    ("watchRawMeters: raw.watchRawDistanceMeters", "Compteur Watch évalué séparément"),
+    ("phoneRawMeters: raw.phoneRawDistanceMeters", "Compteur iPhone évalué séparément"),
+]:
+    require(iphone_v4, token, label)
+
+# E. Route HealthKit explicite et vérifiée.
 for token, label in [
     ("HKWorkoutBuilder(", "Workout builder historique iPhone"),
     ("HKWorkoutRouteBuilder(healthStore:", "Route builder indépendant"),
@@ -100,11 +120,12 @@ for token, label in [
     ("predicateForObjects(from: workout)", "Relecture route associée"),
     ("loadLocations(for:", "Relecture des points GPS"),
     ("savedRoutes.count == 1", "Unicité route v4"),
+    ("verifyQuantitySamples(", "Relecture full-fidelity des quantités"),
 ]:
     require(iphone_v4, token, label)
 forbid(iphone_v4, "seriesBuilder(", "Route v4 ne réutilise pas le builder attaché incident")
 
-# E. Effort réel : sample + relation explicite à l'activité du workout.
+# F. Effort réel : sample + relation explicite à l'activité du workout.
 for token, label in [
     (".workoutEffortScore", "Type effort Apple"),
     ("relateWorkoutEffortSample(", "Relation effort/workout"),
@@ -113,7 +134,7 @@ for token, label in [
 ]:
     require(iphone_v4, token, label)
 
-# F. Autorisations d'écriture explicites.
+# G. Autorisations d'écriture explicites.
 for token, label in [
     ("HKObjectType.workoutType()", "Autorisation workout"),
     ("HKSeriesType.workoutRoute()", "Autorisation route"),
@@ -125,13 +146,14 @@ for token, label in [
 ]:
     require(iphone_v4, token, label)
 
-# G. Full fidelity conservée via les métadonnées déjà éprouvées.
+# H. Full fidelity conservée via les métadonnées déjà éprouvées.
 for token, label in [
     ("HistoricalHealthKitFullFidelity.workoutMetadata(", "Métadonnées full-fidelity réutilisées"),
     ("HistoricalHealthKitFullFidelity.verifyWorkoutMetadata", "Métadonnées relues"),
-    ('generation = "ios_historical_v4_clean_route"', "Génération v4 identifiable"),
+    ('generation = "ios_historical_v4_fused_route"', "Génération v4 identifiable"),
     ("route_filtered_point_count", "Provenance route filtrée"),
     ("route_geometry_m", "Géométrie route auditée"),
+    ("route_filter_strategy", "Stratégie de route durable"),
 ]:
     require(iphone_v4, token, label)
 for token, label in [
@@ -143,13 +165,17 @@ for token, label in [
 ]:
     require(iphone_fidelity, token, label)
 
-# H. Pas de faux positif produit.
+# I. Pas de faux positif produit.
 require(iphone_v4, "PAS encore validé dans Santé/Forme.", "API relue != validation physique")
 forbid(iphone_v4, '"replacement_verified"', "V4 ne promeut pas automatiquement la vérité produit")
 forbid(iphone_v4, "recentHistoryBridge.publish(", "V4 ne réécrit pas l'historique local")
-require(iphone_v4, "let delays: [UInt64] = [0, 1_200_000_000, 3_000_000_000]", "Relectures différées")
+require(
+    iphone_v4,
+    "let delays: [UInt64] = [0, 1_200_000_000, 3_000_000_000]",
+    "Relectures différées",
+)
 
-# I. Le live Watch reste intact.
+# J. Le live Watch reste intact.
 require(iphone_reliable, "WatchReliableRecovery.ingest(userInfo)", "Journalisation fiable Watch")
 require(watch_model, "HKLiveWorkoutBuilder", "Live Watch reste HKLiveWorkoutBuilder")
 
@@ -162,11 +188,14 @@ if errors:
 print("TRACKER PRODUCT INVARIANTS: OK")
 print(" - active historical product surface: iPhone v4 only")
 print(" - Watch + iPhone raw GPS are audited independently")
-print(" - pause gaps and impossible GPS spikes are filtered without interpolation")
-print(" - summary/raw distance conflicts block HealthKit writes")
+print(" - matching primary distance survives an incomplete secondary counter")
+print(" - pause-crossing legs are excluded from active route geometry")
+print(" - secondary GPS can fill active gaps without fabricated coordinates")
+print(" - accuracy-scale zigzags are reduced while short temporal continuity is preserved")
+print(" - route geometry and long active gaps block unsafe HealthKit writes")
 print(" - explicit cleanup prevents accumulation of test workouts")
 print(" - cleanup is scoped to raw_restoration + exact session id")
-print(" - one v4 workout + one route are durably reread")
+print(" - one v4 workout + one route + quantities are durably reread")
 print(" - perceived effort is explicitly related and reread")
 print(" - internal HealthKit reread is not physical validation")
 print(" - live Watch HKLiveWorkoutBuilder remains unchanged")

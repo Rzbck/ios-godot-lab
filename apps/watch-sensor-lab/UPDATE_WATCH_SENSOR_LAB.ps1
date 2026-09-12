@@ -15,17 +15,6 @@ if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyCo
     $PSNativeCommandUseErrorActionPreference = $false
 }
 
-$BuildRelevantPaths = @(
-    'apps/watch-sensor-lab/iphone',
-    'apps/watch-sensor-lab/watch',
-    'apps/watch-sensor-lab/Shared',
-    'apps/watch-sensor-lab/godot',
-    'apps/watch-sensor-lab/GENERATE_APP_ICON.py',
-    'apps/watch-sensor-lab/CHECK_WORKFLOW_PARITY.py',
-    'apps/watch-sensor-lab/CHECK_PRODUCT_INVARIANTS.py',
-    '.github/workflows/watch-sensor-lab-bootstrap.yml'
-)
-
 function Assert-NativeSuccess {
     param([Parameter(Mandatory)][string]$What)
     if ($LASTEXITCODE -ne 0) {
@@ -36,15 +25,13 @@ function Assert-NativeSuccess {
 function Get-RepoContainer {
     param([Parameter(Mandatory)][string]$RepoTop)
 
-    $parent = Split-Path -Parent $RepoTop
-    if ((Split-Path -Leaf $parent) -eq 'worktrees') {
-        return (Split-Path -Parent $parent)
+    $Parent = Split-Path -Parent $RepoTop
+    if ((Split-Path -Leaf $Parent) -eq 'worktrees') {
+        return (Split-Path -Parent $Parent)
     }
-
     if ((Split-Path -Leaf $RepoTop) -eq 'main') {
-        return $parent
+        return $Parent
     }
-
     return $RepoTop
 }
 
@@ -55,7 +42,7 @@ function Get-BranchRuns {
         [Parameter(Mandatory)][string]$BranchName
     )
 
-    $json = & gh run list `
+    $Json = & gh run list `
         --repo $RepositoryName `
         --workflow $WorkflowName `
         --branch $BranchName `
@@ -63,11 +50,10 @@ function Get-BranchRuns {
         --json databaseId,headSha,conclusion,status,createdAt,event,displayTitle
     Assert-NativeSuccess 'gh run list'
 
-    if ([string]::IsNullOrWhiteSpace(($json -join ''))) {
+    if ([string]::IsNullOrWhiteSpace(($Json -join ''))) {
         return @()
     }
-
-    return @($json | ConvertFrom-Json)
+    return @($Json | ConvertFrom-Json)
 }
 
 function Test-RunHasExpectedArtifact {
@@ -77,160 +63,97 @@ function Test-RunHasExpectedArtifact {
         [Parameter(Mandatory)][string]$BuildSha
     )
 
-    $artifactName = "watch-sensor-lab-companion-$BuildSha"
-    $json = & gh api "repos/$RepositoryName/actions/runs/$RunId/artifacts?per_page=100"
+    $ArtifactName = "watch-sensor-lab-companion-$BuildSha"
+    $Json = & gh api "repos/$RepositoryName/actions/runs/$RunId/artifacts?per_page=100"
     Assert-NativeSuccess "gh api artifacts for run $RunId"
 
-    if ([string]::IsNullOrWhiteSpace(($json -join ''))) {
+    if ([string]::IsNullOrWhiteSpace(($Json -join ''))) {
         return $false
     }
 
-    $payload = $json | ConvertFrom-Json
-    $matches = @($payload.artifacts | Where-Object {
-        [string]$_.name -eq $artifactName -and $_.expired -ne $true
+    $Payload = $Json | ConvertFrom-Json
+    $Matches = @($Payload.artifacts | Where-Object {
+        [string]$_.name -eq $ArtifactName -and $_.expired -ne $true
     })
-    return ($matches.Count -gt 0)
+    return ($Matches.Count -gt 0)
 }
 
-function Test-CommitAvailable {
-    param([Parameter(Mandatory)][string]$CommitSha)
-
-    & git cat-file -e "$CommitSha^{commit}" 2>$null
-    return ($LASTEXITCODE -eq 0)
-}
-
-function Test-CommitIsAncestor {
-    param(
-        [Parameter(Mandatory)][string]$CandidateSha,
-        [Parameter(Mandatory)][string]$HeadSha
-    )
-
-    if (-not (Test-CommitAvailable -CommitSha $CandidateSha)) {
-        return $false
-    }
-
-    & git merge-base --is-ancestor $CandidateSha $HeadSha
-    if ($LASTEXITCODE -eq 0) { return $true }
-    if ($LASTEXITCODE -eq 1) { return $false }
-    throw "git merge-base failed while checking candidate build SHA $CandidateSha."
-}
-
-function Test-BuildInputsEquivalent {
-    param(
-        [Parameter(Mandatory)][string]$CandidateSha,
-        [Parameter(Mandatory)][string]$HeadSha,
-        [Parameter(Mandatory)][string[]]$RelevantPaths
-    )
-
-    if ($CandidateSha -eq $HeadSha) {
-        return $true
-    }
-
-    if (-not (Test-CommitIsAncestor -CandidateSha $CandidateSha -HeadSha $HeadSha)) {
-        return $false
-    }
-
-    $args = @('diff', '--quiet', "$CandidateSha..$HeadSha", '--') + $RelevantPaths
-    & git @args
-    if ($LASTEXITCODE -eq 0) { return $true }
-    if ($LASTEXITCODE -eq 1) { return $false }
-    throw "git diff failed while checking build inputs between $CandidateSha and $HeadSha."
-}
-
-function Wait-ForCompatibleBuild {
+function Wait-ForExactBuild {
     param(
         [Parameter(Mandatory)][string]$RepositoryName,
         [Parameter(Mandatory)][string]$WorkflowName,
         [Parameter(Mandatory)][string]$BranchName,
         [Parameter(Mandatory)][string]$HeadSha,
-        [Parameter(Mandatory)][string[]]$RelevantPaths,
         [Parameter(Mandatory)][int]$TimeoutMinutes,
         [switch]$MayTrigger
     )
 
-    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
-    $triggeredHere = $false
+    $Deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $TriggeredHere = $false
 
-    while ((Get-Date) -lt $deadline) {
-        $runs = @(Get-BranchRuns `
+    while ((Get-Date) -lt $Deadline) {
+        $Runs = @(Get-BranchRuns `
             -RepositoryName $RepositoryName `
             -WorkflowName $WorkflowName `
             -BranchName $BranchName)
 
-        $compatible = @()
-        foreach ($candidate in ($runs | Sort-Object createdAt -Descending)) {
-            if ([string]::IsNullOrWhiteSpace([string]$candidate.headSha)) { continue }
-            if (Test-BuildInputsEquivalent `
-                -CandidateSha ([string]$candidate.headSha) `
-                -HeadSha $HeadSha `
-                -RelevantPaths $RelevantPaths) {
-                $compatible += $candidate
-            }
-        }
+        $ExactRuns = @($Runs |
+            Where-Object { [string]$_.headSha -eq $HeadSha } |
+            Sort-Object createdAt -Descending)
 
-        $success = $null
-        $successfulRuns = @($compatible |
-            Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' } |
-            Select-Object -First 12)
+        $SuccessfulRuns = @($ExactRuns |
+            Where-Object { $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
 
-        foreach ($candidate in $successfulRuns) {
+        foreach ($Candidate in $SuccessfulRuns) {
             if (Test-RunHasExpectedArtifact `
                 -RepositoryName $RepositoryName `
-                -RunId ([Int64]$candidate.databaseId) `
-                -BuildSha ([string]$candidate.headSha)) {
-                $success = $candidate
-                break
+                -RunId ([Int64]$Candidate.databaseId) `
+                -BuildSha $HeadSha) {
+                return $Candidate
             }
         }
 
-        if ($null -ne $success) {
-            return [pscustomobject]@{
-                Run = $success
-                BuildSha = [string]$success.headSha
-            }
+        $Active = $ExactRuns |
+            Where-Object { $_.status -in @('queued', 'in_progress', 'pending', 'requested', 'waiting') } |
+            Select-Object -First 1
+
+        if ($null -ne $Active) {
+            Write-Host ("BUILD       = {0} - {1} - {2}" -f $Active.databaseId, $Active.status, $Active.headSha) -ForegroundColor DarkCyan
+            Start-Sleep -Seconds 5
+            continue
         }
 
-        $failed = $compatible |
+        $Failed = $ExactRuns |
             Where-Object {
                 $_.status -eq 'completed' -and
                 $_.conclusion -in @('failure', 'timed_out', 'action_required', 'startup_failure')
             } |
             Select-Object -First 1
 
-        if ($null -ne $failed) {
-            throw "Compatible Watch Sensor Lab build $($failed.databaseId) finished with conclusion '$($failed.conclusion)' for SHA $($failed.headSha)."
-        }
-
-        $active = $compatible |
-            Where-Object { $_.status -in @('queued', 'in_progress', 'pending', 'requested', 'waiting') } |
-            Select-Object -First 1
-
-        if ($null -ne $active) {
-            Write-Host ("BUILD       = {0} - {1} - {2}" -f $active.databaseId, $active.status, $active.headSha) -ForegroundColor DarkCyan
-            Start-Sleep -Seconds 5
-            continue
+        if ($null -ne $Failed -and $TriggeredHere) {
+            throw "Exact Watch Sensor Lab build $($Failed.databaseId) finished with conclusion '$($Failed.conclusion)' for SHA $HeadSha."
         }
 
         if (-not $MayTrigger) {
-            throw "No retained device artifact exists whose build inputs exactly match branch HEAD $HeadSha."
+            throw "No retained device artifact exists for exact branch HEAD $HeadSha."
         }
 
-        if (-not $triggeredHere) {
-            Write-Host 'No retained compatible device artifact exists. Triggering exact current-HEAD device build...' -ForegroundColor Yellow
+        if (-not $TriggeredHere) {
+            Write-Host 'No retained exact-HEAD device artifact exists. Triggering exact current-HEAD device build...' -ForegroundColor Yellow
             & gh workflow run $WorkflowName `
                 --repo $RepositoryName `
                 --ref $BranchName
             Assert-NativeSuccess 'gh workflow run'
-            $triggeredHere = $true
+            $TriggeredHere = $true
             Start-Sleep -Seconds 3
             continue
         }
 
-        Write-Host 'Waiting for GitHub Actions to register the dispatched device-artifact run...' -ForegroundColor DarkCyan
+        Write-Host 'Waiting for GitHub Actions to register the exact-HEAD device-artifact run...' -ForegroundColor DarkCyan
         Start-Sleep -Seconds 5
     }
 
-    throw "Timed out after $TimeoutMinutes minute(s) waiting for a retained Watch Sensor Lab artifact compatible with HEAD $HeadSha."
+    throw "Timed out after $TimeoutMinutes minute(s) waiting for exact Watch Sensor Lab artifact at HEAD $HeadSha."
 }
 
 function Test-ArtifactDirectory {
@@ -243,31 +166,31 @@ function Test-ArtifactDirectory {
         return $false
     }
 
-    $ipaFiles = @(Get-ChildItem -LiteralPath $Directory -Filter '*.ipa' -File -ErrorAction SilentlyContinue)
-    $hashFiles = @(Get-ChildItem -LiteralPath $Directory -Filter '*.ipa.sha256' -File -ErrorAction SilentlyContinue)
-    $metaFiles = @(Get-ChildItem -LiteralPath $Directory -Filter 'BUILD-METADATA.json' -File -ErrorAction SilentlyContinue)
+    $IpaFiles = @(Get-ChildItem -LiteralPath $Directory -Filter '*.ipa' -File -ErrorAction SilentlyContinue)
+    $HashFiles = @(Get-ChildItem -LiteralPath $Directory -Filter '*.ipa.sha256' -File -ErrorAction SilentlyContinue)
+    $MetaFiles = @(Get-ChildItem -LiteralPath $Directory -Filter 'BUILD-METADATA.json' -File -ErrorAction SilentlyContinue)
 
-    if ($ipaFiles.Count -ne 1 -or $hashFiles.Count -ne 1 -or $metaFiles.Count -ne 1) {
+    if ($IpaFiles.Count -ne 1 -or $HashFiles.Count -ne 1 -or $MetaFiles.Count -ne 1) {
         return $false
     }
 
     try {
-        $expectedLine = (Get-Content -LiteralPath $hashFiles[0].FullName -TotalCount 1).Trim()
-        if ($expectedLine -notmatch '^([0-9a-fA-F]{64})\b') {
+        $ExpectedLine = (Get-Content -LiteralPath $HashFiles[0].FullName -TotalCount 1).Trim()
+        if ($ExpectedLine -notmatch '^([0-9a-fA-F]{64})\b') {
             return $false
         }
 
-        $expectedHash = $Matches[1].ToLowerInvariant()
-        $actualHash = (Get-FileHash -LiteralPath $ipaFiles[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($expectedHash -ne $actualHash) {
+        $ExpectedHash = $Matches[1].ToLowerInvariant()
+        $ActualHash = (Get-FileHash -LiteralPath $IpaFiles[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($ExpectedHash -ne $ActualHash) {
             return $false
         }
 
-        $metadata = Get-Content -LiteralPath $metaFiles[0].FullName -Raw | ConvertFrom-Json
-        if ([string]$metadata.sha -ne $ExpectedSha) {
+        $Metadata = Get-Content -LiteralPath $MetaFiles[0].FullName -Raw | ConvertFrom-Json
+        if ([string]$Metadata.sha -ne $ExpectedSha) {
             return $false
         }
-        if ($metadata.watch_companion_integrated_in_ipa -ne $true) {
+        if ($Metadata.watch_companion_integrated_in_ipa -ne $true) {
             return $false
         }
     }
@@ -283,7 +206,6 @@ Write-Host "`n=== WATCH SENSOR LAB - EXACT COMPANION IPA SYNC ===" -ForegroundCo
 if ($BuildTimeoutMinutes -lt 1 -or $BuildTimeoutMinutes -gt 120) {
     throw 'BuildTimeoutMinutes must be between 1 and 120.'
 }
-
 if ($null -eq (Get-Command git -ErrorAction SilentlyContinue)) {
     throw 'git not found in PATH.'
 }
@@ -291,38 +213,37 @@ if ($null -eq (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw 'GitHub CLI (gh) not found in PATH.'
 }
 
-$repoTop = (& git rev-parse --show-toplevel).Trim()
+$RepoTop = (& git rev-parse --show-toplevel).Trim()
 Assert-NativeSuccess 'git rev-parse --show-toplevel'
 
-$branch = (& git branch --show-current).Trim()
+$Branch = (& git branch --show-current).Trim()
 Assert-NativeSuccess 'git branch --show-current'
-if ([string]::IsNullOrWhiteSpace($branch)) {
+if ([string]::IsNullOrWhiteSpace($Branch)) {
     throw 'Detached HEAD detected. Run this script from the Watch Sensor Lab worktree.'
 }
-if ($branch -ne $ExpectedBranch) {
-    throw "STOP: expected branch '$ExpectedBranch', current branch is '$branch'."
+if ($Branch -ne $ExpectedBranch) {
+    throw "STOP: expected branch '$ExpectedBranch', current branch is '$Branch'."
 }
 
-$headBefore = (& git rev-parse HEAD).Trim()
+$HeadBefore = (& git rev-parse HEAD).Trim()
 Assert-NativeSuccess 'git rev-parse HEAD'
-
-$remote = (& git remote get-url origin).Trim()
+$Remote = (& git remote get-url origin).Trim()
 Assert-NativeSuccess 'git remote get-url origin'
-if ($remote -notmatch 'Rzbck/ios-godot-lab(?:\.git)?$') {
-    throw "Unexpected origin remote: $remote"
+if ($Remote -notmatch 'Rzbck/ios-godot-lab(?:\.git)?$') {
+    throw "Unexpected origin remote: $Remote"
 }
 
-$status = @(git status --porcelain)
+$Status = @(git status --porcelain)
 Assert-NativeSuccess 'git status --porcelain'
 
-Write-Host "REPO        = $repoTop"
-Write-Host "BRANCH      = $branch"
-Write-Host "HEAD BEFORE = $headBefore"
-Write-Host "ORIGIN      = $remote"
-Write-Host ("STATE       = " + ($(if ($status.Count -eq 0) { 'CLEAN' } else { 'DIRTY' })))
+Write-Host "REPO        = $RepoTop"
+Write-Host "BRANCH      = $Branch"
+Write-Host "HEAD BEFORE = $HeadBefore"
+Write-Host "ORIGIN      = $Remote"
+Write-Host ("STATE       = " + ($(if ($Status.Count -eq 0) { 'CLEAN' } else { 'DIRTY' })))
 
-if ($status.Count -ne 0) {
-    $status | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
+if ($Status.Count -ne 0) {
+    $Status | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
     throw 'STOP: worktree is DIRTY. Nothing was updated or downloaded.'
 }
 
@@ -334,157 +255,115 @@ if (-not $SkipGitUpdate) {
     & git fetch origin --prune
     Assert-NativeSuccess 'git fetch origin --prune'
 
-    & git show-ref --verify --quiet "refs/remotes/origin/$branch"
+    & git show-ref --verify --quiet "refs/remotes/origin/$Branch"
     if ($LASTEXITCODE -ne 0) {
-        throw "No matching remote branch origin/$branch."
+        throw "No matching remote branch origin/$Branch."
     }
 
     Write-Host 'Fast-forwarding current Watch Sensor Lab branch only...' -ForegroundColor DarkCyan
-    & git merge --ff-only "origin/$branch"
+    & git merge --ff-only "origin/$Branch"
     Assert-NativeSuccess 'git merge --ff-only'
 }
 
-$head = (& git rev-parse HEAD).Trim()
+$Head = (& git rev-parse HEAD).Trim()
 Assert-NativeSuccess 'git rev-parse HEAD'
-Write-Host "HEAD AFTER  = $head" -ForegroundColor Green
+Write-Host "HEAD AFTER  = $Head" -ForegroundColor Green
 
-Write-Host "`nResolving retained companion artifact with identical build inputs..." -ForegroundColor DarkCyan
-$resolverOutput = @(
-    Wait-ForCompatibleBuild `
-        -RepositoryName $Repository `
-        -WorkflowName $Workflow `
-        -BranchName $branch `
-        -HeadSha $head `
-        -RelevantPaths $BuildRelevantPaths `
-        -TimeoutMinutes $BuildTimeoutMinutes `
-        -MayTrigger:(-not $NoAutoBuild)
-)
+Write-Host "`nResolving retained companion artifact for exact HEAD only..." -ForegroundColor DarkCyan
+$Run = Wait-ForExactBuild `
+    -RepositoryName $Repository `
+    -WorkflowName $Workflow `
+    -BranchName $Branch `
+    -HeadSha $Head `
+    -TimeoutMinutes $BuildTimeoutMinutes `
+    -MayTrigger:(-not $NoAutoBuild)
 
-$resolved = @(
-    $resolverOutput | Where-Object {
-        $null -ne $_ -and
-        $null -ne $_.PSObject.Properties['Run'] -and
-        $null -ne $_.PSObject.Properties['BuildSha']
-    }
-) | Select-Object -Last 1
+$RunId = [Int64]$Run.databaseId
+$BuildSha = [string]$Run.headSha
+if ($BuildSha -ne $Head) {
+    throw "STOP: exact-SHA invariant violated. HEAD=$Head BUILD=$BuildSha"
+}
 
-if ($null -ne $resolved) {
-    $run = $resolved.Run
-    $buildSha = [string]$resolved.BuildSha
+Write-Host "BUILD SHA   = $BuildSha" -ForegroundColor Green
+
+$ArtifactName = "watch-sensor-lab-companion-$BuildSha"
+$ShortSha = $BuildSha.Substring(0, 12)
+$RepoContainer = Get-RepoContainer -RepoTop $RepoTop
+$ArtifactRoot = Join-Path (Join-Path $RepoContainer 'artifacts') 'watch-sensor-lab'
+$FinalDir = Join-Path $ArtifactRoot $ShortSha
+New-Item -ItemType Directory -Force -Path $ArtifactRoot | Out-Null
+
+if (Test-ArtifactDirectory -Directory $FinalDir -ExpectedSha $BuildSha) {
+    Write-Host "`nExact-HEAD companion artifact already present and hash-verified." -ForegroundColor Green
 }
 else {
-    $run = @(
-        $resolverOutput | Where-Object {
-            $null -ne $_ -and
-            $null -ne $_.PSObject.Properties['databaseId'] -and
-            $null -ne $_.PSObject.Properties['headSha']
-        }
-    ) | Select-Object -Last 1
-
-    if ($null -eq $run) {
-        $types = @(
-            $resolverOutput | ForEach-Object {
-                if ($null -eq $_) { '<null>' }
-                else { $_.GetType().FullName }
-            }
-        ) -join ', '
-
-        throw "Compatible build resolver returned no usable run object. Output types: $types"
+    if (Test-Path -LiteralPath $FinalDir) {
+        throw "Artifact directory exists but is incomplete or invalid: $FinalDir`nInspect it manually; this updater will not overwrite it."
     }
 
-    $buildSha = [string]$run.headSha
-}
-
-$runId = [int64]$run.databaseId
-
-if ($buildSha -ne $head) {
-    Write-Host "BRANCH HEAD = $head" -ForegroundColor DarkGray
-    Write-Host "BUILD SHA   = $buildSha" -ForegroundColor Green
-    Write-Host 'BUILD INPUTS= identical; intervening commits do not affect the packaged app' -ForegroundColor Green
-}
-else {
-    Write-Host "BUILD SHA   = $buildSha" -ForegroundColor Green
-}
-
-$artifactName = "watch-sensor-lab-companion-$buildSha"
-$shortSha = $buildSha.Substring(0, 12)
-$repoContainer = Get-RepoContainer -RepoTop $repoTop
-$artifactRoot = Join-Path (Join-Path $repoContainer 'artifacts') 'watch-sensor-lab'
-$finalDir = Join-Path $artifactRoot $shortSha
-
-New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
-
-if (Test-ArtifactDirectory -Directory $finalDir -ExpectedSha $buildSha) {
-    Write-Host "`nCompatible exact companion artifact already present and hash-verified." -ForegroundColor Green
-}
-else {
-    if (Test-Path -LiteralPath $finalDir) {
-        throw "Artifact directory exists but is incomplete or invalid: $finalDir`nInspect it manually; this updater will not overwrite it."
-    }
-
-    $tempDir = Join-Path $artifactRoot ('.tmp-' + $shortSha + '-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $tempDir | Out-Null
+    $TempDir = Join-Path $ArtifactRoot ('.tmp-' + $ShortSha + '-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $TempDir | Out-Null
 
     try {
-        Write-Host "`nDownloading exact retained companion artifact..." -ForegroundColor DarkCyan
-        Write-Host "RUN         = $runId"
-        Write-Host "ARTIFACT    = $artifactName"
+        Write-Host "`nDownloading exact-HEAD retained companion artifact..." -ForegroundColor DarkCyan
+        Write-Host "RUN         = $RunId"
+        Write-Host "ARTIFACT    = $ArtifactName"
 
-        & gh run download $runId `
+        & gh run download $RunId `
             --repo $Repository `
-            --name $artifactName `
-            --dir $tempDir
+            --name $ArtifactName `
+            --dir $TempDir
         Assert-NativeSuccess 'gh run download'
 
-        if (-not (Test-ArtifactDirectory -Directory $tempDir -ExpectedSha $buildSha)) {
+        if (-not (Test-ArtifactDirectory -Directory $TempDir -ExpectedSha $BuildSha)) {
             throw 'Downloaded artifact failed exact build-SHA, metadata, companion or SHA-256 validation.'
         }
 
-        Move-Item -LiteralPath $tempDir -Destination $finalDir
+        Move-Item -LiteralPath $TempDir -Destination $FinalDir
     }
     catch {
-        if (Test-Path -LiteralPath $tempDir) {
-            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $TempDir) {
+            Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
         }
         throw
     }
 }
 
-$ipa = @(Get-ChildItem -LiteralPath $finalDir -Filter '*.ipa' -File)
-if ($ipa.Count -ne 1) {
-    throw "Final artifact folder does not contain exactly one IPA: $finalDir"
+$Ipa = @(Get-ChildItem -LiteralPath $FinalDir -Filter '*.ipa' -File)
+if ($Ipa.Count -ne 1) {
+    throw "Final artifact folder does not contain exactly one IPA: $FinalDir"
 }
 
-$ipaHash = (Get-FileHash -LiteralPath $ipa[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-$latest = [ordered]@{
+$IpaHash = (Get-FileHash -LiteralPath $Ipa[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+$Latest = [ordered]@{
     repository = $Repository
-    branch = $branch
-    branch_head_sha = $head
-    git_sha = $buildSha
-    build_sha = $buildSha
-    build_inputs_match_branch_head = $true
-    workflow_run = $runId
-    workflow_event = [string]$run.event
-    artifact = $artifactName
-    ipa = $ipa[0].FullName
-    ipa_sha256 = $ipaHash
+    branch = $Branch
+    branch_head_sha = $Head
+    git_sha = $BuildSha
+    build_sha = $BuildSha
+    exact_head = $true
+    workflow_run = $RunId
+    workflow_event = [string]$Run.event
+    artifact = $ArtifactName
+    ipa = $Ipa[0].FullName
+    ipa_sha256 = $IpaHash
     synced_at = (Get-Date).ToString('o')
 }
 
-$latestJson = Join-Path $artifactRoot 'LATEST.json'
-$latestTxt = Join-Path $artifactRoot 'LATEST_IPA.txt'
-$latest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $latestJson -Encoding UTF8
-$ipa[0].FullName | Set-Content -LiteralPath $latestTxt -Encoding UTF8
+$LatestJson = Join-Path $ArtifactRoot 'LATEST.json'
+$LatestTxt = Join-Path $ArtifactRoot 'LATEST_IPA.txt'
+$Latest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $LatestJson -Encoding UTF8
+$Ipa[0].FullName | Set-Content -LiteralPath $LatestTxt -Encoding UTF8
 
 Write-Host "`n=== READY FOR ILOADER TEST ===" -ForegroundColor Green
-Write-Host "HEAD        = $head"
-Write-Host "BUILD SHA   = $buildSha"
-Write-Host "RUN         = $runId"
-Write-Host "IPA         = $($ipa[0].FullName)"
-Write-Host "SHA-256     = $ipaHash"
-Write-Host "LATEST JSON = $latestJson"
+Write-Host "HEAD        = $Head"
+Write-Host "BUILD SHA   = $BuildSha"
+Write-Host "RUN         = $RunId"
+Write-Host "IPA         = $($Ipa[0].FullName)"
+Write-Host "SHA-256     = $IpaHash"
+Write-Host "LATEST JSON = $LatestJson"
 Write-Host 'WATCH       = embedded in IPA; hardware installation is NOT validated yet' -ForegroundColor Yellow
 
 if ($OpenFolder) {
-    Start-Process explorer.exe -ArgumentList "/select,`"$($ipa[0].FullName)`""
+    Start-Process explorer.exe -ArgumentList "/select,`"$($Ipa[0].FullName)`""
 }

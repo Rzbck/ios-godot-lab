@@ -605,6 +605,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         if targetDistanceMeters != nil {
             values = counterIsolatedOutlierFilter(values, pauses: pauses)
             values = counterSegmentOutlierFilter(values, pauses: pauses)
+            values = counterPostPauseReacquisitionFilter(values, pauses: pauses)
         }
 
         // Remove isolated impossible spikes. Only raw points are discarded; no
@@ -749,6 +750,111 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
         }
 
         return deduplicate(values)
+    }
+
+    /// A long pause can resume from a stale or transitional GPS solution. If the
+    /// trusted cumulative counter proves that the complete post-resume segment is
+    /// impossible, discard only the unstable prefix until a sufficiently long suffix
+    /// becomes counter-consistent again. If no stable suffix exists, keep the gap
+    /// honest by dropping that post-resume segment instead of drawing a false bridge.
+    private func counterPostPauseReacquisitionFilter(
+        _ points: [RawPoint],
+        pauses: [TrackerHealthRestorePause]
+    ) -> [RawPoint] {
+        var values = deduplicate(points)
+        let orderedPauses = pauses.sorted { $0.startedAt < $1.startedAt }
+        guard values.count >= 3, !orderedPauses.isEmpty else { return values }
+
+        for (pauseIndex, pause) in orderedPauses.enumerated() {
+            guard pause.endedAt - pause.startedAt >= 5 else { continue }
+            let nextPauseStart = pauseIndex + 1 < orderedPauses.count
+                ? orderedPauses[pauseIndex + 1].startedAt
+                : Double.greatestFiniteMagnitude
+
+            guard let firstIndex = values.firstIndex(where: {
+                $0.timestamp > pause.endedAt && $0.timestamp < nextPauseStart
+            }) else {
+                continue
+            }
+
+            var endIndex = firstIndex
+            while endIndex < values.count,
+                  values[endIndex].timestamp < nextPauseStart {
+                endIndex += 1
+            }
+
+            let segmentRange = firstIndex..<endIndex
+            let segment = Array(values[segmentRange])
+            guard segment.count >= 3,
+                  postPauseSegmentHasCounterConflict(segment) else {
+                continue
+            }
+
+            if let stableOffset = earliestCounterStableSuffixStart(segment) {
+                guard stableOffset > 0 else { continue }
+                values.removeSubrange(firstIndex..<(firstIndex + stableOffset))
+            } else {
+                values.removeSubrange(segmentRange)
+            }
+        }
+
+        return deduplicate(values)
+    }
+
+    private func postPauseSegmentHasCounterConflict(_ points: [RawPoint]) -> Bool {
+        let ordered = deduplicate(points)
+        guard ordered.count >= 3,
+              let start = ordered.first,
+              let end = ordered.last,
+              let metrics = counterWindowMetrics(
+                start: start,
+                interior: Array(ordered[1..<(ordered.count - 1)]),
+                end: end
+              ) else {
+            return false
+        }
+        return metrics.pathExcess > metrics.minimumExcess
+            || metrics.directGeometry > metrics.bridgeAllowedGeometry
+    }
+
+    private func earliestCounterStableSuffixStart(_ points: [RawPoint]) -> Int? {
+        let ordered = deduplicate(points)
+        let minimumStablePoints = 12
+        let minimumStableDuration = 20.0
+        guard ordered.count >= minimumStablePoints else { return nil }
+
+        for startIndex in 0...(ordered.count - minimumStablePoints) {
+            let suffix = Array(ordered[startIndex...])
+            guard let first = suffix.first,
+                  let last = suffix.last,
+                  last.timestamp - first.timestamp >= minimumStableDuration,
+                  let metrics = counterWindowMetrics(
+                    start: first,
+                    interior: Array(suffix[1..<(suffix.count - 1)]),
+                    end: last
+                  ),
+                  metrics.pathExcess <= 0,
+                  metrics.directGeometry <= metrics.bridgeAllowedGeometry,
+                  counterSuffixAnchorIsConsistent(suffix) else {
+                continue
+            }
+            return startIndex
+        }
+        return nil
+    }
+
+    private func counterSuffixAnchorIsConsistent(_ points: [RawPoint]) -> Bool {
+        guard let anchor = points.first,
+              anchor.cumulativeDistanceMeters != nil else {
+            return false
+        }
+        for point in points.dropFirst() {
+            guard point.cumulativeDistanceMeters != nil,
+                  counterLegIsConsistent(anchor, point) else {
+                return false
+            }
+        }
+        return true
     }
 
     private struct CounterWindowMetrics {
@@ -1334,7 +1440,7 @@ final class HistoricalHealthKitRepairV4Coordinator: ObservableObject {
                 "com.rzbck.watchsensorlab.route_filtered_point_count": route.points.count,
                 "com.rzbck.watchsensorlab.route_geometry_m": route.geometryMeters,
                 "com.rzbck.watchsensorlab.route_filter_strategy":
-                    "trusted_counter_segment_outlier_rejection_counter_bounded_true_raw_gap_fill_no_interpolation",
+                    "trusted_counter_post_pause_reacquisition_segment_outlier_rejection_counter_bounded_true_raw_gap_fill_no_interpolation",
             ]
             for (key, value) in HistoricalHealthKitFullFidelity.workoutMetadata(
                 summary: summary,

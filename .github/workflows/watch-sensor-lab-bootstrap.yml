@@ -150,7 +150,11 @@ jobs:
         run: |
           set -euo pipefail
           IPHONE_DERIVED="$RUNNER_TEMP/DerivedData-iPhone"
-          rm -rf "$IPHONE_DERIVED"
+          DIAG_DIR="$GITHUB_WORKSPACE/build/session-sync-diagnostics"
+          rm -rf "$IPHONE_DERIVED" "$DIAG_DIR"
+          mkdir -p "$DIAG_DIR"
+
+          set +e
           xcodebuild \
             -project "$IPHONE_XCODEPROJ" \
             -scheme WatchSensorLab \
@@ -162,7 +166,16 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            build
+            build 2>&1 | tee "$DIAG_DIR/iphone-build.log"
+          BUILD_STATUS=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$BUILD_STATUS" -ne 0 ]; then
+            grep -E '(^| )error:|fatal error:' "$DIAG_DIR/iphone-build.log" > "$DIAG_DIR/iphone-errors.txt" || true
+            echo '=== iPhone compiler errors ==='
+            cat "$DIAG_DIR/iphone-errors.txt" || true
+            exit "$BUILD_STATUS"
+          fi
 
           IPHONE_APP_PATH="$(find "$IPHONE_DERIVED/Build/Products" -type d -path '*Release-iphoneos/*.app' | head -n 1)"
           if [ -z "$IPHONE_APP_PATH" ]; then
@@ -170,6 +183,16 @@ jobs:
             exit 1
           fi
           echo "IPHONE_APP_PATH=$IPHONE_APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload iPhone build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: watch-sensor-lab-session-sync-diagnostics-${{ github.sha }}
+          path: build/session-sync-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 6
 
       - name: Generate and build unsigned watchOS app
         shell: bash

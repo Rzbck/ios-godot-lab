@@ -80,7 +80,10 @@ extension HistoricalHealthKitRepairV4Coordinator {
         pauses: [TrackerHealthRestorePause],
         activity: ActivityKind
     ) -> [[RawPoint]] {
-        let ordered = deduplicate(route.points)
+        let ordered = trimStationaryReacquisitionPrefixes(
+            deduplicate(route.points),
+            pauses: pauses
+        )
         guard let first = ordered.first else { return [] }
         let watchCounterPoints = ordered.filter {
             $0.source == "WATCH" && $0.cumulativeDistanceMeters != nil
@@ -105,6 +108,82 @@ extension HistoricalHealthKitRepairV4Coordinator {
         }
         if current.count >= 2 { result.append(current) }
         return result
+    }
+
+    /// A GPS receiver can wake after a long active capture hole with one or more stale,
+    /// low-accuracy fixes before snapping back to a stable position. Those fixes can be
+    /// only a few seconds apart, so ordinary per-hop speed guards may keep them and
+    /// Fitness then draws a solid straight line inside a single HKWorkoutRoute.
+    ///
+    /// Remove only the unstable iPhone prefix when the phone itself proves that no
+    /// movement happened: its cumulative distance is unchanged, the settled fix reports
+    /// near-zero speed, accuracy improves sharply within eight seconds, and the discarded
+    /// anchor is tens of metres away. No coordinate is fabricated and the scalar workout
+    /// distance remains untouched.
+    func trimStationaryReacquisitionPrefixes(
+        _ points: [RawPoint],
+        pauses: [TrackerHealthRestorePause]
+    ) -> [RawPoint] {
+        let ordered = deduplicate(points)
+        guard ordered.count >= 3 else { return ordered }
+
+        var removed = Set<Int>()
+        for index in 1..<(ordered.count - 1) {
+            guard !removed.contains(index) else { continue }
+
+            let previous = ordered[index - 1]
+            let start = ordered[index]
+            let gap = start.timestamp - previous.timestamp
+
+            guard gap > 20,
+                  !intervalOverlapsPause(previous.timestamp, start.timestamp, pauses: pauses),
+                  start.source == "IPHONE",
+                  start.horizontalAccuracy >= 20,
+                  let startDistance = start.cumulativeDistanceMeters else {
+                continue
+            }
+
+            let deadline = start.timestamp + 8
+            var stableIndex: Int?
+
+            for candidateIndex in (index + 1)..<ordered.count {
+                let candidate = ordered[candidateIndex]
+                if candidate.timestamp > deadline { break }
+                guard candidate.source == start.source,
+                      let candidateDistance = candidate.cumulativeDistanceMeters else {
+                    continue
+                }
+
+                let counterAdvance = candidateDistance - startDistance
+                let candidateSpeed = candidate.nativeSpeed ?? -1
+                let accuracyImproved = candidate.horizontalAccuracy <= min(
+                    10,
+                    start.horizontalAccuracy * 0.50
+                )
+                let stationary = abs(counterAdvance) <= 2
+                    && candidateSpeed >= 0
+                    && candidateSpeed <= 1.5
+                let shiftedWhileStationary = distance(start, candidate) >= max(
+                    35,
+                    start.horizontalAccuracy * 1.25
+                )
+
+                if accuracyImproved && stationary && shiftedWhileStationary {
+                    stableIndex = candidateIndex
+                    break
+                }
+            }
+
+            guard let stableIndex else { continue }
+            for removalIndex in index..<stableIndex {
+                removed.insert(removalIndex)
+            }
+        }
+
+        guard !removed.isEmpty else { return ordered }
+        return ordered.enumerated().compactMap { index, point in
+            removed.contains(index) ? nil : point
+        }
     }
 
     func isHardRouteDiscontinuity(

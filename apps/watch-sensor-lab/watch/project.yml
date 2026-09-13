@@ -98,7 +98,6 @@ targets:
         CFBundleVersion: "1"
         WKApplication: true
         WKWatchOnly: true
-        WKRunsIndependentlyOfCompanionApp: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watch-finish-ui-harness

@@ -147,8 +147,116 @@ function Show-RouteDiagnosticWindows {
     }
 }
 
+function Show-SavedHealthKitDiagnostic {
+    param([object]$Saved)
+
+    Write-Host ''
+    Write-Host 'HEALTHKIT SAVED OBJECTS (READ-ONLY)'
+
+    if ($null -eq $Saved) {
+        Write-Host 'Aucune donnée HealthKit persistée retournée.'
+        return
+    }
+
+    $App = $Saved.app_identity
+    if ($null -ne $App) {
+        Write-Host 'APP IDENTITY'
+        [pscustomobject]@{
+            bundle_identifier                = $App.bundle_identifier
+            bundle_name                      = $App.bundle_name
+            display_name                     = $App.display_name
+            short_version                    = $App.short_version
+            build_version                    = $App.build_version
+            icon_name                        = $App.icon_name
+            icon_files                       = (@($App.icon_files) -join ', ')
+            primary_icon_dictionary_present  = $App.primary_icon_dictionary_present
+            icons_dictionary_present         = $App.icons_dictionary_present
+        } | Format-List *
+    }
+
+    Write-Host 'WORKOUT SOURCE'
+    $Workout = $Saved.workout
+    if ($null -eq $Workout) {
+        Write-Host 'Aucune restauration HealthKit générée.'
+    }
+    else {
+        [pscustomobject]@{
+            uuid                            = $Workout.uuid
+            activity                       = $Workout.activity
+            activity_raw                   = $Workout.activity_raw
+            distance_m                     = $Workout.distance_m
+            duration_s                     = $Workout.duration_s
+            source_name                    = $Workout.source_name
+            source_bundle                  = $Workout.source_bundle
+            source_version                 = $Workout.source_version
+            source_product_type            = $Workout.source_product_type
+            source_os                      = $Workout.source_os
+            source_matches_installed_bundle = $Workout.source_matches_installed_bundle
+            brand_name                     = $Workout.brand_name
+            generation                     = $Workout.generation
+            attempt_id                     = $Workout.attempt_id
+            device                         = if ($null -eq $Workout.device) { 'none' } else { ($Workout.device | ConvertTo-Json -Compress -Depth 8) }
+        } | Format-List *
+    }
+
+    Write-Host 'SAVED ROUTES'
+    $RouteRows = foreach ($Route in @($Saved.routes)) {
+        $Hop = $Route.largest_internal_hop
+        [pscustomobject]@{
+            segment       = $Route.segment_index
+            total_segments = $Route.segment_count
+            points        = $Route.point_count
+            geometry_m    = if ($null -ne $Route.geometry_m) { [math]::Round([double]$Route.geometry_m, 1) } else { $null }
+            first         = if ($null -ne $Route.first) { Format-DiagnosticTimestamp $Route.first.iso } else { '?' }
+            last          = if ($null -ne $Route.last) { Format-DiagnosticTimestamp $Route.last.iso } else { '?' }
+            max_hop_m     = if ($null -ne $Hop) { [math]::Round([double]$Hop.distance_m, 1) } else { $null }
+            max_hop_s     = if ($null -ne $Hop) { [math]::Round([double]$Hop.time_gap_s, 1) } else { $null }
+            uuid          = $Route.uuid
+        }
+    }
+    if (@($RouteRows).Count -gt 0) {
+        $RouteRows | Format-Table -AutoSize -Wrap
+    }
+    else {
+        Write-Host 'Aucune route HealthKit sauvegardée.'
+    }
+
+    Write-Host 'ROUTE BOUNDARIES / POSSIBLE FITNESS CONNECTORS'
+    $BoundaryRows = foreach ($Boundary in @($Saved.route_boundaries)) {
+        [pscustomobject]@{
+            from_segment = $Boundary.from_segment_index
+            to_segment   = $Boundary.to_segment_index
+            distance_m   = [math]::Round([double]$Boundary.distance_m, 1)
+            time_gap_s   = [math]::Round([double]$Boundary.time_gap_s, 1)
+            from_time    = Format-DiagnosticTimestamp $Boundary.from.iso
+            to_time      = Format-DiagnosticTimestamp $Boundary.to.iso
+            from_lat     = [math]::Round([double]$Boundary.from.latitude, 6)
+            from_lon     = [math]::Round([double]$Boundary.from.longitude, 6)
+            to_lat       = [math]::Round([double]$Boundary.to.latitude, 6)
+            to_lon       = [math]::Round([double]$Boundary.to.longitude, 6)
+        }
+    }
+    if (@($BoundaryRows).Count -gt 0) {
+        $BoundaryRows | Format-Table -AutoSize -Wrap
+    }
+    else {
+        Write-Host 'Aucune frontière inter-route.'
+    }
+
+    Write-Host 'SAVED ROUTE SUMMARY'
+    [pscustomobject]@{
+        generated_workout_count = $Saved.generated_workout_count
+        normal_workout_count    = $Saved.normal_workout_count
+        saved_route_count       = $Saved.saved_route_count
+        saved_location_count    = $Saved.saved_location_count
+        saved_geometry_m        = $Saved.saved_geometry_m
+        largest_route_boundary  = if ($null -eq $Saved.largest_route_boundary) { 'none' } else { ($Saved.largest_route_boundary | ConvertTo-Json -Compress -Depth 12) }
+        largest_internal_hop    = if ($null -eq $Saved.largest_internal_hop) { 'none' } else { ($Saved.largest_internal_hop | ConvertTo-Json -Compress -Depth 12) }
+    } | Format-List *
+}
+
 if ($Command -eq 'recovery' -and [string]::IsNullOrWhiteSpace($SessionId)) {
-    throw 'Usage: .\apps\watch-sensor-lab\WSL.ps1 recovery <session_id>'
+    throw '.\apps\watch-sensor-lab\WSL.ps1 recovery <session_id>'
 }
 
 $Python = Resolve-Python
@@ -300,6 +408,17 @@ try {
                 $RouteErrorProperty = $Data.PSObject.Properties['route_diagnostics_error']
                 if ($null -ne $RouteErrorProperty -and $RouteErrorProperty.Value) {
                     Write-Host ("ROUTE DIAGNOSTICS ERROR = {0}" -f $RouteErrorProperty.Value)
+                }
+            }
+
+            $SavedProperty = $Data.PSObject.Properties['saved_healthkit']
+            if ($null -ne $SavedProperty -and $null -ne $SavedProperty.Value) {
+                Show-SavedHealthKitDiagnostic -Saved $SavedProperty.Value
+            }
+            else {
+                $SavedErrorProperty = $Data.PSObject.Properties['saved_healthkit_error']
+                if ($null -ne $SavedErrorProperty -and $SavedErrorProperty.Value) {
+                    Write-Host ("SAVED HEALTHKIT DIAGNOSTIC ERROR = {0}" -f $SavedErrorProperty.Value)
                 }
             }
         }

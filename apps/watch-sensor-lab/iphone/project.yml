@@ -22,6 +22,12 @@ targets:
         embed: true
         codeSign: false
     preBuildScripts:
+      - name: Apply Auto Pause Safety Patch
+        shell: /bin/bash
+        script: |
+          set -euo pipefail
+          python3 "$SRCROOT/../APPLY_AUTO_PAUSE_SAFETY_PATCH.py"
+        basedOnDependencyAnalysis: false
       - name: Generate App Icon
         shell: /bin/bash
         script: |

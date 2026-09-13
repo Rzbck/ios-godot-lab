@@ -7,6 +7,7 @@ Once validated on iPhone + Apple Watch, fold the exact changes into the Swift
 sources and remove this helper.
 """
 from pathlib import Path
+import runpy
 
 ROOT = Path(__file__).resolve().parent
 IPHONE = ROOT / "iphone/Sources/TrackerModel.swift"
@@ -369,3 +370,9 @@ watch = replace_once(
 IPHONE.write_text(iphone, encoding="utf-8")
 WATCH.write_text(watch, encoding="utf-8")
 print("SESSION SYNC BUILD PATCH: OK")
+
+# Production candidate chain. The workflow deliberately invokes only this
+# orchestrator so the three runtime-critical patches can never drift apart.
+runpy.run_path(str(ROOT / "APPLY_AUTO_PAUSE_SAFETY_PATCH.py"), run_name="__main__")
+runpy.run_path(str(ROOT / "APPLY_TERMINAL_SYNC_RELIABILITY_PATCH.py"), run_name="__main__")
+print("TRACKER BUILD PATCH CHAIN: OK")

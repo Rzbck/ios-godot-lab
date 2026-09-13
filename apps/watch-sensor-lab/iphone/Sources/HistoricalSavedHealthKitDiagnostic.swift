@@ -35,6 +35,11 @@ struct HistoricalSavedHealthKitDiagnostic {
             result["workout"] = NSNull()
             result["routes"] = []
             result["route_boundaries"] = []
+            result["saved_route_count"] = 0
+            result["saved_location_count"] = 0
+            result["saved_geometry_m"] = 0.0
+            result["largest_route_boundary"] = NSNull()
+            result["largest_internal_hop"] = NSNull()
             return result
         }
 
@@ -76,19 +81,8 @@ struct HistoricalSavedHealthKitDiagnostic {
         result["saved_geometry_m"] = savedRoutes.reduce(0.0) {
             $0 + geometry($1.locations)
         }
-
-        if let largestBoundary = largestBoundary(savedRoutes) {
-            result["largest_route_boundary"] = largestBoundary
-        } else {
-            result["largest_route_boundary"] = NSNull()
-        }
-
-        if let largestInternal = largestInternalHop(savedRoutes) {
-            result["largest_internal_hop"] = largestInternal
-        } else {
-            result["largest_internal_hop"] = NSNull()
-        }
-
+        result["largest_route_boundary"] = largestBoundary(savedRoutes) ?? NSNull()
+        result["largest_internal_hop"] = largestInternalHop(savedRoutes) ?? NSNull()
         return result
     }
 
@@ -108,7 +102,7 @@ struct HistoricalSavedHealthKitDiagnostic {
             "display_name": info["CFBundleDisplayName"] as? String ?? "unknown",
             "short_version": info["CFBundleShortVersionString"] as? String ?? "unknown",
             "build_version": info["CFBundleVersion"] as? String ?? "unknown",
-            "icon_name": iconName ?? primaryName ?? NSNull(),
+            "icon_name": nullableString(iconName ?? primaryName),
             "icon_files": iconFiles ?? primaryFiles ?? [],
             "primary_icon_dictionary_present": primaryIcon != nil,
             "icons_dictionary_present": icons != nil,
@@ -131,26 +125,26 @@ struct HistoricalSavedHealthKitDiagnostic {
             "duration_s": workout.duration,
             "source_name": source.source.name,
             "source_bundle": source.source.bundleIdentifier,
-            "source_version": source.version ?? NSNull(),
-            "source_product_type": source.productType ?? NSNull(),
+            "source_version": nullableString(source.version),
+            "source_product_type": nullableString(source.productType),
             "source_os": "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)",
             "source_matches_installed_bundle": source.source.bundleIdentifier == Bundle.main.bundleIdentifier,
-            "brand_name": workout.metadata?[HKMetadataKeyWorkoutBrandName] as? String ?? NSNull(),
-            "generation": workout.metadata?[recovery.generationKey] as? String ?? NSNull(),
-            "attempt_id": workout.metadata?[recovery.attemptKey] as? String ?? NSNull(),
-            "distance_m": recovery.workoutDistanceMeters(workout, activity: activity) ?? NSNull(),
+            "brand_name": nullableString(workout.metadata?[HKMetadataKeyWorkoutBrandName] as? String),
+            "generation": nullableString(workout.metadata?[recovery.generationKey] as? String),
+            "attempt_id": nullableString(workout.metadata?[recovery.attemptKey] as? String),
+            "distance_m": nullableDouble(recovery.workoutDistanceMeters(workout, activity: activity)),
         ]
 
         if let device = workout.device {
             snapshot["device"] = [
-                "name": device.name ?? NSNull(),
-                "manufacturer": device.manufacturer ?? NSNull(),
-                "model": device.model ?? NSNull(),
-                "hardware_version": device.hardwareVersion ?? NSNull(),
-                "firmware_version": device.firmwareVersion ?? NSNull(),
-                "software_version": device.softwareVersion ?? NSNull(),
-                "local_identifier": device.localIdentifier ?? NSNull(),
-                "udi_device_identifier": device.udiDeviceIdentifier ?? NSNull(),
+                "name": nullableString(device.name),
+                "manufacturer": nullableString(device.manufacturer),
+                "model": nullableString(device.model),
+                "hardware_version": nullableString(device.hardwareVersion),
+                "firmware_version": nullableString(device.firmwareVersion),
+                "software_version": nullableString(device.softwareVersion),
+                "local_identifier": nullableString(device.localIdentifier),
+                "udi_device_identifier": nullableString(device.udiDeviceIdentifier),
             ]
         } else {
             snapshot["device"] = NSNull()
@@ -162,25 +156,23 @@ struct HistoricalSavedHealthKitDiagnostic {
         let locations = saved.locations
         var snapshot: [String: Any] = [
             "uuid": saved.route.uuid.uuidString,
-            "segment_index": saved.segmentIndex ?? NSNull(),
-            "segment_count": saved.segmentCount ?? NSNull(),
+            "segment_index": nullableInt(saved.segmentIndex),
+            "segment_count": nullableInt(saved.segmentCount),
             "point_count": locations.count,
             "geometry_m": geometry(locations),
-            "route_source": saved.route.metadata?["com.rzbck.watchsensorlab.route_source"] as? String ?? NSNull(),
-            "generation": saved.route.metadata?["com.rzbck.watchsensorlab.historical_generation"] as? String ?? NSNull(),
-            "attempt_id": saved.route.metadata?["com.rzbck.watchsensorlab.historical_attempt_id"] as? String ?? NSNull(),
+            "route_source": nullableString(
+                saved.route.metadata?["com.rzbck.watchsensorlab.route_source"] as? String
+            ),
+            "generation": nullableString(
+                saved.route.metadata?["com.rzbck.watchsensorlab.historical_generation"] as? String
+            ),
+            "attempt_id": nullableString(
+                saved.route.metadata?["com.rzbck.watchsensorlab.historical_attempt_id"] as? String
+            ),
         ]
 
-        if let first = locations.first {
-            snapshot["first"] = locationSnapshot(first)
-        } else {
-            snapshot["first"] = NSNull()
-        }
-        if let last = locations.last {
-            snapshot["last"] = locationSnapshot(last)
-        } else {
-            snapshot["last"] = NSNull()
-        }
+        snapshot["first"] = locations.first.map(locationSnapshot) ?? NSNull()
+        snapshot["last"] = locations.last.map(locationSnapshot) ?? NSNull()
         snapshot["largest_internal_hop"] = maxHop(locations) ?? NSNull()
         return snapshot
     }
@@ -198,8 +190,8 @@ struct HistoricalSavedHealthKitDiagnostic {
             result.append([
                 "from_route_uuid": previous.route.uuid.uuidString,
                 "to_route_uuid": current.route.uuid.uuidString,
-                "from_segment_index": previous.segmentIndex ?? NSNull(),
-                "to_segment_index": current.segmentIndex ?? NSNull(),
+                "from_segment_index": nullableInt(previous.segmentIndex),
+                "to_segment_index": nullableInt(current.segmentIndex),
                 "distance_m": to.distance(from: from),
                 "time_gap_s": to.timestamp.timeIntervalSince(from.timestamp),
                 "from": locationSnapshot(from),
@@ -219,7 +211,7 @@ struct HistoricalSavedHealthKitDiagnostic {
         routes.compactMap { saved -> [String: Any]? in
             guard var hop = maxHop(saved.locations) else { return nil }
             hop["route_uuid"] = saved.route.uuid.uuidString
-            hop["segment_index"] = saved.segmentIndex ?? NSNull()
+            hop["segment_index"] = nullableInt(saved.segmentIndex)
             return hop
         }.max {
             double($0["distance_m"]) < double($1["distance_m"])
@@ -238,7 +230,7 @@ struct HistoricalSavedHealthKitDiagnostic {
             best = [
                 "distance_m": distance,
                 "time_gap_s": delta,
-                "implied_speed_mps": delta > 0 ? distance / delta : NSNull(),
+                "implied_speed_mps": nullableDouble(delta > 0 ? distance / delta : nil),
                 "from": locationSnapshot(from),
                 "to": locationSnapshot(to),
             ]
@@ -267,6 +259,21 @@ struct HistoricalSavedHealthKitDiagnostic {
         if let value = value as? Int { return value }
         if let value = value as? NSNumber { return value.intValue }
         return nil
+    }
+
+    private func nullableString(_ value: String?) -> Any {
+        guard let value else { return NSNull() }
+        return value
+    }
+
+    private func nullableInt(_ value: Int?) -> Any {
+        guard let value else { return NSNull() }
+        return value
+    }
+
+    private func nullableDouble(_ value: Double?) -> Any {
+        guard let value else { return NSNull() }
+        return value
     }
 
     private func double(_ value: Any?) -> Double {

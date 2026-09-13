@@ -157,7 +157,7 @@ iphone = replace_once(
 
         let acknowledgedStart =
             pendingCommand == "start"
-            && pendingControlToken == nil
+            && self.pendingControlToken == nil
             && message.sessionID == sessionID
             && (remotePhase == .active || remotePhase == .paused)
 
@@ -203,6 +203,7 @@ iphone = replace_once(
             ])
             pendingCommand = nil
             pendingCommandAtRevision = -1
+            self.pendingControlToken = nil
         }
         _ = acknowledgedControl
         updateLiveActivity(force: remotePhase != .active)
@@ -210,13 +211,16 @@ iphone = replace_once(
     "iphone remove revision ack",
 )
 
+# Existing teardown paths must also drop any pending control token. Use explicit
+# self so an optional-binding local named pendingControlToken can never shadow
+# the property during compilation.
 iphone = iphone.replace(
     "pendingCommand = nil\n            pendingCommandAtRevision = -1\n",
-    "pendingCommand = nil\n            pendingCommandAtRevision = -1\n            pendingControlToken = nil\n",
+    "pendingCommand = nil\n            pendingCommandAtRevision = -1\n            self.pendingControlToken = nil\n",
 )
 iphone = iphone.replace(
     "pendingCommand = nil\n        pendingCommandAtRevision = -1\n",
-    "pendingCommand = nil\n        pendingCommandAtRevision = -1\n        pendingControlToken = nil\n",
+    "pendingCommand = nil\n        pendingCommandAtRevision = -1\n        self.pendingControlToken = nil\n",
 )
 
 watch = replace_once(

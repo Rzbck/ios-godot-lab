@@ -84,6 +84,33 @@ enum TrackerAutoPolicy {
         return nil
     }
 
+    /// Prevents a zero-speed startup from being interpreted as a real stop.
+    /// Outdoor locomotion only arms auto-pause after actual movement has been
+    /// observed and GPS is currently trustworthy.
+    static func canArmPause(
+        activity: ActivityKind,
+        elapsedSeconds: TimeInterval,
+        horizontalAccuracy: Double,
+        movementObserved: Bool
+    ) -> Bool {
+        guard movementObserved else { return false }
+        guard horizontalAccuracy >= 0, horizontalAccuracy <= 30 else { return false }
+
+        let minimumElapsed: TimeInterval
+        switch activity {
+        case .cycling, .handCycling:
+            minimumElapsed = 20
+        case .running, .trackAndField:
+            minimumElapsed = 15
+        case .walking, .hiking:
+            minimumElapsed = 15
+        default:
+            minimumElapsed = 10
+        }
+
+        return elapsedSeconds >= minimumElapsed
+    }
+
     static func shouldStagePause(
         activity: ActivityKind,
         enabled: Bool,
@@ -117,24 +144,30 @@ enum TrackerAutoPolicy {
         cadenceSPM: Double,
         motionCandidate: ActivityKind?
     ) -> Bool {
-        guard enabled, !stationary else { return false }
+        guard enabled else { return false }
 
+        // A stale Core Motion `stationary` classification must never veto
+        // strong fresh GPS/cadence evidence. Motion-only evidence is still
+        // rejected while stationary, which prevents a noisy classifier from
+        // waking a genuinely stopped workout.
         switch activity {
         case .walking, .hiking:
             return speedMps >= 0.7
                 || cadenceSPM >= 35
-                || motionCandidate == .walking
-                || motionCandidate == .hiking
+                || (!stationary && (
+                    motionCandidate == .walking
+                    || motionCandidate == .hiking
+                ))
         case .running, .trackAndField:
             return speedMps >= 1.2
                 || cadenceSPM >= 65
-                || motionCandidate == .running
+                || (!stationary && motionCandidate == .running)
         case .cycling, .handCycling:
             return speedMps >= 1.4
-                || motionCandidate == .cycling
+                || (!stationary && motionCandidate == .cycling)
         default:
             return speedMps >= 0.7
-                || motionCandidate != nil
+                || (!stationary && motionCandidate != nil)
         }
     }
 }

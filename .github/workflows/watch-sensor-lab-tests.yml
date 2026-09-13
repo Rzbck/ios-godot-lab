@@ -178,27 +178,88 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xcodebuild test \
-            -project "$GITHUB_WORKSPACE/$APP_DIR/iphone/WatchSensorLab.xcodeproj" \
-            -scheme WatchSensorLabFinishUIHarness \
-            -configuration Debug \
-            -destination "platform=iOS Simulator,id=$IPHONE_UDID" \
-            -resultBundlePath "$RUNNER_TEMP/WatchSensorLab-iPhoneFinishUI.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+
+          run_iphone_ui() {
+            local slug="$1"
+            local test_name="$2"
+            local result="$RUNNER_TEMP/WatchSensorLab-iPhoneFinishUI-${slug}.xcresult"
+            local summary="$RUNNER_TEMP/WatchSensorLab-iPhoneFinishUI-${slug}-summary.json"
+
+            rm -rf "$result" "$summary"
+            xcrun simctl shutdown "$IPHONE_UDID" >/dev/null 2>&1 || true
+            xcrun simctl boot "$IPHONE_UDID" >/dev/null 2>&1 || true
+            xcrun simctl bootstatus "$IPHONE_UDID" -b
+
+            set +e
+            xcodebuild test \
+              -project "$GITHUB_WORKSPACE/$APP_DIR/iphone/WatchSensorLab.xcodeproj" \
+              -scheme WatchSensorLabFinishUIHarness \
+              -configuration Debug \
+              -destination "platform=iOS Simulator,id=$IPHONE_UDID" \
+              -only-testing:"WatchSensorLabFinishUITests/iPhoneFinishFlowUITests/${test_name}" \
+              -resultBundlePath "$result" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO
+            local rc=$?
+            set -e
+
+            if [ -d "$result" ]; then
+              xcrun xcresulttool get test-results summary \
+                --path "$result" --compact > "$summary" 2>/dev/null || true
+            fi
+            xcrun simctl shutdown "$IPHONE_UDID" >/dev/null 2>&1 || true
+            return "$rc"
+          }
+
+          status=0
+          run_iphone_ui "force" "testAutoFinishCanConfirmSuggestedConcreteSport" || status=1
+          run_iphone_ui "preserve" "testAutoFinishCanPreserveDetectedSegments" || status=1
+          run_iphone_ui "cancel" "testFinishReviewCanBeCancelledWithoutFinishing" || status=1
+          exit "$status"
 
       - name: Run watchOS finish-review UI automation
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          xcodebuild test \
-            -project "$GITHUB_WORKSPACE/$APP_DIR/watch/WatchSensorLabWatch.xcodeproj" \
-            -scheme WatchSensorLabWatchFinishUIHarness \
-            -configuration Debug \
-            -destination "platform=watchOS Simulator,id=$WATCH_UDID" \
-            -resultBundlePath "$RUNNER_TEMP/WatchSensorLab-WatchFinishUI.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+
+          run_watch_ui() {
+            local slug="$1"
+            local test_name="$2"
+            local result="$RUNNER_TEMP/WatchSensorLab-WatchFinishUI-${slug}.xcresult"
+            local summary="$RUNNER_TEMP/WatchSensorLab-WatchFinishUI-${slug}-summary.json"
+
+            rm -rf "$result" "$summary"
+            xcrun simctl shutdown "$WATCH_UDID" >/dev/null 2>&1 || true
+            xcrun simctl boot "$WATCH_UDID" >/dev/null 2>&1 || true
+            xcrun simctl bootstatus "$WATCH_UDID" -b
+
+            set +e
+            xcodebuild test \
+              -project "$GITHUB_WORKSPACE/$APP_DIR/watch/WatchSensorLabWatch.xcodeproj" \
+              -scheme WatchSensorLabWatchFinishUIHarness \
+              -configuration Debug \
+              -destination "platform=watchOS Simulator,id=$WATCH_UDID" \
+              -only-testing:"WatchSensorLabWatchFinishUITests/WatchFinishFlowUITests/${test_name}" \
+              -resultBundlePath "$result" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO
+            local rc=$?
+            set -e
+
+            if [ -d "$result" ]; then
+              xcrun xcresulttool get test-results summary \
+                --path "$result" --compact > "$summary" 2>/dev/null || true
+            fi
+            xcrun simctl shutdown "$WATCH_UDID" >/dev/null 2>&1 || true
+            return "$rc"
+          }
+
+          status=0
+          run_watch_ui "force" "testAutoFinishCanForceSuggestedConcreteSport" || status=1
+          run_watch_ui "preserve" "testAutoFinishCanPreserveDetection" || status=1
+          run_watch_ui "cancel" "testFinishReviewCanBeCancelled" || status=1
+          exit "$status"
 
       - name: Upload failed test reports
         if: failure()
@@ -208,8 +269,10 @@ jobs:
           path: |
             ${{ runner.temp }}/WatchSensorLab-iPhoneTests.xcresult
             ${{ runner.temp }}/WatchSensorLab-WatchTests.xcresult
-            ${{ runner.temp }}/WatchSensorLab-iPhoneFinishUI.xcresult
-            ${{ runner.temp }}/WatchSensorLab-WatchFinishUI.xcresult
+            ${{ runner.temp }}/WatchSensorLab-iPhoneFinishUI-*.xcresult
+            ${{ runner.temp }}/WatchSensorLab-WatchFinishUI-*.xcresult
+            ${{ runner.temp }}/WatchSensorLab-iPhoneFinishUI-*-summary.json
+            ${{ runner.temp }}/WatchSensorLab-WatchFinishUI-*-summary.json
           if-no-files-found: ignore
           retention-days: 1
           compression-level: 6

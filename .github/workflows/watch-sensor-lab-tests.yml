@@ -1,0 +1,185 @@
+name: Watch Sensor Lab tests
+run-name: Watch Sensor Lab tests · ${{ github.ref_name }} · ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'feat/watch-sensor-*'
+      - 'fix/watch-*'
+    paths:
+      - 'apps/watch-sensor-lab/iphone/**'
+      - 'apps/watch-sensor-lab/watch/**'
+      - 'apps/watch-sensor-lab/Shared/**'
+      - 'apps/watch-sensor-lab/Tests/**'
+      - 'apps/watch-sensor-lab/SESSION_SYNC_PATCH.py'
+      - 'apps/watch-sensor-lab/CHECK_WORKFLOW_PARITY.py'
+      - 'apps/watch-sensor-lab/CHECK_PRODUCT_INVARIANTS.py'
+      - '.github/workflows/watch-sensor-lab-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watch-sensor-lab-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  XCODEGEN_VERSION: '2.46.0'
+  XCODEGEN_SHA256: '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806'
+  APP_DIR: apps/watch-sensor-lab
+
+jobs:
+  workflow-contract-tests:
+    name: Deterministic iPhone + watchOS workflow tests
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Toolchain identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Apply exact session-sync candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$APP_DIR/SESSION_SYNC_PATCH.py"
+
+      - name: Verify static workflow invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$APP_DIR/CHECK_WORKFLOW_PARITY.py"
+          python3 "$APP_DIR/CHECK_PRODUCT_INVARIANTS.py"
+
+      - name: Install pinned XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
+          DEST="$RUNNER_TEMP/xcodegen"
+          URL="https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          mkdir -p "$DEST"
+          curl --fail --location --retry 3 --retry-delay 2 "$URL" --output "$ARCHIVE"
+          echo "${XCODEGEN_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+          unzip -q "$ARCHIVE" -d "$DEST"
+          XCODEGEN_BIN="$(find "$DEST" -type f -name xcodegen | head -n 1)"
+          test -n "$XCODEGEN_BIN"
+          chmod +x "$XCODEGEN_BIN"
+          echo "XCODEGEN_BIN=$XCODEGEN_BIN" >> "$GITHUB_ENV"
+          "$XCODEGEN_BIN" --version
+
+      - name: Generate test projects
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$XCODEGEN_BIN" generate \
+            --spec "$GITHUB_WORKSPACE/$APP_DIR/iphone/project.yml" \
+            --project "$GITHUB_WORKSPACE/$APP_DIR/iphone"
+          "$XCODEGEN_BIN" generate \
+            --spec "$GITHUB_WORKSPACE/$APP_DIR/watch/project.yml" \
+            --project "$GITHUB_WORKSPACE/$APP_DIR/watch"
+
+      - name: Select current simulators
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY' > "$RUNNER_TEMP/test-destinations.env"
+          import json
+          import re
+          import subprocess
+
+          payload = json.loads(
+              subprocess.check_output(
+                  ["xcrun", "simctl", "list", "devices", "available", "--json"],
+                  text=True,
+              )
+          )
+
+          def runtime_version(runtime):
+              match = re.search(r"-(\d+)-(\d+)(?:-(\d+))?$", runtime)
+              if not match:
+                  return (0, 0, 0)
+              return tuple(int(value or 0) for value in match.groups())
+
+          def pick(runtime_token, device_prefix):
+              candidates = []
+              for runtime, devices in payload.get("devices", {}).items():
+                  if runtime_token not in runtime:
+                      continue
+                  version = runtime_version(runtime)
+                  for device in devices:
+                      if not device.get("isAvailable", False):
+                          continue
+                      if not device.get("name", "").startswith(device_prefix):
+                          continue
+                      candidates.append((version, device["name"], device["udid"]))
+              if not candidates:
+                  raise SystemExit(
+                      f"No available {device_prefix} simulator for {runtime_token}"
+                  )
+              candidates.sort(reverse=True)
+              return candidates[0]
+
+          ios_version, ios_name, ios_udid = pick(".iOS-", "iPhone")
+          watch_version, watch_name, watch_udid = pick(".watchOS-", "Apple Watch")
+
+          print(f"IPHONE_UDID={ios_udid}")
+          print(f"WATCH_UDID={watch_udid}")
+          print(f"IPHONE_NAME={ios_name}")
+          print(f"WATCH_NAME={watch_name}")
+          PY
+
+          cat "$RUNNER_TEMP/test-destinations.env"
+          cat "$RUNNER_TEMP/test-destinations.env" >> "$GITHUB_ENV"
+
+      - name: Run iPhone workflow contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "iPhone simulator: $IPHONE_NAME ($IPHONE_UDID)"
+          xcodebuild test \
+            -project "$GITHUB_WORKSPACE/$APP_DIR/iphone/WatchSensorLab.xcodeproj" \
+            -scheme WatchSensorLab \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IPHONE_UDID" \
+            -resultBundlePath "$RUNNER_TEMP/WatchSensorLab-iPhoneTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Run watchOS workflow contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Watch simulator: $WATCH_NAME ($WATCH_UDID)"
+          xcodebuild test \
+            -project "$GITHUB_WORKSPACE/$APP_DIR/watch/WatchSensorLabWatch.xcodeproj" \
+            -scheme WatchSensorLabWatch \
+            -configuration Debug \
+            -destination "platform=watchOS Simulator,id=$WATCH_UDID" \
+            -resultBundlePath "$RUNNER_TEMP/WatchSensorLab-WatchTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Upload failed test reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: watch-sensor-lab-test-failure-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/WatchSensorLab-iPhoneTests.xcresult
+            ${{ runner.temp }}/WatchSensorLab-WatchTests.xcresult
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 6

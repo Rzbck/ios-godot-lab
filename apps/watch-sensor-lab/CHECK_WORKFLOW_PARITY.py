@@ -191,7 +191,7 @@ for forbidden in [
         errors.append("Ancien ACK implicite par révision encore présent: " + forbidden)
 
 # Pure cores stay portable: simulator, synthetic replay and device self-test
-# must execute the exact same rules without importing hardware/UI frameworks.
+# execute the same rules without importing hardware/UI frameworks.
 for name, source in [
     ("TrackerSessionControl", session_control),
     ("TrackerAutoPolicy", auto_policy),
@@ -293,6 +293,59 @@ selftest_client = root / "WSL_SELFTEST.ps1"
 if not selftest_client.is_file():
     errors.append("Client USB WSL_SELFTEST.ps1 absent")
 
+# Finish-review UI automation compiles the real production views against fake
+# models that have no physical dependencies. This prevents accidental workout
+# or HealthKit mutations while still exercising the actual SwiftUI surfaces.
+ui_harness_files = [
+    root / "UITestHarness/iPhone/FakeTrackerModel.swift",
+    root / "UITestHarness/iPhone/FinishHarnessApp.swift",
+    root / "UITestHarness/watch/FakeSensorModel.swift",
+    root / "UITestHarness/watch/FinishHarnessApp.swift",
+    root / "UITests/iPhoneFinishFlowUITests.swift",
+    root / "UITests/WatchFinishFlowUITests.swift",
+]
+for path in ui_harness_files:
+    if not path.is_file():
+        errors.append(f"UI automation absente: {path.relative_to(root)}")
+
+for path in [
+    root / "UITestHarness/iPhone/FakeTrackerModel.swift",
+    root / "UITestHarness/watch/FakeSensorModel.swift",
+]:
+    if path.is_file():
+        text = path.read_text(encoding="utf-8")
+        for forbidden in [
+            "import HealthKit",
+            "import WatchConnectivity",
+            "import CoreMotion",
+            "HKHealthStore(",
+            "HKWorkoutSession(",
+            "WCSession.",
+            "NativeSessionStore(",
+        ]:
+            if forbidden in text:
+                errors.append(
+                    f"Harness UI non isolé ({path.name}): {forbidden}"
+                )
+
+for token in [
+    "WatchSensorLabFinishUIHarness",
+    "WatchSensorLabFinishUITests",
+    "Sources/ActivityExperienceView.swift",
+    "UITestHarness/iPhone/FakeTrackerModel.swift",
+]:
+    if token not in iphone_project:
+        errors.append(f"Target UI iPhone incomplet: {token}")
+
+for token in [
+    "WatchSensorLabWatchFinishUIHarness",
+    "WatchSensorLabWatchFinishUITests",
+    "Sources/WatchActiveWorkoutView.swift",
+    "UITestHarness/watch/FakeSensorModel.swift",
+]:
+    if token not in watch_project:
+        errors.append(f"Target UI Watch incomplet: {token}")
+
 if errors:
     print("TRACKER WORKFLOW PARITY: FAIL", file=sys.stderr)
     for error in errors:
@@ -308,4 +361,5 @@ print("Session control: exact-token ACK + Watch revision guard")
 print("Deterministic cores: session-control + Auto policy are platform independent")
 print("Synthetic replay: versioned virtual-time scenarios present")
 print("USB self-test: read-only, no HealthKit/workout/session-store mutation")
+print("Finish UI automation: real production SwiftUI views + sensor-free fake models")
 print("Historical HealthKit mutation: iPhone-only product surface")

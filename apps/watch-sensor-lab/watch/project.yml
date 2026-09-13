@@ -72,3 +72,47 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watchkitapp.tests
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
+
+  WatchSensorLabWatchFinishUIHarness:
+    type: application
+    platform: watchOS
+    deploymentTarget: "10.0"
+    sources:
+      - path: Sources/WatchActiveWorkoutView.swift
+      - path: ../Shared/TrackerShared.swift
+      - path: ../UITestHarness/watch/FakeSensorModel.swift
+      - path: ../UITestHarness/watch/FinishHarnessApp.swift
+    info:
+      path: ../UITestHarness/watch/Info.plist
+      properties:
+        CFBundleDisplayName: Tracker Finish Harness
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        WKApplication: true
+        WKRunsIndependentlyOfCompanionApp: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watch-finish-ui-harness
+        PRODUCT_NAME: WatchSensorLabWatchFinishUIHarness
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        TARGETED_DEVICE_FAMILY: "4"
+        SKIP_INSTALL: NO
+    scheme:
+      testTargets:
+        - WatchSensorLabWatchFinishUITests
+
+  WatchSensorLabWatchFinishUITests:
+    type: bundle.ui-testing
+    platform: watchOS
+    deploymentTarget: "10.0"
+    sources:
+      - path: ../UITests/WatchFinishFlowUITests.swift
+    dependencies:
+      - target: WatchSensorLabWatchFinishUIHarness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watch-finish-ui-tests
+        TEST_TARGET_NAME: WatchSensorLabWatchFinishUIHarness
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO

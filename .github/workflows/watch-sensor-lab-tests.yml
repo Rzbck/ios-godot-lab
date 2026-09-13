@@ -12,6 +12,8 @@ on:
       - 'apps/watch-sensor-lab/watch/**'
       - 'apps/watch-sensor-lab/Shared/**'
       - 'apps/watch-sensor-lab/Tests/**'
+      - 'apps/watch-sensor-lab/UITests/**'
+      - 'apps/watch-sensor-lab/UITestHarness/**'
       - 'apps/watch-sensor-lab/SESSION_SYNC_PATCH.py'
       - 'apps/watch-sensor-lab/CHECK_WORKFLOW_PARITY.py'
       - 'apps/watch-sensor-lab/CHECK_PRODUCT_INVARIANTS.py'
@@ -33,7 +35,7 @@ jobs:
   workflow-contract-tests:
     name: Deterministic iPhone + watchOS workflow tests
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout exact commit
@@ -172,6 +174,32 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
+      - name: Run iPhone finish-review UI automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project "$GITHUB_WORKSPACE/$APP_DIR/iphone/WatchSensorLab.xcodeproj" \
+            -scheme WatchSensorLabFinishUIHarness \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$IPHONE_UDID" \
+            -resultBundlePath "$RUNNER_TEMP/WatchSensorLab-iPhoneFinishUI.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Run watchOS finish-review UI automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project "$GITHUB_WORKSPACE/$APP_DIR/watch/WatchSensorLabWatch.xcodeproj" \
+            -scheme WatchSensorLabWatchFinishUIHarness \
+            -configuration Debug \
+            -destination "platform=watchOS Simulator,id=$WATCH_UDID" \
+            -resultBundlePath "$RUNNER_TEMP/WatchSensorLab-WatchFinishUI.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
       - name: Upload failed test reports
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -180,6 +208,8 @@ jobs:
           path: |
             ${{ runner.temp }}/WatchSensorLab-iPhoneTests.xcresult
             ${{ runner.temp }}/WatchSensorLab-WatchTests.xcresult
+            ${{ runner.temp }}/WatchSensorLab-iPhoneFinishUI.xcresult
+            ${{ runner.temp }}/WatchSensorLab-WatchFinishUI.xcresult
           if-no-files-found: ignore
           retention-days: 1
           compression-level: 6

@@ -75,6 +75,48 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
 
+  WatchSensorLabFinishUIHarness:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources/ActivityExperienceView.swift
+      - path: ../Shared/TrackerShared.swift
+      - path: ../UITestHarness/iPhone/FakeTrackerModel.swift
+      - path: ../UITestHarness/iPhone/FinishHarnessApp.swift
+    info:
+      path: ../UITestHarness/iPhone/Info.plist
+      properties:
+        CFBundleDisplayName: Tracker Finish Harness
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.finish-ui-harness
+        PRODUCT_NAME: WatchSensorLabFinishUIHarness
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        TARGETED_DEVICE_FAMILY: "1"
+    scheme:
+      testTargets:
+        - WatchSensorLabFinishUITests
+
+  WatchSensorLabFinishUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ../UITests/iPhoneFinishFlowUITests.swift
+    dependencies:
+      - target: WatchSensorLabFinishUIHarness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.finish-ui-tests
+        TEST_TARGET_NAME: WatchSensorLabFinishUIHarness
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+
   WatchTrackerLiveActivity:
     type: app-extension
     platform: iOS

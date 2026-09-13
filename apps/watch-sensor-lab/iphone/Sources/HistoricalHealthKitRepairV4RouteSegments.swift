@@ -82,6 +82,9 @@ extension HistoricalHealthKitRepairV4Coordinator {
     ) -> [[RawPoint]] {
         let ordered = deduplicate(route.points)
         guard let first = ordered.first else { return [] }
+        let watchCounterPoints = ordered.filter {
+            $0.source == "WATCH" && $0.cumulativeDistanceMeters != nil
+        }
         var result: [[RawPoint]] = []
         var current: [RawPoint] = [first]
 
@@ -90,6 +93,7 @@ extension HistoricalHealthKitRepairV4Coordinator {
             if isHardRouteDiscontinuity(
                 previous,
                 point,
+                watchCounterPoints: watchCounterPoints,
                 pauses: pauses,
                 activity: activity
             ) {
@@ -106,6 +110,7 @@ extension HistoricalHealthKitRepairV4Coordinator {
     func isHardRouteDiscontinuity(
         _ start: RawPoint,
         _ end: RawPoint,
+        watchCounterPoints: [RawPoint],
         pauses: [TrackerHealthRestorePause],
         activity: ActivityKind
     ) -> Bool {
@@ -119,8 +124,7 @@ extension HistoricalHealthKitRepairV4Coordinator {
         guard delta > 0 else { return true }
 
         // A >20 s active hole is real missing GPS, not evidence for a straight path.
-        // This is the exact class of gap that produced the long red connector in the
-        // physical Fitness screenshot. Preserve both sides and cut only the join.
+        // Preserve both sides and cut only the join.
         if delta > 20 {
             return true
         }
@@ -131,10 +135,17 @@ extension HistoricalHealthKitRepairV4Coordinator {
             max(20, start.horizontalAccuracy + end.horizontalAccuracy)
         )
 
-        if start.source == "WATCH",
-           end.source == "WATCH",
-           let startDistance = start.cumulativeDistanceMeters,
-           let endDistance = end.cumulativeDistanceMeters,
+        // The Watch cumulative counter is the scalar authority for this incident.
+        // Align it to every final connector timestamp, including WATCH<->IPHONE joins,
+        // so a mixed-source bridge cannot bypass the counter-vs-geometry guard.
+        if let startDistance = alignedWatchCounterMeters(
+            at: start.timestamp,
+            watchPoints: watchCounterPoints
+        ),
+           let endDistance = alignedWatchCounterMeters(
+            at: end.timestamp,
+            watchPoints: watchCounterPoints
+        ),
            endDistance >= startDistance {
             let counterAdvance = endDistance - startDistance
             let counterAllowance = counterAdvance * 1.40 + accuracyBudget
@@ -148,6 +159,50 @@ extension HistoricalHealthKitRepairV4Coordinator {
             * 1.20
             + accuracyBudget
         return geometry > max(180, kinematicAllowance)
+    }
+
+    /// Estimate the authoritative Watch cumulative counter at a final route timestamp.
+    /// Exact Watch timestamps use the recorded value. Mixed-source timestamps may use
+    /// linear interpolation only when bracketed by nearby Watch counter samples; this
+    /// never fabricates a GPS coordinate or changes the recorded workout distance.
+    func alignedWatchCounterMeters(
+        at timestamp: TimeInterval,
+        watchPoints: [RawPoint]
+    ) -> Double? {
+        guard !watchPoints.isEmpty else { return nil }
+        var before: RawPoint?
+        var after: RawPoint?
+
+        for point in watchPoints {
+            guard let _ = point.cumulativeDistanceMeters else { continue }
+            if point.timestamp == timestamp {
+                return point.cumulativeDistanceMeters
+            }
+            if point.timestamp < timestamp {
+                before = point
+                continue
+            }
+            after = point
+            break
+        }
+
+        guard let before,
+              let after,
+              let beforeDistance = before.cumulativeDistanceMeters,
+              let afterDistance = after.cumulativeDistanceMeters,
+              afterDistance >= beforeDistance else {
+            return nil
+        }
+
+        let span = after.timestamp - before.timestamp
+        guard span > 0,
+              timestamp - before.timestamp <= 8,
+              after.timestamp - timestamp <= 8 else {
+            return nil
+        }
+
+        let fraction = (timestamp - before.timestamp) / span
+        return beforeDistance + (afterDistance - beforeDistance) * fraction
     }
 
     func segmentedGeometry(_ segments: [[RawPoint]]) -> Double {

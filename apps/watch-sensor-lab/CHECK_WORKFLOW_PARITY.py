@@ -135,6 +135,44 @@ for forbidden in watch_forbidden:
             + forbidden
         )
 
+# Session-control concurrency contract.
+# Control requests must carry an opaque per-command token in TrackerWireMessage.command,
+# retain the Watch authority revision as the request revision, and be acknowledged only
+# by an authority packet carrying the exact token. A newer unrelated authority revision
+# must never acknowledge an iPhone command.
+for token in [
+    "pendingControlToken",
+    "makeControlCommand(",
+    "parseControlAcknowledgement(",
+    "message.command == pendingControlToken",
+]:
+    if token not in iphone_model:
+        errors.append(
+            f"iPhone sans sérialisation de commande: {token}"
+        )
+
+for token in [
+    "lastControlToken",
+    "parseControlCommand(",
+    "message.revision == authorityRevision",
+    'result: "stale_revision"',
+    'result: "expired"',
+]:
+    if token not in watch_model:
+        errors.append(
+            f"Watch sans garde autoritaire de commande: {token}"
+        )
+
+for forbidden in [
+    "message.revision > pendingCommandAtRevision",
+    "message.revision > previousRevision",
+]:
+    if forbidden in iphone_model:
+        errors.append(
+            "Ancien ACK implicite par révision encore présent: "
+            + forbidden
+        )
+
 if errors:
     print(
         "TRACKER WORKFLOW PARITY: FAIL",
@@ -152,4 +190,5 @@ print("Shared LIVE capabilities:")
 for capability in required_capabilities:
     print(f" - {capability}")
 
+print("Session control: exact-token ACK + Watch revision guard")
 print("Historical HealthKit mutation: iPhone-only product surface")

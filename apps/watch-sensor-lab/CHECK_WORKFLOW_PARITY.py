@@ -76,6 +76,42 @@ for token in required_ui_tokens:
     if token not in watch_ui:
         errors.append(f"Watch UI sans capacité: {token}")
 
+finish_surface_tokens = {
+    "iPhone": (
+        iphone_ui,
+        [
+            "PhoneFinishActivityReview",
+            "workflowFinishReview.required",
+            "Conserver les segments détectés",
+            'Picker("Activité", selection: $selection)',
+            "Enregistrer comme \\(selection.label)",
+            "disposition: .preserveDetectedSegments",
+            "disposition: .forceSingleActivity",
+            "showFinishReview = false",
+        ],
+    ),
+    "Watch": (
+        watch_ui,
+        [
+            "WatchFinishActivityReview",
+            "workflowFinishReview.required",
+            "Conserver la détection Auto",
+            'Picker("Activité", selection: $selection)',
+            "Forcer · \\(selection.label)",
+            "disposition: .preserveDetectedSegments",
+            "disposition: .forceSingleActivity",
+            "showFinishReview = false",
+        ],
+    ),
+}
+
+for surface, (source, tokens) in finish_surface_tokens.items():
+    for token in tokens:
+        if token not in source:
+            errors.append(
+                f"{surface} UI de fin incomplète: {token}"
+            )
+
 iphone_forbidden = [
     "tracker.startFromPhone()",
     "tracker.pauseFromPhone()",
@@ -136,5 +172,6 @@ print("TRACKER WORKFLOW PARITY: OK")
 print("Shared LIVE capabilities:")
 for capability in required_capabilities:
     print(f" - {capability}")
+print("Finish review UI: iPhone + Watch preserve/choose/confirm surfaces present")
 print("Session control: exact-token ACK + Watch revision guard")
 print("Historical HealthKit mutation: iPhone-only product surface")

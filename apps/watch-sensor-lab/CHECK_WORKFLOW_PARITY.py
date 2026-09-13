@@ -135,16 +135,15 @@ for forbidden in watch_forbidden:
             + forbidden
         )
 
-# Session-control concurrency contract.
-# Control requests must carry an opaque per-command token in TrackerWireMessage.command,
-# retain the Watch authority revision as the request revision, and be acknowledged only
-# by an authority packet carrying the exact token. A newer unrelated authority revision
-# must never acknowledge an iPhone command.
+# Session-control concurrency contract. Pause/resume/stop commands use an
+# opaque per-command token encoded in TrackerWireMessage.command. The request
+# revision is the Watch authority revision observed by iPhone. Only an authority
+# packet carrying the matching token can acknowledge that iPhone command.
 for token in [
     "pendingControlToken",
     "makeControlCommand(",
     "parseControlAcknowledgement(",
-    "message.command == pendingControlToken",
+    "ack.token == pendingControlToken",
 ]:
     if token not in iphone_model:
         errors.append(

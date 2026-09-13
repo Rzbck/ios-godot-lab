@@ -13,6 +13,7 @@ targets:
       - path: Sources
       - path: ../Shared/TrackerShared.swift
       - path: ../Shared/TrackerSessionControl.swift
+      - path: ../Shared/TrackerAutoPolicy.swift
       - path: ../Shared/TelemetryShared.swift
       - path: Assets.xcassets
     preBuildScripts:
@@ -60,8 +61,10 @@ targets:
     sources:
       - path: ../Shared/TrackerShared.swift
       - path: ../Shared/TrackerSessionControl.swift
+      - path: ../Shared/TrackerAutoPolicy.swift
       - path: ../Tests/TrackerWorkflowContractTests.swift
       - path: ../Tests/TrackerSessionControlTests.swift
+      - path: ../Tests/TrackerAutoPolicyTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watchkitapp.tests

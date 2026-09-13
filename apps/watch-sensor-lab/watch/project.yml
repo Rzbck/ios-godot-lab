@@ -26,7 +26,7 @@ targets:
       properties:
         CFBundleDisplayName: Watch Tracker
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "5"
+        CFBundleVersion: "6"
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.rzbck.watchsensorlab
         WKRunsIndependentlyOfCompanionApp: false

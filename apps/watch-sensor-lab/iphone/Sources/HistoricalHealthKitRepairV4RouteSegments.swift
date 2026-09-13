@@ -74,11 +74,7 @@ extension HistoricalHealthKitRepairV4Coordinator {
 
     /// Preserve the richer reconstruction but cut joins that would otherwise make
     /// Fitness invent a straight line across a pause or a real capture hole. Points
-    /// on both sides survive as separate HKWorkoutRoute objects. After that pairwise
-    /// split, quarantine any whole active segment whose cumulative GPS geometry is
-    /// grossly incompatible with the authoritative Watch distance counter. This is
-    /// deliberately segment-level: a dense ~1 Hz GPS drift can pass every adjacent
-    /// speed check while still wandering more than a kilometre away over minutes.
+    /// on both sides survive; HealthKit receives separate HKWorkoutRoute objects.
     func segmentRouteForHealthKit(
         route: CleanRoute,
         pauses: [TrackerHealthRestorePause],
@@ -86,9 +82,9 @@ extension HistoricalHealthKitRepairV4Coordinator {
     ) -> [[RawPoint]] {
         let ordered = deduplicate(route.points)
         guard let first = ordered.first else { return [] }
-        let watchCounterPoints = route.source.hasPrefix("WATCH")
-            ? ordered.filter { $0.source == "WATCH" && $0.cumulativeDistanceMeters != nil }
-            : []
+        let watchCounterPoints = ordered.filter {
+            $0.source == "WATCH" && $0.cumulativeDistanceMeters != nil
+        }
         var result: [[RawPoint]] = []
         var current: [RawPoint] = [first]
 
@@ -108,69 +104,7 @@ extension HistoricalHealthKitRepairV4Coordinator {
             }
         }
         if current.count >= 2 { result.append(current) }
-
-        return result.filter {
-            !isCounterDivergentSegment($0, watchCounterPoints: watchCounterPoints)
-        }
-    }
-
-    /// Reject only an already-isolated active segment when its complete shape is
-    /// impossible relative to the trusted Watch counter. We do not bridge its ends,
-    /// rewrite any coordinate, or alter workout scalar distance. A winding real path
-    /// is preserved because its start/end displacement stays within the counter budget;
-    /// the incident tail instead has both huge path excess and huge net displacement.
-    func isCounterDivergentSegment(
-        _ segment: [RawPoint],
-        watchCounterPoints: [RawPoint]
-    ) -> Bool {
-        let points = deduplicate(segment)
-        guard points.count >= 8, watchCounterPoints.count >= 2 else { return false }
-
-        let anchored = points.compactMap { point -> (point: RawPoint, counter: Double)? in
-            guard let counter = alignedWatchCounterMeters(
-                at: point.timestamp,
-                watchPoints: watchCounterPoints
-            ) else {
-                return nil
-            }
-            return (point: point, counter: counter)
-        }
-        guard let first = anchored.first,
-              let last = anchored.last,
-              last.counter >= first.counter,
-              last.point.timestamp - first.point.timestamp >= 30 else {
-            return false
-        }
-
-        let scoped = points.filter {
-            $0.timestamp >= first.point.timestamp && $0.timestamp <= last.point.timestamp
-        }
-        guard scoped.count >= 8 else { return false }
-
-        let pathGeometry = zip(scoped, scoped.dropFirst()).reduce(0.0) {
-            $0 + distance($1.0, $1.1)
-        }
-        let directGeometry = distance(first.point, last.point)
-        let counterAdvance = last.counter - first.counter
-        let maxAccuracy = scoped.map(\.horizontalAccuracy).max() ?? 0
-        let accuracyBudget = min(
-            140,
-            max(
-                25,
-                first.point.horizontalAccuracy
-                    + last.point.horizontalAccuracy
-                    + maxAccuracy
-            )
-        )
-        let allowedPath = counterAdvance * 1.35 + accuracyBudget
-        let bridgeAllowed = counterAdvance * 1.20 + accuracyBudget
-        let pathExcess = pathGeometry - allowedPath
-        let minimumExcess = max(120, counterAdvance * 0.25)
-        let minimumGeometry = max(300, counterAdvance * 1.60 + accuracyBudget)
-
-        return pathGeometry > minimumGeometry
-            && pathExcess > minimumExcess
-            && directGeometry > bridgeAllowed
+        return result
     }
 
     func isHardRouteDiscontinuity(

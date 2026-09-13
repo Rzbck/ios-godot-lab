@@ -14,6 +14,7 @@ targets:
       - path: ../Shared/TrackerShared.swift
       - path: ../Shared/TrackerSessionControl.swift
       - path: ../Shared/TrackerAutoPolicy.swift
+      - path: ../Shared/TrackerAutoResumeProbe.swift
       - path: ../Shared/TelemetryShared.swift
       - path: Assets.xcassets
     dependencies:
@@ -64,6 +65,7 @@ targets:
       - path: ../Shared/TrackerShared.swift
       - path: ../Shared/TrackerSessionControl.swift
       - path: ../Shared/TrackerAutoPolicy.swift
+      - path: ../Shared/TrackerAutoResumeProbe.swift
       - path: ../Tests/Support/TrackerAutomationScenario.swift
       - path: ../Tests/TrackerWorkflowContractTests.swift
       - path: ../Tests/TrackerSessionControlTests.swift

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Build-time deterministic iPhone/Watch session-control patch.
 
-This file is intentionally temporary for the session-sync hardware candidate.
-It patches the checked-out Swift sources on the GitHub Actions runner before
-parity checks and compilation, so the exact Git SHA remains reproducible while
-we validate the concurrency fix on hardware. Once validated, fold the same
-changes into the Swift sources and remove this helper.
+Temporary candidate patch for hardware validation. GitHub Actions applies this
+script to the checked-out Swift sources before parity checks and compilation.
+Once validated on iPhone + Apple Watch, fold the exact changes into the Swift
+sources and remove this helper.
 """
 from pathlib import Path
 
@@ -34,8 +33,6 @@ def replace_block(text: str, start: str, end: str, replacement: str, label: str)
 iphone = IPHONE.read_text(encoding="utf-8")
 watch = WATCH.read_text(encoding="utf-8")
 
-# iPhone: track one opaque control token. A Watch revision change alone can no
-# longer acknowledge pause/resume/stop.
 iphone = replace_once(
     iphone,
     "    private var pendingCommandAtRevision: Int64 = -1\n",
@@ -213,8 +210,6 @@ iphone = replace_once(
     "iphone remove revision ack",
 )
 
-# Ensure every existing teardown that clears a pending command also clears the
-# control token. Replacing only exact two-line sequences keeps the patch narrow.
 iphone = iphone.replace(
     "pendingCommand = nil\n            pendingCommandAtRevision = -1\n",
     "pendingCommand = nil\n            pendingCommandAtRevision = -1\n            pendingControlToken = nil\n",
@@ -224,9 +219,6 @@ iphone = iphone.replace(
     "pendingCommand = nil\n        pendingCommandAtRevision = -1\n        pendingControlToken = nil\n",
 )
 
-# Watch: remember the last processed control token/result so duplicate
-# WatchConnectivity delivery is idempotent and authority packets explicitly ACK
-# exactly one iPhone request.
 watch = replace_once(
     watch,
     "    private var selectionRevision: Int64 = 0\n",

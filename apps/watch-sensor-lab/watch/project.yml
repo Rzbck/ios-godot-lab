@@ -62,9 +62,11 @@ targets:
       - path: ../Shared/TrackerShared.swift
       - path: ../Shared/TrackerSessionControl.swift
       - path: ../Shared/TrackerAutoPolicy.swift
+      - path: ../Tests/Support/TrackerAutomationScenario.swift
       - path: ../Tests/TrackerWorkflowContractTests.swift
       - path: ../Tests/TrackerSessionControlTests.swift
       - path: ../Tests/TrackerAutoPolicyTests.swift
+      - path: ../Tests/TrackerAutomationScenarioTests.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.watchkitapp.tests

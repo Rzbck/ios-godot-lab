@@ -8,12 +8,24 @@ shared = (
     root / "Shared/TrackerShared.swift"
 ).read_text(encoding="utf-8")
 
+session_control = (
+    root / "Shared/TrackerSessionControl.swift"
+).read_text(encoding="utf-8")
+
+auto_policy = (
+    root / "Shared/TrackerAutoPolicy.swift"
+).read_text(encoding="utf-8")
+
 iphone_model = (
     root / "iphone/Sources/TrackerModel.swift"
 ).read_text(encoding="utf-8")
 
 watch_model = (
     root / "watch/Sources/SensorModel.swift"
+).read_text(encoding="utf-8")
+
+watch_auto_policy = (
+    root / "watch/Sources/WatchAutoPolicy.swift"
 ).read_text(encoding="utf-8")
 
 
@@ -162,6 +174,64 @@ for forbidden in [
     if forbidden in iphone_model:
         errors.append("Ancien ACK implicite par révision encore présent: " + forbidden)
 
+# Pure cores must stay portable so the same rules execute under iOS tests,
+# watchOS tests, synthetic replay, and later a read-only device self-test.
+for name, source in [
+    ("TrackerSessionControl", session_control),
+    ("TrackerAutoPolicy", auto_policy),
+]:
+    for forbidden_import in [
+        "import HealthKit",
+        "import WatchConnectivity",
+        "import CoreLocation",
+        "import CoreMotion",
+        "import SwiftUI",
+    ]:
+        if forbidden_import in source:
+            errors.append(
+                f"{name} dépend d'un framework matériel/UI: {forbidden_import}"
+            )
+
+for token in [
+    "TrackerControlPolicy",
+    "TrackerControlCodec",
+    "staleRevision",
+    "sessionMismatch",
+    "invalidFinishActivity",
+]:
+    if token not in session_control:
+        errors.append(f"Noyau contrôle déterministe incomplet: {token}")
+
+for token in [
+    "TrackerMotionEvidence",
+    "TrackerAutoPolicy",
+    "shouldStagePause",
+    "shouldStageResume",
+]:
+    if token not in auto_policy:
+        errors.append(f"Noyau Auto déterministe incomplet: {token}")
+
+for token in [
+    "TrackerAutoPolicy.decision",
+    "TrackerAutoPolicy.shouldStagePause",
+    "TrackerAutoPolicy.shouldStageResume",
+]:
+    if token not in watch_auto_policy:
+        errors.append(
+            f"WatchAutoPolicy ne délègue pas au noyau testable: {token}"
+        )
+
+required_test_files = [
+    root / "Tests/TrackerWorkflowContractTests.swift",
+    root / "Tests/TrackerSessionControlTests.swift",
+    root / "Tests/TrackerAutoPolicyTests.swift",
+    root / "Tests/Support/TrackerAutomationScenario.swift",
+    root / "Tests/TrackerAutomationScenarioTests.swift",
+]
+for path in required_test_files:
+    if not path.is_file():
+        errors.append(f"Suite déterministe absente: {path.relative_to(root)}")
+
 if errors:
     print("TRACKER WORKFLOW PARITY: FAIL", file=sys.stderr)
     for error in errors:
@@ -174,4 +244,6 @@ for capability in required_capabilities:
     print(f" - {capability}")
 print("Finish review UI: iPhone + Watch preserve/choose/confirm surfaces present")
 print("Session control: exact-token ACK + Watch revision guard")
+print("Deterministic cores: session-control + Auto policy are platform independent")
+print("Synthetic replay: versioned virtual-time scenarios present")
 print("Historical HealthKit mutation: iPhone-only product surface")

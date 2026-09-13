@@ -13,6 +13,7 @@ on:
       - 'apps/watch-sensor-lab/Shared/**'
       - 'apps/watch-sensor-lab/godot/**'
       - 'apps/watch-sensor-lab/GENERATE_APP_ICON.py'
+      - 'apps/watch-sensor-lab/SESSION_SYNC_PATCH.py'
       - 'apps/watch-sensor-lab/CHECK_WORKFLOW_PARITY.py'
       - 'apps/watch-sensor-lab/CHECK_PRODUCT_INVARIANTS.py'
       - '.github/workflows/watch-sensor-lab-bootstrap.yml'
@@ -54,6 +55,12 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           xcrun --sdk watchos --show-sdk-version
+
+      - name: Apply deterministic session-sync candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$APP_DIR/SESSION_SYNC_PATCH.py"
 
       - name: Verify shared iPhone Watch workflow parity
         shell: bash

@@ -200,7 +200,10 @@ final class DiagnosticService {
                     "read_only": true,
                     "transport": "usbmux_tcp",
                     "device_port": Self.devicePort,
-                    "capabilities": ["ping", "status", "recovery", "errors", "logs"],
+                    "capabilities": [
+                        "ping", "status", "recovery", "errors", "logs",
+                        "saved_healthkit_route_topology",
+                    ],
                 ]
             )
 
@@ -242,6 +245,12 @@ final class DiagnosticService {
                 data["route_diagnostics"] = routeDiagnosticSnapshot(routeProbe)
             } catch {
                 data["route_diagnostics_error"] = error.localizedDescription
+            }
+            do {
+                data["saved_healthkit"] = try await HistoricalSavedHealthKitDiagnostic()
+                    .inspect(sessionID: sessionID)
+            } catch {
+                data["saved_healthkit_error"] = error.localizedDescription
             }
             return envelope(ok: true, command: command, data: data)
 

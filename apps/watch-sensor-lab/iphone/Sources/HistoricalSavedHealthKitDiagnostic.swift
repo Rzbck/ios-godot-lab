@@ -2,12 +2,12 @@ import CoreLocation
 import Foundation
 import HealthKit
 
-/// Read-only inspection of what HealthKit actually persisted for a historical restore.
+/// Read-only inspection of what HealthKit actually persisted for a Tracker session.
 ///
-/// Raw-route diagnostics tell us what we intended to write. This probe answers the other
-/// half of the incident: which HKWorkout/HKWorkoutRoute objects exist after the write, which
-/// coordinates each route contains, and which connector Fitness could plausibly render
-/// between route boundaries. It never writes or deletes HealthKit data.
+/// This probe must keep working even when the iPhone never received the terminal Watch
+/// authority and therefore never wrote `summary.json`. The session id embedded by the Watch
+/// in HealthKit metadata is enough to locate the real workout, its pause/resume events and its
+/// route. It never writes or deletes HealthKit data.
 @MainActor
 struct HistoricalSavedHealthKitDiagnostic {
     private struct SavedRoute {
@@ -19,20 +19,51 @@ struct HistoricalSavedHealthKitDiagnostic {
 
     func inspect(sessionID: String) async throws -> [String: Any] {
         let recovery = HistoricalHealthKitRepairV4Coordinator.shared
-        let summary = try recovery.loadSummary(sessionID: sessionID)
-        let workouts = try await recovery.managedWorkouts(sessionID: sessionID, summary: summary)
+
+        var localSummaryPresent = false
+        var localSummaryError: String?
+        do {
+            _ = try recovery.loadSummary(sessionID: sessionID)
+            localSummaryPresent = true
+        } catch {
+            localSummaryError = error.localizedDescription
+        }
+
+        // Query by the exact session metadata written by the Watch. This deliberately does
+        // not depend on the local Tracker summary: a lost terminal sync is precisely the case
+        // in which that summary does not exist yet.
+        let sessionPredicate = HKQuery.predicateForObjects(
+            withMetadataKey: recovery.sessionKey,
+            allowedValues: [sessionID]
+        )
+        let samples = try await recovery.querySamples(
+            type: HKObjectType.workoutType(),
+            predicate: sessionPredicate
+        )
+        let workouts = samples.compactMap { $0 as? HKWorkout }
+            .sorted { $0.startDate < $1.startDate }
         let generated = workouts.filter { recovery.isGenerated($0, sessionID: sessionID) }
         let normal = workouts.filter { !recovery.isGenerated($0, sessionID: sessionID) }
 
         var result: [String: Any] = [
             "session_id": sessionID,
+            "local_summary_present": localSummaryPresent,
+            "local_summary_error": nullableString(localSummaryError),
+            "matching_workout_count": workouts.count,
             "generated_workout_count": generated.count,
             "normal_workout_count": normal.count,
+            "matching_workouts": workouts.map {
+                workoutSnapshot($0, recovery: recovery)
+            },
             "app_identity": appIdentitySnapshot(),
         ]
 
-        guard let workout = generated.first else {
+        // Prefer the normal workout written by the Watch. A generated historical repair is
+        // only a fallback and must never hide the original workout when both exist.
+        guard let workout = normal.last ?? generated.last else {
             result["workout"] = NSNull()
+            result["workout_events"] = []
+            result["pause_intervals"] = []
             result["routes"] = []
             result["route_boundaries"] = []
             result["saved_route_count"] = 0
@@ -44,6 +75,8 @@ struct HistoricalSavedHealthKitDiagnostic {
         }
 
         result["workout"] = workoutSnapshot(workout, recovery: recovery)
+        result["workout_events"] = (workout.workoutEvents ?? []).map(workoutEventSnapshot)
+        result["pause_intervals"] = pauseIntervals(for: workout)
 
         let routes = try await recovery.routes(for: workout)
         var savedRoutes: [SavedRoute] = []
@@ -120,8 +153,11 @@ struct HistoricalSavedHealthKitDiagnostic {
             "uuid": workout.uuid.uuidString,
             "activity_raw": workout.workoutActivityType.rawValue,
             "activity": activity.rawValue,
+            "start_timestamp": workout.startDate.timeIntervalSince1970,
+            "end_timestamp": workout.endDate.timeIntervalSince1970,
             "start_iso": iso(workout.startDate),
             "end_iso": iso(workout.endDate),
+            "wall_duration_s": workout.endDate.timeIntervalSince(workout.startDate),
             "duration_s": workout.duration,
             "source_name": source.source.name,
             "source_bundle": source.source.bundleIdentifier,
@@ -129,6 +165,8 @@ struct HistoricalSavedHealthKitDiagnostic {
             "source_product_type": nullableString(source.productType),
             "source_os": "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)",
             "source_matches_installed_bundle": source.source.bundleIdentifier == Bundle.main.bundleIdentifier,
+            "managed": workout.metadata?[recovery.managedKey] as? Bool ?? false,
+            "metadata_session_id": nullableString(workout.metadata?[recovery.sessionKey] as? String),
             "brand_name": nullableString(workout.metadata?[HKMetadataKeyWorkoutBrandName] as? String),
             "generation": nullableString(workout.metadata?[recovery.generationKey] as? String),
             "attempt_id": nullableString(workout.metadata?[recovery.attemptKey] as? String),
@@ -150,6 +188,76 @@ struct HistoricalSavedHealthKitDiagnostic {
             snapshot["device"] = NSNull()
         }
         return snapshot
+    }
+
+    private func workoutEventSnapshot(_ event: HKWorkoutEvent) -> [String: Any] {
+        [
+            "type": eventTypeName(event.type),
+            "type_raw": event.type.rawValue,
+            "start_timestamp": event.dateInterval.start.timeIntervalSince1970,
+            "end_timestamp": event.dateInterval.end.timeIntervalSince1970,
+            "start_iso": iso(event.dateInterval.start),
+            "end_iso": iso(event.dateInterval.end),
+            "duration_s": event.dateInterval.duration,
+        ]
+    }
+
+    private func eventTypeName(_ type: HKWorkoutEventType) -> String {
+        switch type {
+        case .pause: return "pause"
+        case .resume: return "resume"
+        case .motionPaused: return "motion_paused"
+        case .motionResumed: return "motion_resumed"
+        case .pauseOrResumeRequest: return "pause_or_resume_request"
+        case .lap: return "lap"
+        case .segment: return "segment"
+        case .marker: return "marker"
+        @unknown default: return "unknown_\(type.rawValue)"
+        }
+    }
+
+    private func pauseIntervals(for workout: HKWorkout) -> [[String: Any]] {
+        let events = (workout.workoutEvents ?? []).sorted {
+            $0.dateInterval.start < $1.dateInterval.start
+        }
+        var result: [[String: Any]] = []
+        var openPause: (Date, String)?
+
+        for event in events {
+            switch event.type {
+            case .pause, .motionPaused:
+                if openPause == nil {
+                    openPause = (event.dateInterval.start, eventTypeName(event.type))
+                }
+            case .resume, .motionResumed:
+                guard let pause = openPause else { continue }
+                let end = min(max(event.dateInterval.start, pause.0), workout.endDate)
+                if end > pause.0 {
+                    result.append(pauseSnapshot(start: pause.0, end: end, source: pause.1))
+                }
+                openPause = nil
+            default:
+                break
+            }
+        }
+
+        if let pause = openPause, workout.endDate > pause.0 {
+            result.append(
+                pauseSnapshot(start: pause.0, end: workout.endDate, source: pause.1 + "_until_end")
+            )
+        }
+        return result
+    }
+
+    private func pauseSnapshot(start: Date, end: Date, source: String) -> [String: Any] {
+        [
+            "start_timestamp": start.timeIntervalSince1970,
+            "end_timestamp": end.timeIntervalSince1970,
+            "start_iso": iso(start),
+            "end_iso": iso(end),
+            "duration_s": max(0, end.timeIntervalSince(start)),
+            "source": source,
+        ]
     }
 
     private func routeSnapshot(_ saved: SavedRoute) -> [String: Any] {

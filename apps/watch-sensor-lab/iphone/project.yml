@@ -30,7 +30,7 @@ targets:
       properties:
         CFBundleDisplayName: Watch Tracker
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "5"
+        CFBundleVersion: "6"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -64,7 +64,7 @@ targets:
       properties:
         CFBundleDisplayName: Watch Tracker Live
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "5"
+        CFBundleVersion: "6"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

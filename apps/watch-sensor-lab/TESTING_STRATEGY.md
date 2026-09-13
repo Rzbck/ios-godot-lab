@@ -12,22 +12,24 @@ Le matériel réel reste nécessaire uniquement pour les comportements que Simul
 
 ### 1. Garde-fous statiques
 
-`CHECK_WORKFLOW_PARITY.py` et `CHECK_PRODUCT_INVARIANTS.py` doivent échouer tôt lorsqu’une surface iPhone/Watch diverge, lorsqu’un ancien ACK implicite revient, ou lorsqu’un noyau déterministe acquiert une dépendance à un framework matériel/UI.
+`CHECK_WORKFLOW_PARITY.py` et `CHECK_PRODUCT_INVARIANTS.py` échouent tôt lorsqu’une surface iPhone/Watch diverge, lorsqu’un ancien ACK implicite revient, ou lorsqu’un noyau déterministe acquiert une dépendance à un framework matériel/UI.
+
+Le garde-fou vérifie également que le self-test USB reste strictement read-only et n’importe ni HealthKit ni WatchConnectivity.
 
 ### 2. Noyaux déterministes partagés
 
-La logique qui peut être pure doit vivre hors de HealthKit/CoreMotion/WatchConnectivity/SwiftUI :
+La logique qui peut être pure vit hors de HealthKit/CoreMotion/WatchConnectivity/SwiftUI :
 
-- `Shared/TrackerSessionControl.swift` : sérialisation et arbitrage des commandes de session ;
+- `Shared/TrackerSessionControl.swift` : arbitrage déterministe des commandes de session ;
 - `Shared/TrackerAutoPolicy.swift` : règles Auto, pause et reprise à partir d’évidence synthétique.
 
-Les adaptateurs iPhone/watchOS traduisent les API Apple vers ces types. Les règles ne doivent pas être recopiées dans les vues ou dans plusieurs modèles.
+Les adaptateurs iPhone/watchOS traduisent les API Apple vers ces types. Les règles ne doivent pas être recopiées dans les vues ou plusieurs modèles.
 
 ### 3. XCTest iOS + watchOS
 
-Le workflow `.github/workflows/watch-sensor-lab-tests.yml` exécute la même suite sur un simulateur iPhone et un simulateur Apple Watch courants.
+Le workflow `.github/workflows/watch-sensor-lab-tests.yml` exécute la même suite sur un simulateur iPhone et un simulateur Apple Watch disponibles sur le runner.
 
-Les tests doivent couvrir au minimum :
+Les tests couvrent notamment :
 
 - fin Auto : conserver les segments ou forcer un sport concret ;
 - commandes dupliquées ;
@@ -52,16 +54,32 @@ Les fixtures peuvent simuler en quelques millisecondes :
 - vélo ;
 - marche → course → vélo ;
 - arrêt/reprise ;
-- GPS faible ou valeurs limites ;
-- futures pertes de liaison et retards de commande.
+- GPS/métriques limites ;
+- futurs retards/pertes de liaison.
 
-Le format doit rester indépendant du matériel pour être réutilisable par XCTest, UI tests et un futur self-test USB read-only.
+Le format reste indépendant du matériel pour être réutilisable par XCTest, UI tests et outils de self-test.
 
-### 5. UI automation
+### 5. Self-test USB read-only
+
+`AutomationSelfTestService.swift` expose `wsl_selftest_v1` sur le port appareil `37992`. Le client Windows est `WSL_SELFTEST.ps1`.
+
+Ce self-test :
+
+- exécute uniquement les politiques déterministes partagées ;
+- ne démarre jamais `HKWorkoutSession` ;
+- ne lit/écrit/supprime aucune donnée HealthKit ;
+- ne touche pas `NativeSessionStore` ;
+- n’envoie aucune commande WatchConnectivity ;
+- retourne le build SHA et un résultat PASS/FAIL détaillé ;
+- ne laisse aucun état après exécution.
+
+`wsl_diag_v1` sur le port `37991` reste séparé et read-only pour l’inspection de l’état réel.
+
+### 6. UI automation
 
 Étape suivante : ajouter des `accessibilityIdentifier` stables et des cibles UI-test iPhone/watchOS. Les UI tests démarreront l’application avec un état synthétique et vérifieront les actions de fin sans créer une vraie séance HealthKit.
 
-Exemples d’identifiants prévus :
+Identifiants réservés :
 
 - `tracker.finish.button`
 - `tracker.finish.preserveAuto`
@@ -69,20 +87,20 @@ Exemples d’identifiants prévus :
 - `tracker.finish.confirmSingle`
 - `tracker.finish.cancel`
 
-### 6. Self-test USB sur appareil
+### 7. Tests matériels ciblés
 
-`wsl_diag_v1` reste read-only. Il ne doit pas devenir une télécommande générale des vraies séances.
+Un test physique n’est demandé que si toutes les couches automatiques pertinentes sont vertes et que la question dépend réellement du matériel.
 
-Un futur self-test appareil devra :
+Avant de demander une séance à l’utilisateur :
 
-- exécuter uniquement des règles pures/scénarios synthétiques ;
-- ne jamais démarrer `HKWorkoutSession` ;
-- ne jamais écrire/supprimer HealthKit ;
-- ne jamais appeler `deleteAllSessions()` ;
-- retourner build SHA + résultats détaillés ;
-- être idempotent et ne laisser aucun état après exécution.
+1. vérifier les invariants statiques ;
+2. lancer les XCTest iOS/watchOS ;
+3. rejouer le scénario synthétique correspondant ;
+4. si l’IPA est nécessaire, compiler le SHA exact avec GitHub Actions ;
+5. exécuter le self-test USB read-only sur ce même build ;
+6. expliquer précisément ce que seul le matériel peut encore valider.
 
-Si un jour un test mutable appareil est nécessaire, il utilisera un store séparé et une session explicitement préfixée `automation-`, avec suppression exacte de cette session uniquement.
+Une observation physique utilisateur reste la validation finale pour HealthKit réel, capteurs, GPS, background et liaison physique iPhone/Watch.
 
 ## CI et artifacts
 
@@ -91,32 +109,27 @@ Deux workflows ont des rôles distincts :
 - `watch-sensor-lab-tests.yml` : logique/tests simulateurs, sans IPA ;
 - `watch-sensor-lab-bootstrap.yml` : compilation iPhone + watchOS, vérifications produit et packaging exact-SHA.
 
-Un push normal reste CI-only. Une IPA n’est conservée que lorsqu’un candidat appareil est réellement demandé. Les diagnostics et artifacts courts doivent garder une rétention faible.
-
-## Quand demander un test physique
-
-Un test physique n’est demandé que si toutes les couches automatiques pertinentes sont vertes et que la question dépend réellement du matériel.
-
-Avant de demander à l’utilisateur de faire une séance :
-
-1. vérifier les invariants ;
-2. lancer les XCTest iOS/watchOS ;
-3. rejouer le scénario synthétique correspondant ;
-4. vérifier le build exact-SHA ;
-5. expliquer précisément ce que seul le matériel peut encore valider.
-
-Une observation physique utilisateur reste la validation finale pour ce qui dépend réellement du device.
+Un push normal reste CI-only. Une IPA n’est conservée que lorsqu’un candidat appareil est réellement demandé.
 
 ## Nettoyage
 
 Ne jamais supprimer des données réelles pour nettoyer des tests.
 
-- GitHub : diagnostics de tests en échec = 1 jour ; candidat IPA = rétention courte existante ;
+- GitHub : rapports de tests en échec = 1 jour ; candidat IPA = rétention courte existante ;
 - Windows : conserver le dernier candidat matériel validé + le candidat courant, puis supprimer les anciens caches après validation ;
-- sessions synthétiques : mémoire/store temporaire uniquement ;
-- futures sessions appareil `automation-*` : suppression exacte par ID ;
+- scénarios synthétiques : mémoire uniquement ;
+- self-test USB : aucune donnée persistée ;
+- toute future session mutable d’automatisation devra être préfixée `automation-` et supprimée exactement par ID ;
 - raw forensics, HANDOFF et séances réelles protégées : jamais touchés par le nettoyage automatique.
 
 ## Dette transitoire connue
 
-`SESSION_SYNC_PATCH.py` reste un mécanisme candidat de build tant que le correctif de synchronisation n’a pas été replié dans les sources Swift réelles. Il ne doit pas devenir permanent. La fermeture du chantier exige de déplacer la logique validée dans les sources, faire passer la suite automatique sans patch de build, puis supprimer ce helper.
+`SESSION_SYNC_PATCH.py` reste un mécanisme candidat de build tant que le correctif de synchronisation n’a pas été replié dans les sources Swift réelles. Il ne doit pas devenir permanent.
+
+La fermeture du chantier exige :
+
+1. déplacer la logique validée dans les sources Swift ;
+2. faire consommer le noyau `TrackerSessionControl` par la production ;
+3. faire passer la suite automatique sans patch de build ;
+4. supprimer `SESSION_SYNC_PATCH.py` ;
+5. seulement ensuite effectuer le smoke test matériel final nécessaire.

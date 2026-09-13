@@ -28,6 +28,22 @@ watch_auto_policy = (
     root / "watch/Sources/WatchAutoPolicy.swift"
 ).read_text(encoding="utf-8")
 
+selftest_service = (
+    root / "iphone/Sources/AutomationSelfTestService.swift"
+).read_text(encoding="utf-8")
+
+tracker_app = (
+    root / "iphone/Sources/TrackerApp.swift"
+).read_text(encoding="utf-8")
+
+iphone_project = (
+    root / "iphone/project.yml"
+).read_text(encoding="utf-8")
+
+watch_project = (
+    root / "watch/project.yml"
+).read_text(encoding="utf-8")
+
 
 def ui_source(folder: Path) -> str:
     parts = []
@@ -174,8 +190,8 @@ for forbidden in [
     if forbidden in iphone_model:
         errors.append("Ancien ACK implicite par révision encore présent: " + forbidden)
 
-# Pure cores must stay portable so the same rules execute under iOS tests,
-# watchOS tests, synthetic replay, and later a read-only device self-test.
+# Pure cores stay portable: simulator, synthetic replay and device self-test
+# must execute the exact same rules without importing hardware/UI frameworks.
 for name, source in [
     ("TrackerSessionControl", session_control),
     ("TrackerAutoPolicy", auto_policy),
@@ -232,6 +248,51 @@ for path in required_test_files:
     if not path.is_file():
         errors.append(f"Suite déterministe absente: {path.relative_to(root)}")
 
+# On-device self-test must remain a distinct, read-only USB surface.
+for token in [
+    'static let protocolName = "wsl_selftest_v1"',
+    "static let devicePort: UInt16 = 37992",
+    '"read_only": true',
+    '"healthkit_mutation": false',
+    '"workout_mutation": false',
+    "TrackerControlPolicy.evaluate",
+    "TrackerAutoPolicy.decision",
+]:
+    if token not in selftest_service:
+        errors.append(f"Self-test USB incomplet: {token}")
+
+for forbidden in [
+    "import HealthKit",
+    "import WatchConnectivity",
+    "HKHealthStore(",
+    "HKWorkoutSession(",
+    "WCSession.",
+    "NativeSessionStore(",
+    "deleteAllSessions(",
+    "startFromPhone(",
+    "stopFromPhone(",
+    "workflowStart(",
+    "workflowFinish(",
+]:
+    if forbidden in selftest_service:
+        errors.append(f"Self-test USB peut muter l'état réel: {forbidden}")
+
+for token in [
+    "AutomationSelfTestService.shared.start()",
+    "AutomationSelfTestService.shared.stop()",
+]:
+    if token not in tracker_app:
+        errors.append(f"Lifecycle self-test USB non câblé: {token}")
+
+if iphone_project.count("../Shared/TrackerAutoPolicy.swift") < 2:
+    errors.append("TrackerAutoPolicy absent de l'app iPhone ou de ses tests")
+if "../Shared/TrackerAutoPolicy.swift" not in watch_project:
+    errors.append("TrackerAutoPolicy absent de la target Watch")
+
+selftest_client = root / "WSL_SELFTEST.ps1"
+if not selftest_client.is_file():
+    errors.append("Client USB WSL_SELFTEST.ps1 absent")
+
 if errors:
     print("TRACKER WORKFLOW PARITY: FAIL", file=sys.stderr)
     for error in errors:
@@ -246,4 +307,5 @@ print("Finish review UI: iPhone + Watch preserve/choose/confirm surfaces present
 print("Session control: exact-token ACK + Watch revision guard")
 print("Deterministic cores: session-control + Auto policy are platform independent")
 print("Synthetic replay: versioned virtual-time scenarios present")
+print("USB self-test: read-only, no HealthKit/workout/session-store mutation")
 print("Historical HealthKit mutation: iPhone-only product surface")

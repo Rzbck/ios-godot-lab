@@ -12,8 +12,16 @@ final class WatchFinishFlowUITests: XCTestCase {
         let finish = app.buttons["Terminer"]
         finish.tap()
 
-        let preserve = app.buttons["Conserver la détection Auto"]
-        XCTAssertTrue(preserve.waitForExistence(timeout: 3))
+        let preserve = app.buttons.matching(
+            NSPredicate(
+                format: "label CONTAINS[c] %@",
+                "Conserver la détection Auto"
+            )
+        ).firstMatch
+        XCTAssertTrue(
+            preserve.waitForExistence(timeout: 3),
+            "Le bouton de conservation Auto n'est pas exposé par le harness watchOS."
+        )
         preserve.tap()
 
         assertResult("preserve", in: app)

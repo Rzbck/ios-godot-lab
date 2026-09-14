@@ -108,7 +108,7 @@ targets:
         SKIP_INSTALL: NO
     scheme:
       testTargets:
-        - WatchSensorLabWatchTests
+        - WatchSensorLabWatchFinishUITests
 
   WatchSensorLabWatchFinishUITests:
     type: bundle.ui-testing

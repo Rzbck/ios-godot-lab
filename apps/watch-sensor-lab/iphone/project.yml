@@ -45,7 +45,7 @@ targets:
       properties:
         CFBundleDisplayName: Watch Tracker
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "9"
+        CFBundleVersion: "10"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -53,7 +53,7 @@ targets:
         NSLocationWhenInUseUsageDescription: Watch Tracker utilise votre position pendant une session pour tracer le parcours, calculer la distance, la vitesse, l'altitude, le dénivelé et associer le contexte météo extérieur.
         NSMotionUsageDescription: Watch Tracker utilise les données de mouvement et de pas de l’iPhone pour la cadence, l’allure et l’analyse de qualité de l’activité lorsqu’elles sont disponibles.
         NSHealthShareUsageDescription: Watch Tracker lit vos entraînements et les données Santé utiles au suivi sportif, notamment activité, fréquence cardiaque, HRV, sommeil, cardio et mobilité, afin d’afficher votre historique et vos tendances personnelles.
-        NSHealthUpdateUsageDescription: Watch Tracker coordonne l'entraînement avec l'Apple Watch afin d'enregistrer la séance et son parcours dans Santé.
+        NSHealthUpdateUsageDescription: Watch Tracker coordonne l'entraînement avec l’Apple Watch afin d'enregistrer la séance et son parcours dans Santé.
         UIBackgroundModes:
           - location
     settings:
@@ -130,6 +130,7 @@ targets:
         TEST_TARGET_NAME: WatchSensorLabFinishUIHarness
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGNING_REQUIRED: NO
+        TARGETED_DEVICE_FAMILY: "1"
 
   WatchTrackerLiveActivity:
     type: app-extension
@@ -143,7 +144,7 @@ targets:
       properties:
         CFBundleDisplayName: Watch Tracker Live
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "9"
+        CFBundleVersion: "10"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

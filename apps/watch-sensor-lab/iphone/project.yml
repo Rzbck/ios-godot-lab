@@ -28,6 +28,12 @@ targets:
           set -euo pipefail
           python3 "$SRCROOT/../APPLY_AUTO_PAUSE_SAFETY_PATCH.py"
         basedOnDependencyAnalysis: false
+      - name: Apply Reactive Auto Behavior Patch
+        shell: /bin/bash
+        script: |
+          set -euo pipefail
+          python3 "$SRCROOT/../APPLY_AUTO_BEHAVIOR_PATCH.py"
+        basedOnDependencyAnalysis: false
       - name: Apply Historical Correction Distance Patch
         shell: /bin/bash
         script: |

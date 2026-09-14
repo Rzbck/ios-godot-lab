@@ -203,6 +203,7 @@ final class DiagnosticService {
                     "capabilities": [
                         "ping", "status", "recovery", "errors", "logs",
                         "saved_healthkit_route_topology",
+                        "nearby_healthkit_workouts",
                     ],
                 ]
             )
@@ -251,6 +252,12 @@ final class DiagnosticService {
                     .inspect(sessionID: sessionID)
             } catch {
                 data["saved_healthkit_error"] = error.localizedDescription
+            }
+            do {
+                data["nearby_healthkit_workouts"] = try await NearbyHealthKitWorkoutDiagnostic()
+                    .inspect(sessionID: sessionID)
+            } catch {
+                data["nearby_healthkit_workouts_error"] = error.localizedDescription
             }
             return envelope(ok: true, command: command, data: data)
 

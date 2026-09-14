@@ -377,9 +377,10 @@ try {
                 timed_out           = $Data.timed_out
             } | Format-List *
 
-            if ($null -ne $Data.audit) {
+            $AuditProperty = $Data.PSObject.Properties['audit']
+            if ($null -ne $AuditProperty -and $null -ne $AuditProperty.Value) {
                 Write-Host 'AUDIT'
-                $Data.audit | Format-List *
+                $AuditProperty.Value | Format-List *
             }
             else {
                 Write-Host 'AUDIT = aucune donnée retournée'
@@ -419,6 +420,51 @@ try {
                 $SavedErrorProperty = $Data.PSObject.Properties['saved_healthkit_error']
                 if ($null -ne $SavedErrorProperty -and $SavedErrorProperty.Value) {
                     Write-Host ("SAVED HEALTHKIT DIAGNOSTIC ERROR = {0}" -f $SavedErrorProperty.Value)
+                }
+            }
+
+            $NearbyProperty = $Data.PSObject.Properties['nearby_healthkit_workouts']
+            if ($null -ne $NearbyProperty -and $null -ne $NearbyProperty.Value) {
+                $Nearby = $NearbyProperty.Value
+
+                Write-Host ''
+                Write-Host 'NEARBY HEALTHKIT WORKOUTS - ALL SOURCES (READ-ONLY)'
+                [pscustomobject]@{
+                    target_found     = $Nearby.target_found
+                    target_start     = $Nearby.target_start_iso
+                    window_start     = $Nearby.window_start_iso
+                    window_end       = $Nearby.window_end_iso
+                    workout_count    = $Nearby.workout_count
+                } | Format-List *
+
+                $NearbyRows = foreach ($Workout in @($Nearby.workouts)) {
+                    [pscustomobject]@{
+                        target       = $Workout.is_target_session
+                        activity     = $Workout.activity
+                        start        = Format-DiagnosticTimestamp $Workout.start_iso
+                        end          = Format-DiagnosticTimestamp $Workout.end_iso
+                        offset_s     = [math]::Round([double]$Workout.seconds_from_target_start, 1)
+                        duration_s   = [math]::Round([double]$Workout.duration_s, 1)
+                        distance_m   = $Workout.distance_m
+                        source       = $Workout.source_name
+                        bundle       = $Workout.source_bundle
+                        device       = $Workout.device_name
+                        session_id   = $Workout.tracker_session_id
+                        uuid         = $Workout.uuid
+                    }
+                }
+
+                if (@($NearbyRows).Count -gt 0) {
+                    $NearbyRows | Format-Table -AutoSize -Wrap
+                }
+                else {
+                    Write-Host 'Aucun workout HealthKit dans la fenêtre.'
+                }
+            }
+            else {
+                $NearbyErrorProperty = $Data.PSObject.Properties['nearby_healthkit_workouts_error']
+                if ($null -ne $NearbyErrorProperty -and $NearbyErrorProperty.Value) {
+                    Write-Host ("NEARBY HEALTHKIT ERROR = {0}" -f $NearbyErrorProperty.Value)
                 }
             }
         }

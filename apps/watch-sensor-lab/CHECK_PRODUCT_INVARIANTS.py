@@ -53,6 +53,18 @@ require(iphone_root, 'Label("Récupération"', "Onglet Récupération visible")
 require(iphone_v4, "HistoricalHealthKitRepairV4Coordinator.shared", "Coordinateur v4")
 require(iphone_v4, '"Reconstruire proprement dans Santé"', "Action v4 visible")
 
+# Le dossier forensic actif doit être récupérable sans retaper l'ID ni la distance.
+for token, label in [
+    ('sessionID: "1789374106082"', "Preset forensic session exacte"),
+    ("authoritativeDistanceMeters: 9052.45442214305", "Preset forensic distance exacte"),
+    ("targetActivity: .cycling", "Preset forensic sport cible"),
+    ('Label("Dossiers de récupération"', "Surface dossiers de récupération"),
+    ("loadRecoveryPreset", "Chargement dossier en un geste"),
+    ("orphanCoordinator.inspect()", "Inspection automatique lecture seule"),
+    ('"Détails / saisie manuelle avancée"', "Saisie manuelle reléguée en avancé"),
+]:
+    require(iphone_v4, token, label)
+
 # Diagnostic d'un workout normal Tracker: strictement lecture seule.
 for token, label in [
     ("HistoricalManagedWorkoutAudit", "Audit workout Tracker non-restauration"),
@@ -172,6 +184,11 @@ for token, label in [
 # Le brand forcé a déjà produit un titre Watch Tracker à la place de Vélo: interdit.
 forbid(iphone_v4, "HKMetadataKeyWorkoutBrandName:", "Brand name forcé interdit dans v4")
 forbid(iphone_fidelity, "HKMetadataKeyWorkoutBrandName:", "Brand name forcé interdit dans helper")
+require(
+    iphone_v4,
+    "sanitized.removeValue(forKey: HKMetadataKeyWorkoutBrandName)",
+    "Brand supprimé centralement avant écriture HealthKit",
+)
 
 # H. Route + quantités + full fidelity restent vérifiées.
 for token, label in [
@@ -251,6 +268,7 @@ if errors:
 
 print("TRACKER PRODUCT INVARIANTS: OK")
 print(" - active historical mutation surface: iPhone v4 only")
+print(" - known forensic recovery can be loaded without manual IDs")
 print(" - historical cleanup remains exact-session and explicit")
 print(" - richer pre-aggressive route selection is preserved")
 print(" - impossible joins are split into independent HealthKit route samples")

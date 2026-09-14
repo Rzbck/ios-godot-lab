@@ -28,6 +28,37 @@ final class TrackerAutomationScenarioTests: XCTestCase {
         XCTAssertEqual(result.finalHeartRateBPM, 142, accuracy: 0.001)
     }
 
+    func testReplayStartsNeutralUntilConcreteEvidenceArrives() throws {
+        let scenario = TrackerAutomationScenario(
+            name: "neutral-start",
+            frames: [
+                TrackerAutomationFrame(
+                    offsetSeconds: 0,
+                    motion: TrackerMotionEvidence(confidence: .low),
+                    speedMps: 0,
+                    cadenceSPM: 0,
+                    heartRateBPM: 80,
+                    distanceDeltaMeters: 0,
+                    horizontalAccuracyMeters: 5
+                ),
+                TrackerAutomationFrame(
+                    offsetSeconds: 1,
+                    motion: TrackerMotionEvidence(walking: true),
+                    speedMps: 4.2,
+                    cadenceSPM: 0,
+                    heartRateBPM: 100,
+                    distanceDeltaMeters: 4.2,
+                    horizontalAccuracyMeters: 5
+                ),
+            ]
+        )
+
+        let result = try TrackerAutomationReplayer.replay(scenario)
+
+        XCTAssertEqual(result.activityCandidates, [.cycling])
+        XCTAssertFalse(result.pauseCandidateFrameIndexes.contains(0))
+    }
+
     func testStopAndResumeWalkingExposesPauseAndResumeCandidates() throws {
         let result = try TrackerAutomationReplayer.replay(
             TrackerAutomationFixtures.stopAndResumeWalking

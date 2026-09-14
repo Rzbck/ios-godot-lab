@@ -96,12 +96,14 @@ enum TrackerAutomationReplayer {
         var totalDistance = 0.0
         var maxSpeed = 0.0
         var finalHeartRate = 0.0
-        var currentActivity = scenario.selectedActivity.isAutomatic
-            ? ActivityKind.walking
-            : scenario.selectedActivity
+        var currentActivity = scenario.selectedActivity
 
         for (index, frame) in scenario.frames.enumerated() {
-            let decision = TrackerAutoPolicy.decision(from: frame.motion)
+            let decision = TrackerAutoPolicy.decision(
+                from: frame.motion,
+                speedMps: frame.speedMps,
+                cadenceSPM: frame.cadenceSPM
+            )
             if let decision {
                 candidates.append(decision.activity)
                 currentActivity = decision.activity

@@ -151,7 +151,7 @@ watch = replace_one_of_or_present(
                 automaticActivitySeconds = [:]
             }
 ''',
-    "sport accounting stays neutral until the first concrete decision",
+    "automaticActivityStartedAt = nil\n                automaticActivitySeconds = [:]",
     "watch remove initial walking accounting",
 )
 watch = replace_once_or_present(
@@ -335,7 +335,7 @@ for token in [
 
 for token in [
     "return activity.isAutomatic ? .automatic : activity",
-    "sport accounting stays neutral until the first concrete decision",
+    "automaticActivityStartedAt = nil\n                automaticActivitySeconds = [:]",
     "WatchAutoHealthReconciler.shared.bind(to: self)",
     "selectedActivity.isAutomatic, !effectiveActivity.isAutomatic",
     "speedMps: self.currentSpeedMps",

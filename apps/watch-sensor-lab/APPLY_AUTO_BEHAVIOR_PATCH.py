@@ -162,6 +162,61 @@ watch = replace_once_or_present(
 )
 watch = replace_once_or_present(
     watch,
+    "    private func updateAutoEvidence(_ decision: WatchAutoDecision) {\n",
+    '''    private func reevaluateAutomaticActivityFromLiveSensors() {
+        guard selectedActivity.isAutomatic, phase == .active else { return }
+
+        let evidence = TrackerMotionEvidence(
+            walking: lastMotionCandidate == .walking,
+            running: lastMotionCandidate == .running,
+            cycling: lastMotionCandidate == .cycling,
+            stationary: lastMotionWasStationary,
+            confidence: lastMotionCandidate == nil ? .low : .medium
+        )
+
+        guard let decision = WatchAutoPolicy.decision(
+            from: evidence,
+            speedMps: currentSpeedMps,
+            cadenceSPM: cadenceSPM
+        ) else { return }
+
+        updateAutoEvidence(decision)
+        stageAutomaticCandidate(decision)
+    }
+
+    private func updateAutoEvidence(_ decision: WatchAutoDecision) {
+''',
+    "private func reevaluateAutomaticActivityFromLiveSensors()",
+    "watch live sensor auto reevaluation helper",
+)
+watch = replace_once_or_present(
+    watch,
+    '''                if let pace = data.currentPace?.doubleValue { payload["pace_s_per_m"] = pace }
+                self.sendSensorSample(kind: "pedometer", payload: payload, reliable: false)
+''',
+    '''                if let pace = data.currentPace?.doubleValue { payload["pace_s_per_m"] = pace }
+                self.reevaluateAutomaticActivityFromLiveSensors()
+                self.sendSensorSample(kind: "pedometer", payload: payload, reliable: false)
+''',
+    "self.reevaluateAutomaticActivityFromLiveSensors()\n                self.sendSensorSample(kind: \"pedometer\"",
+    "watch cadence triggers auto reevaluation",
+)
+watch = replace_once_or_present(
+    watch,
+    '''        previousLocation = location
+        sendWatchLocationIfNeeded(location, acceptedForDistance: acceptedForDistance, deltaMeters: deltaMeters, impliedSpeed: impliedSpeed)
+        if autoPauseEnabled { stageAutoPauseIfNeeded() }
+''',
+    '''        previousLocation = location
+        sendWatchLocationIfNeeded(location, acceptedForDistance: acceptedForDistance, deltaMeters: deltaMeters, impliedSpeed: impliedSpeed)
+        reevaluateAutomaticActivityFromLiveSensors()
+        if autoPauseEnabled { stageAutoPauseIfNeeded() }
+''',
+    "reevaluateAutomaticActivityFromLiveSensors()\n        if autoPauseEnabled",
+    "watch GPS triggers auto reevaluation",
+)
+watch = replace_once_or_present(
+    watch,
     "        let dwell = Swift.max(decision.dwellSeconds, 10)\n",
     "        let dwell = Swift.max(decision.dwellSeconds, 1.5)\n",
     "Swift.max(decision.dwellSeconds, 1.5)",
@@ -254,6 +309,7 @@ for token in [
     "selectedActivity.isAutomatic, !effectiveActivity.isAutomatic",
     "speedMps: self.currentSpeedMps",
     "cadenceSPM: self.cadenceSPM",
+    "reevaluateAutomaticActivityFromLiveSensors()",
     "Swift.max(decision.dwellSeconds, 1.5)",
     "selectedActivity = .automatic\n            effectiveActivity = .automatic",
 ]:

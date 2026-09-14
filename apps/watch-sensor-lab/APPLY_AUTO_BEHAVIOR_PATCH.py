@@ -22,6 +22,22 @@ def replace_once_or_present(text: str, old: str, new: str, marker: str, label: s
     return text.replace(old, new, 1)
 
 
+def replace_one_of_or_present(
+    text: str,
+    variants: list[str],
+    new: str,
+    marker: str,
+    label: str,
+) -> str:
+    if marker in text:
+        return text
+    matches = [variant for variant in variants if text.count(variant) == 1]
+    if len(matches) != 1:
+        counts = [text.count(variant) for variant in variants]
+        raise SystemExit(f"{label}: expected exactly one known variant, got counts {counts}")
+    return text.replace(matches[0], new, 1)
+
+
 iphone = IPHONE.read_text(encoding="utf-8")
 watch = WATCH.read_text(encoding="utf-8")
 reconciler = RECONCILER.read_text(encoding="utf-8")
@@ -107,21 +123,35 @@ watch = replace_once_or_present(
     "selectedActivity = .automatic\n            effectiveActivity = .automatic",
     "watch reset must stay neutral",
 )
-watch = replace_once_or_present(
+
+# APPLY_RUNTIME_INTEGRITY_PATCH.py runs earlier in the production patch chain
+# and deliberately binds the HealthKit reconciler here. Preserve that binding
+# while removing only the fake initial Walking accounting. The unpatched form
+# remains an accepted variant so this helper also stays independently testable.
+watch = replace_one_of_or_present(
     watch,
-    '''            if selectedActivity.isAutomatic {
+    [
+        '''            if selectedActivity.isAutomatic {
                 automaticActivityStartedAt = startedAt ?? Date()
             }
 ''',
+        '''            if selectedActivity.isAutomatic {
+                // Auto HealthKit reconciliation is lifecycle-critical. Binding
+                // cannot depend on Core Motion producing a later decision.
+                WatchAutoHealthReconciler.shared.bind(to: self)
+                automaticActivityStartedAt = startedAt ?? Date()
+            }
+''',
+    ],
     '''            if selectedActivity.isAutomatic {
-                // Do not count provisional startup time as walking (or any
-                // concrete sport). Accounting starts with the first real Auto
-                // decision below.
+                // Reconciliation remains bound from session start, but sport
+                // accounting stays neutral until the first concrete decision.
+                WatchAutoHealthReconciler.shared.bind(to: self)
                 automaticActivityStartedAt = nil
                 automaticActivitySeconds = [:]
             }
 ''',
-    "Do not count provisional startup time as walking",
+    "sport accounting stays neutral until the first concrete decision",
     "watch remove initial walking accounting",
 )
 watch = replace_once_or_present(
@@ -305,7 +335,8 @@ for token in [
 
 for token in [
     "return activity.isAutomatic ? .automatic : activity",
-    "Do not count provisional startup time as walking",
+    "sport accounting stays neutral until the first concrete decision",
+    "WatchAutoHealthReconciler.shared.bind(to: self)",
     "selectedActivity.isAutomatic, !effectiveActivity.isAutomatic",
     "speedMps: self.currentSpeedMps",
     "cadenceSPM: self.cadenceSPM",

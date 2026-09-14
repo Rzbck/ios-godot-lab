@@ -14,12 +14,19 @@ enum WatchAutoPolicy {
         elapsedSeconds: TimeInterval,
         distanceMeters: Double,
         elevationGainMeters: Double,
-        elevationLossMeters: Double
+        elevationLossMeters: Double,
+        speedMps: Double = 0,
+        cadenceSPM: Double = 0
     ) -> WatchAutoDecision? {
         // Keep reconciliation lifecycle binding at the platform boundary.
         // Classification itself is delegated to the pure shared policy so CI
         // can replay the exact same rules without physical motion.
         WatchAutoHealthReconciler.shared.bind(to: SensorModel.shared)
+
+        _ = elapsedSeconds
+        _ = distanceMeters
+        _ = elevationGainMeters
+        _ = elevationLossMeters
 
         let evidence = TrackerMotionEvidence(
             walking: motion.walking,
@@ -29,7 +36,11 @@ enum WatchAutoPolicy {
             confidence: motionConfidence(motion.confidence)
         )
 
-        guard let decision = TrackerAutoPolicy.decision(from: evidence) else {
+        guard let decision = TrackerAutoPolicy.decision(
+            from: evidence,
+            speedMps: speedMps,
+            cadenceSPM: cadenceSPM
+        ) else {
             return nil
         }
 

@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// Runtime auto-pause policy on the Watch.
@@ -7,6 +8,24 @@ import SwiftUI
 /// This keeps the behavior close to the native Workout experience: stop moving,
 /// pause automatically; move again, resume automatically.
 enum WatchAutoPauseSettings {
+    // Legacy storage/wire keys. SensorModel still accepts them so an iPhone on
+    // an older build can synchronize safely during upgrades. They no longer
+    // tune runtime behavior in the new adaptive mode.
+    static let walkEnabledKey = "tracker.autoPause.walk.enabled"
+    static let hikeEnabledKey = "tracker.autoPause.hike.enabled"
+    static let runEnabledKey = "tracker.autoPause.run.enabled"
+    static let cycleEnabledKey = "tracker.autoPause.cycle.enabled"
+
+    static let walkPauseDwellKey = "tracker.autoPause.walk.pauseDwell"
+    static let hikePauseDwellKey = "tracker.autoPause.hike.pauseDwell"
+    static let runPauseDwellKey = "tracker.autoPause.run.pauseDwell"
+    static let cyclePauseDwellKey = "tracker.autoPause.cycle.pauseDwell"
+
+    static let walkResumeDwellKey = "tracker.autoPause.walk.resumeDwell"
+    static let hikeResumeDwellKey = "tracker.autoPause.hike.resumeDwell"
+    static let runResumeDwellKey = "tracker.autoPause.run.resumeDwell"
+    static let cycleResumeDwellKey = "tracker.autoPause.cycle.resumeDwell"
+
     static func isEnabled(
         for activity: ActivityKind,
         defaults: UserDefaults = .standard

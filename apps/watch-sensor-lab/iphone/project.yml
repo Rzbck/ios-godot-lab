@@ -32,7 +32,7 @@ targets:
         shell: /bin/bash
         script: |
           set -euo pipefail
-          python3 "$SRCROOT/../APPLY_HISTORICAL_CORRECTION_DISTANCE_PATCH.py"
+          python3 "$SRCROOT/../RUN_HISTORICAL_CORRECTION_DISTANCE_PATCH.py"
         basedOnDependencyAnalysis: false
       - name: Generate App Icon
         shell: /bin/bash

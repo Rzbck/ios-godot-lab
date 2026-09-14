@@ -32,10 +32,94 @@ env:
   APP_DIR: apps/watch-sensor-lab
 
 jobs:
-  workflow-contract-tests:
-    name: Deterministic iPhone + watchOS workflow tests
+  preflight:
+    name: Static preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Python identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 --version
+
+      - name: Apply exact session-sync candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$APP_DIR/SESSION_SYNC_PATCH.py"
+
+      - name: Verify static workflow invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$APP_DIR/CHECK_WORKFLOW_PARITY.py"
+          python3 "$APP_DIR/CHECK_PRODUCT_INVARIANTS.py"
+
+  tests:
+    name: ${{ matrix.label }}
+    needs: preflight
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include:
+          - slug: iphone-contract
+            label: iPhone contract
+            platform: iphone
+            kind: contract
+            test_name: contract
+          - slug: watch-contract
+            label: watchOS contract
+            platform: watch
+            kind: contract
+            test_name: contract
+          - slug: iphone-ui-force
+            label: iPhone UI · force
+            platform: iphone
+            kind: ui
+            test_name: testAutoFinishCanConfirmSuggestedConcreteSport
+          - slug: iphone-ui-preserve
+            label: iPhone UI · preserve
+            platform: iphone
+            kind: ui
+            test_name: testAutoFinishCanPreserveDetectedSegments
+          - slug: iphone-ui-cancel
+            label: iPhone UI · cancel
+            platform: iphone
+            kind: ui
+            test_name: testFinishReviewCanBeCancelledWithoutFinishing
+          - slug: watch-ui-force
+            label: watchOS UI · force
+            platform: watch
+            kind: ui
+            test_name: testAutoFinishCanForceSuggestedConcreteSport
+          - slug: watch-ui-preserve
+            label: watchOS UI · preserve
+            platform: watch
+            kind: ui
+            test_name: testAutoFinishCanPreserveDetection
+          - slug: watch-ui-cancel
+            label: watchOS UI · cancel
+            platform: watch
+            kind: ui
+            test_name: testFinishReviewCanBeCancelled
+
+    env:
+      CASE_SLUG: ${{ matrix.slug }}
+      TARGET_PLATFORM: ${{ matrix.platform }}
+      TEST_KIND: ${{ matrix.kind }}
+      TEST_NAME: ${{ matrix.test_name }}
 
     steps:
       - name: Checkout exact commit
@@ -50,20 +134,12 @@ jobs:
           set -euo pipefail
           sw_vers
           xcodebuild -version
-          xcrun simctl list runtimes
 
       - name: Apply exact session-sync candidate
         shell: bash
         run: |
           set -euo pipefail
           python3 "$APP_DIR/SESSION_SYNC_PATCH.py"
-
-      - name: Verify static workflow invariants
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 "$APP_DIR/CHECK_WORKFLOW_PARITY.py"
-          python3 "$APP_DIR/CHECK_PRODUCT_INVARIANTS.py"
 
       - name: Install pinned XcodeGen
         shell: bash
@@ -82,25 +158,33 @@ jobs:
           echo "XCODEGEN_BIN=$XCODEGEN_BIN" >> "$GITHUB_ENV"
           "$XCODEGEN_BIN" --version
 
-      - name: Generate test projects
+      - name: Generate target project
         shell: bash
         run: |
           set -euo pipefail
-          "$XCODEGEN_BIN" generate \
-            --spec "$GITHUB_WORKSPACE/$APP_DIR/iphone/project.yml" \
-            --project "$GITHUB_WORKSPACE/$APP_DIR/iphone"
-          "$XCODEGEN_BIN" generate \
-            --spec "$GITHUB_WORKSPACE/$APP_DIR/watch/project.yml" \
-            --project "$GITHUB_WORKSPACE/$APP_DIR/watch"
+          if [ "$TARGET_PLATFORM" = "iphone" ]; then
+            "$XCODEGEN_BIN" generate \
+              --spec "$GITHUB_WORKSPACE/$APP_DIR/iphone/project.yml" \
+              --project "$GITHUB_WORKSPACE/$APP_DIR/iphone"
+          else
+            "$XCODEGEN_BIN" generate \
+              --spec "$GITHUB_WORKSPACE/$APP_DIR/watch/project.yml" \
+              --project "$GITHUB_WORKSPACE/$APP_DIR/watch"
+          fi
 
-      - name: Select current simulators
+      - name: Select current simulator
         shell: bash
         run: |
           set -euo pipefail
-          python3 <<'PY' > "$RUNNER_TEMP/test-destinations.env"
+          python3 <<'PY' > "$RUNNER_TEMP/test-destination.env"
           import json
+          import os
           import re
           import subprocess
+
+          platform = os.environ["TARGET_PLATFORM"]
+          runtime_token = ".iOS-" if platform == "iphone" else ".watchOS-"
+          device_prefix = "iPhone" if platform == "iphone" else "Apple Watch"
 
           payload = json.loads(
               subprocess.check_output(
@@ -115,164 +199,115 @@ jobs:
                   return (0, 0, 0)
               return tuple(int(value or 0) for value in match.groups())
 
-          def pick(runtime_token, device_prefix):
-              candidates = []
-              for runtime, devices in payload.get("devices", {}).items():
-                  if runtime_token not in runtime:
+          candidates = []
+          for runtime, devices in payload.get("devices", {}).items():
+              if runtime_token not in runtime:
+                  continue
+              version = runtime_version(runtime)
+              for device in devices:
+                  if not device.get("isAvailable", False):
                       continue
-                  version = runtime_version(runtime)
-                  for device in devices:
-                      if not device.get("isAvailable", False):
-                          continue
-                      if not device.get("name", "").startswith(device_prefix):
-                          continue
-                      candidates.append((version, device["name"], device["udid"]))
-              if not candidates:
-                  raise SystemExit(
-                      f"No available {device_prefix} simulator for {runtime_token}"
-                  )
-              candidates.sort(reverse=True)
-              return candidates[0]
+                  if not device.get("name", "").startswith(device_prefix):
+                      continue
+                  candidates.append((version, device["name"], device["udid"]))
 
-          ios_version, ios_name, ios_udid = pick(".iOS-", "iPhone")
-          watch_version, watch_name, watch_udid = pick(".watchOS-", "Apple Watch")
+          if not candidates:
+              raise SystemExit(
+                  f"No available {device_prefix} simulator for {runtime_token}"
+              )
 
-          print(f"IPHONE_UDID={ios_udid}")
-          print(f"WATCH_UDID={watch_udid}")
-          print(f"IPHONE_NAME={ios_name}")
-          print(f"WATCH_NAME={watch_name}")
+          candidates.sort(reverse=True)
+          _, name, udid = candidates[0]
+          print(f"DEVICE_UDID={udid}")
+          print(f"DEVICE_NAME={name}")
           PY
 
-          cat "$RUNNER_TEMP/test-destinations.env"
-          cat "$RUNNER_TEMP/test-destinations.env" >> "$GITHUB_ENV"
+          cat "$RUNNER_TEMP/test-destination.env"
+          cat "$RUNNER_TEMP/test-destination.env" >> "$GITHUB_ENV"
 
-      - name: Run iPhone workflow contract tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "iPhone simulator: $IPHONE_NAME ($IPHONE_UDID)"
-          xcodebuild test \
-            -project "$GITHUB_WORKSPACE/$APP_DIR/iphone/WatchSensorLab.xcodeproj" \
-            -scheme WatchSensorLab \
-            -configuration Debug \
-            -destination "platform=iOS Simulator,id=$IPHONE_UDID" \
-            -resultBundlePath "$RUNNER_TEMP/WatchSensorLab-iPhoneTests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
-
-      - name: Run watchOS workflow contract tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Watch simulator: $WATCH_NAME ($WATCH_UDID)"
-          xcodebuild test \
-            -project "$GITHUB_WORKSPACE/$APP_DIR/watch/WatchSensorLabWatch.xcodeproj" \
-            -scheme WatchSensorLabWatch \
-            -configuration Debug \
-            -destination "platform=watchOS Simulator,id=$WATCH_UDID" \
-            -resultBundlePath "$RUNNER_TEMP/WatchSensorLab-WatchTests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
-
-      - name: Run iPhone finish-review UI automation
+      - name: Run selected test
         shell: bash
         run: |
           set -euo pipefail
 
-          run_iphone_ui() {
-            local slug="$1"
-            local test_name="$2"
-            local result="$RUNNER_TEMP/WatchSensorLab-iPhoneFinishUI-${slug}.xcresult"
-            local summary="$RUNNER_TEMP/WatchSensorLab-iPhoneFinishUI-${slug}-summary.json"
+          RESULT="$RUNNER_TEMP/WatchSensorLab-${CASE_SLUG}.xcresult"
+          SUMMARY="$RUNNER_TEMP/WatchSensorLab-${CASE_SLUG}-summary.json"
+          rm -rf "$RESULT" "$SUMMARY"
 
-            rm -rf "$result" "$summary"
-            xcrun simctl shutdown "$IPHONE_UDID" >/dev/null 2>&1 || true
-            xcrun simctl boot "$IPHONE_UDID" >/dev/null 2>&1 || true
-            xcrun simctl bootstatus "$IPHONE_UDID" -b
+          echo "Case: $CASE_SLUG"
+          echo "Simulator: $DEVICE_NAME ($DEVICE_UDID)"
 
-            set +e
+          if [ "$TEST_KIND" = "ui" ]; then
+            xcrun simctl shutdown "$DEVICE_UDID" >/dev/null 2>&1 || true
+            xcrun simctl boot "$DEVICE_UDID" >/dev/null 2>&1 || true
+            xcrun simctl bootstatus "$DEVICE_UDID" -b
+          fi
+
+          set +e
+          if [ "$TARGET_PLATFORM" = "iphone" ] && [ "$TEST_KIND" = "contract" ]; then
+            xcodebuild test \
+              -project "$GITHUB_WORKSPACE/$APP_DIR/iphone/WatchSensorLab.xcodeproj" \
+              -scheme WatchSensorLab \
+              -configuration Debug \
+              -destination "platform=iOS Simulator,id=$DEVICE_UDID" \
+              -resultBundlePath "$RESULT" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO
+            rc=$?
+          elif [ "$TARGET_PLATFORM" = "watch" ] && [ "$TEST_KIND" = "contract" ]; then
+            xcodebuild test \
+              -project "$GITHUB_WORKSPACE/$APP_DIR/watch/WatchSensorLabWatch.xcodeproj" \
+              -scheme WatchSensorLabWatch \
+              -configuration Debug \
+              -destination "platform=watchOS Simulator,id=$DEVICE_UDID" \
+              -resultBundlePath "$RESULT" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO
+            rc=$?
+          elif [ "$TARGET_PLATFORM" = "iphone" ]; then
             xcodebuild test \
               -project "$GITHUB_WORKSPACE/$APP_DIR/iphone/WatchSensorLab.xcodeproj" \
               -scheme WatchSensorLabFinishUIHarness \
               -configuration Debug \
-              -destination "platform=iOS Simulator,id=$IPHONE_UDID" \
-              -only-testing:"WatchSensorLabFinishUITests/iPhoneFinishFlowUITests/${test_name}" \
-              -resultBundlePath "$result" \
+              -destination "platform=iOS Simulator,id=$DEVICE_UDID" \
+              -only-testing:"WatchSensorLabFinishUITests/iPhoneFinishFlowUITests/${TEST_NAME}" \
+              -resultBundlePath "$RESULT" \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO
-            local rc=$?
-            set -e
-
-            if [ -d "$result" ]; then
-              xcrun xcresulttool get test-results summary \
-                --path "$result" --compact > "$summary" 2>/dev/null || true
-            fi
-            xcrun simctl shutdown "$IPHONE_UDID" >/dev/null 2>&1 || true
-            return "$rc"
-          }
-
-          status=0
-          run_iphone_ui "force" "testAutoFinishCanConfirmSuggestedConcreteSport" || status=1
-          run_iphone_ui "preserve" "testAutoFinishCanPreserveDetectedSegments" || status=1
-          run_iphone_ui "cancel" "testFinishReviewCanBeCancelledWithoutFinishing" || status=1
-          exit "$status"
-
-      - name: Run watchOS finish-review UI automation
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          run_watch_ui() {
-            local slug="$1"
-            local test_name="$2"
-            local result="$RUNNER_TEMP/WatchSensorLab-WatchFinishUI-${slug}.xcresult"
-            local summary="$RUNNER_TEMP/WatchSensorLab-WatchFinishUI-${slug}-summary.json"
-
-            rm -rf "$result" "$summary"
-            xcrun simctl shutdown "$WATCH_UDID" >/dev/null 2>&1 || true
-            xcrun simctl boot "$WATCH_UDID" >/dev/null 2>&1 || true
-            xcrun simctl bootstatus "$WATCH_UDID" -b
-
-            set +e
+            rc=$?
+          else
             xcodebuild test \
               -project "$GITHUB_WORKSPACE/$APP_DIR/watch/WatchSensorLabWatch.xcodeproj" \
               -scheme WatchSensorLabWatchFinishUIHarness \
               -configuration Debug \
-              -destination "platform=watchOS Simulator,id=$WATCH_UDID" \
-              -only-testing:"WatchSensorLabWatchFinishUITests/WatchFinishFlowUITests/${test_name}" \
-              -resultBundlePath "$result" \
+              -destination "platform=watchOS Simulator,id=$DEVICE_UDID" \
+              -only-testing:"WatchSensorLabWatchFinishUITests/WatchFinishFlowUITests/${TEST_NAME}" \
+              -resultBundlePath "$RESULT" \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO
-            local rc=$?
-            set -e
+            rc=$?
+          fi
+          set -e
 
-            if [ -d "$result" ]; then
-              xcrun xcresulttool get test-results summary \
-                --path "$result" --compact > "$summary" 2>/dev/null || true
-            fi
-            xcrun simctl shutdown "$WATCH_UDID" >/dev/null 2>&1 || true
-            return "$rc"
-          }
+          if [ "$TEST_KIND" = "ui" ] && [ -d "$RESULT" ]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RESULT" --compact > "$SUMMARY" 2>/dev/null || true
+          fi
 
-          status=0
-          run_watch_ui "force" "testAutoFinishCanForceSuggestedConcreteSport" || status=1
-          run_watch_ui "preserve" "testAutoFinishCanPreserveDetection" || status=1
-          run_watch_ui "cancel" "testFinishReviewCanBeCancelled" || status=1
-          exit "$status"
+          if [ "$TEST_KIND" = "ui" ]; then
+            xcrun simctl shutdown "$DEVICE_UDID" >/dev/null 2>&1 || true
+          fi
 
-      - name: Upload failed test reports
+          exit "$rc"
+
+      - name: Upload failed test report
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: watch-sensor-lab-test-failure-${{ github.sha }}
+          name: watch-sensor-lab-test-failure-${{ github.sha }}-${{ matrix.slug }}
           path: |
-            ${{ runner.temp }}/WatchSensorLab-iPhoneTests.xcresult
-            ${{ runner.temp }}/WatchSensorLab-WatchTests.xcresult
-            ${{ runner.temp }}/WatchSensorLab-iPhoneFinishUI-*.xcresult
-            ${{ runner.temp }}/WatchSensorLab-WatchFinishUI-*.xcresult
-            ${{ runner.temp }}/WatchSensorLab-iPhoneFinishUI-*-summary.json
-            ${{ runner.temp }}/WatchSensorLab-WatchFinishUI-*-summary.json
+            ${{ runner.temp }}/WatchSensorLab-${{ matrix.slug }}.xcresult
+            ${{ runner.temp }}/WatchSensorLab-${{ matrix.slug }}-summary.json
           if-no-files-found: ignore
           retention-days: 1
           compression-level: 6

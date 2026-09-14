@@ -8,36 +8,37 @@ struct HistoricalHealthKitRepairV4View: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if summaries.isEmpty {
-                    ContentUnavailableView(
-                        "Aucune séance Tracker",
-                        systemImage: "checkmark.circle.fill"
-                    )
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 7) {
-                                Label("Récupération Santé v4 · route segmentée", systemImage: "point.3.connected.trianglepath.dotted")
-                                    .font(.headline.weight(.bold))
-                                Text(
-                                    "Dernier candidat : conserve la reconstruction riche, coupe seulement les raccords GPS impossibles, écrit distance/énergie sur les intervalles actifs et relie l’effort au workout."
-                                )
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    HistoricalHealthKitOrphanRepairCard()
 
-                            ForEach(summaries) { summary in
-                                HistoricalRepairV4Card(summary: summary)
-                            }
+                    if summaries.isEmpty {
+                        ContentUnavailableView(
+                            "Aucune séance Tracker locale",
+                            systemImage: "externaldrive.badge.xmark"
+                        )
+                        .padding(.vertical, 24)
+                    } else {
+                        VStack(alignment: .leading, spacing: 7) {
+                            Label("Récupération Santé v4 · route segmentée", systemImage: "point.3.connected.trianglepath.dotted")
+                                .font(.headline.weight(.bold))
+                            Text(
+                                "Dernier candidat : conserve la reconstruction riche, coupe seulement les raccords GPS impossibles, écrit distance/énergie sur les intervalles actifs et relie l’effort au workout."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 24)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+
+                        ForEach(summaries) { summary in
+                            HistoricalRepairV4Card(summary: summary)
+                        }
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
             .navigationTitle("Récupération")
             .onAppear {

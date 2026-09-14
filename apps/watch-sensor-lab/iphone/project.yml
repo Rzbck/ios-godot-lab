@@ -28,6 +28,12 @@ targets:
           set -euo pipefail
           python3 "$SRCROOT/../APPLY_AUTO_PAUSE_SAFETY_PATCH.py"
         basedOnDependencyAnalysis: false
+      - name: Apply Historical Correction Distance Patch
+        shell: /bin/bash
+        script: |
+          set -euo pipefail
+          python3 "$SRCROOT/../APPLY_HISTORICAL_CORRECTION_DISTANCE_PATCH.py"
+        basedOnDependencyAnalysis: false
       - name: Generate App Icon
         shell: /bin/bash
         script: |
@@ -39,7 +45,7 @@ targets:
       properties:
         CFBundleDisplayName: Watch Tracker
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "7"
+        CFBundleVersion: "8"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -137,7 +143,7 @@ targets:
       properties:
         CFBundleDisplayName: Watch Tracker Live
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "7"
+        CFBundleVersion: "8"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

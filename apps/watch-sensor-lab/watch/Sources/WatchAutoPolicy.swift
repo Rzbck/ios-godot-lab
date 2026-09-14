@@ -18,9 +18,6 @@ enum WatchAutoPolicy {
         speedMps: Double = 0,
         cadenceSPM: Double = 0
     ) -> WatchAutoDecision? {
-        // Keep reconciliation lifecycle binding at the platform boundary.
-        // Classification itself is delegated to the pure shared policy so CI
-        // can replay the exact same rules without physical motion.
         WatchAutoHealthReconciler.shared.bind(to: SensorModel.shared)
 
         _ = elapsedSeconds
@@ -28,14 +25,26 @@ enum WatchAutoPolicy {
         _ = elevationGainMeters
         _ = elevationLossMeters
 
-        let evidence = TrackerMotionEvidence(
-            walking: motion.walking,
-            running: motion.running,
-            cycling: motion.cycling,
-            stationary: motion.stationary,
-            confidence: motionConfidence(motion.confidence)
+        return decision(
+            from: TrackerMotionEvidence(
+                walking: motion.walking,
+                running: motion.running,
+                cycling: motion.cycling,
+                stationary: motion.stationary,
+                confidence: motionConfidence(motion.confidence)
+            ),
+            speedMps: speedMps,
+            cadenceSPM: cadenceSPM
         )
+    }
 
+    /// Re-evaluate the exact same Auto policy whenever fresh GPS/cadence arrives,
+    /// even if Core Motion has not emitted a new semantic activity callback.
+    static func decision(
+        from evidence: TrackerMotionEvidence,
+        speedMps: Double,
+        cadenceSPM: Double
+    ) -> WatchAutoDecision? {
         guard let decision = TrackerAutoPolicy.decision(
             from: evidence,
             speedMps: speedMps,

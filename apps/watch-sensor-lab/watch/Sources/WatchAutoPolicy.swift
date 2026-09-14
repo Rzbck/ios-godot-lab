@@ -18,8 +18,6 @@ enum WatchAutoPolicy {
         speedMps: Double = 0,
         cadenceSPM: Double = 0
     ) -> WatchAutoDecision? {
-        WatchAutoHealthReconciler.shared.bind(to: SensorModel.shared)
-
         _ = elapsedSeconds
         _ = distanceMeters
         _ = elevationGainMeters
@@ -45,6 +43,10 @@ enum WatchAutoPolicy {
         speedMps: Double,
         cadenceSPM: Double
     ) -> WatchAutoDecision? {
+        // Binding here covers both the Core Motion callback and sensor-only
+        // reevaluations. bind(to:) is idempotent.
+        WatchAutoHealthReconciler.shared.bind(to: SensorModel.shared)
+
         guard let decision = TrackerAutoPolicy.decision(
             from: evidence,
             speedMps: speedMps,

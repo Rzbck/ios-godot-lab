@@ -459,7 +459,12 @@ final class HistoricalHealthKitOrphanRepairCoordinator: ObservableObject {
 
         var verified = false
         if let candidate = snapshot.candidate {
-            let candidateEffort = requestedEffort ?? (try await effortValue(for: candidate))
+            let candidateEffort: Int?
+            if let requestedEffort = requestedEffort {
+                candidateEffort = requestedEffort
+            } else {
+                candidateEffort = try await effortValue(for: candidate)
+            }
             try await verifyCandidateDurably(
                 sessionID: sessionID,
                 sourceUUID: snapshot.source.uuid,

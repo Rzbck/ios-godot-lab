@@ -24,6 +24,7 @@ targets:
           set -euo pipefail
           python3 "$SRCROOT/../APPLY_AUTO_PAUSE_SAFETY_PATCH.py"
         basedOnDependencyAnalysis: false
+      # Safety gate for activity-type repairs: target distance type must match the final sport.
       - name: Apply Historical Correction Distance Patch
         shell: /bin/bash
         script: |

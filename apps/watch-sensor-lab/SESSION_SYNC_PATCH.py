@@ -372,7 +372,25 @@ WATCH.write_text(watch, encoding="utf-8")
 print("SESSION SYNC BUILD PATCH: OK")
 
 # Production candidate chain. The workflow deliberately invokes only this
-# orchestrator so the three runtime-critical patches can never drift apart.
+# orchestrator so the runtime-critical patches can never drift apart.
 runpy.run_path(str(ROOT / "APPLY_AUTO_PAUSE_SAFETY_PATCH.py"), run_name="__main__")
 runpy.run_path(str(ROOT / "APPLY_TERMINAL_SYNC_RELIABILITY_PATCH.py"), run_name="__main__")
+runpy.run_path(str(ROOT / "APPLY_HISTORICAL_CORRECTION_DISTANCE_PATCH.py"), run_name="__main__")
+
+# The historical patch inserts Swift through a Python raw string. Normalize only
+# the two escape forms that must be single-backslash Swift syntax. This keeps the
+# generated source deterministic and makes CI catch the active iPhone v4 path
+# before Xcode's per-target pre-build script runs.
+historical_core = ROOT / "iphone/Sources/HistoricalHealthKitRepairV4.swift"
+historical_text = historical_core.read_text(encoding="utf-8")
+historical_text = historical_text.replace(
+    r"\\(error.localizedDescription)",
+    r"\(error.localizedDescription)",
+)
+historical_text = historical_text.replace(
+    r"map(\\.uuid)",
+    r"map(\.uuid)",
+)
+historical_core.write_text(historical_text, encoding="utf-8")
+
 print("TRACKER BUILD PATCH CHAIN: OK")

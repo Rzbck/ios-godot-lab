@@ -15,6 +15,7 @@ Temporary integration debt: after hardware validation, fold these changes into
 Swift source and remove this helper.
 """
 from pathlib import Path
+import runpy
 
 ROOT = Path(__file__).resolve().parent
 IPHONE = ROOT / "iphone/Sources/TrackerModel.swift"
@@ -155,3 +156,7 @@ for token in [
         raise SystemExit(f"existing durable receiver token missing: {token}")
 
 print("TERMINAL SYNC RELIABILITY BUILD PATCH: OK")
+
+# Keep all runtime-critical build patches in one deterministic chain. The
+# top-level workflow still invokes SESSION_SYNC_PATCH.py exactly once.
+runpy.run_path(str(ROOT / "APPLY_RUNTIME_INTEGRITY_PATCH.py"), run_name="__main__")

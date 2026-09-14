@@ -1,6 +1,10 @@
 import Foundation
 import SwiftUI
 
+// Legacy preference model kept for wire/backward compatibility with installs
+// that already persisted per-sport values. The product no longer exposes these
+// timings: the Watch applies one adaptive runtime policy behind the master
+// Auto-Pause toggle.
 enum AutoPauseProfileKind: String, CaseIterable, Identifiable, Hashable {
     case walking
     case hiking
@@ -27,30 +31,12 @@ enum AutoPauseProfileKind: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    var pauseRange: ClosedRange<Double> {
-        switch self {
-        case .walking: return 7...20
-        case .hiking: return 9...25
-        case .running: return 5...16
-        case .cycling: return 4...14
-        }
-    }
-
-    var resumeRange: ClosedRange<Double> {
-        switch self {
-        case .walking: return 2...8
-        case .hiking: return 3...10
-        case .running, .cycling: return 2...7
-        }
-    }
+    // Kept only so older code/configuration payloads remain source compatible.
+    var pauseRange: ClosedRange<Double> { 1...30 }
+    var resumeRange: ClosedRange<Double> { 0.5...15 }
 
     var defaultPreference: AutoPauseProfilePreference {
-        switch self {
-        case .walking: return .init(enabled: true, pauseDwell: 11, resumeDwell: 4)
-        case .hiking: return .init(enabled: true, pauseDwell: 14, resumeDwell: 5)
-        case .running: return .init(enabled: true, pauseDwell: 9, resumeDwell: 3)
-        case .cycling: return .init(enabled: true, pauseDwell: 7, resumeDwell: 3)
-        }
+        .init(enabled: true, pauseDwell: 2.0, resumeDwell: 0.8)
     }
 
     var enabledPayloadKey: String { "auto_pause_\(rawValue)_enabled" }
@@ -79,11 +65,21 @@ enum PhoneAutoPausePreferences {
             let enabled = defaults.object(forKey: enabledKey) == nil ? fallback.enabled : defaults.bool(forKey: enabledKey)
             let pause = defaults.object(forKey: pauseKey) == nil ? fallback.pauseDwell : defaults.double(forKey: pauseKey)
             let resume = defaults.object(forKey: resumeKey) == nil ? fallback.resumeDwell : defaults.double(forKey: resumeKey)
-            return (profile, AutoPauseProfilePreference(enabled: enabled, pauseDwell: pause, resumeDwell: resume))
+            return (
+                profile,
+                AutoPauseProfilePreference(
+                    enabled: enabled,
+                    pauseDwell: pause,
+                    resumeDwell: resume
+                )
+            )
         })
     }
 
-    static func isConfigured(_ profile: AutoPauseProfileKind, defaults: UserDefaults = .standard) -> Bool {
+    static func isConfigured(
+        _ profile: AutoPauseProfileKind,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
         defaults.bool(forKey: configuredPrefix + profile.rawValue)
     }
 
@@ -115,36 +111,15 @@ struct TrackerSettingsView: View {
                         )
                     )
                     .tint(.mint)
+
+                    Label("Mode adaptatif", systemImage: "waveform.path.ecg")
+                        .foregroundStyle(.secondary)
                 } header: {
                     Text("Entraînement")
                 } footer: {
-                    Text("L’iPhone configure. La Watch reste l’autorité qui applique pause, reprise et état de séance.")
-                }
-
-                Section("Profils de pause automatique") {
-                    ForEach(AutoPauseProfileKind.allCases) { profile in
-                        NavigationLink {
-                            AutoPauseProfileSettingsView(profile: profile)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: profile.symbol)
-                                    .frame(width: 24)
-                                    .foregroundStyle(.mint)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(profile.label)
-                                    Text(profileSummary(profile))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if PhoneAutoPausePreferences.isConfigured(profile) {
-                                    Image(systemName: "checkmark.icloud.fill")
-                                        .font(.caption)
-                                        .foregroundStyle(.green)
-                                }
-                            }
-                        }
-                    }
+                    Text(
+                        "Aucun délai à régler. La Watch combine mouvement, GPS et cadence pour mettre en pause et reprendre automatiquement. La pause manuelle reste prioritaire."
+                    )
                 }
 
                 Section("Connexion") {
@@ -174,9 +149,11 @@ struct TrackerSettingsView: View {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                     }
-                    Text("Les réglages avancés qui existaient sur la Watch ne sont pas écrasés tant que tu ne modifies pas le profil correspondant sur l’iPhone. Après la première modification, l’iPhone devient la source de vérité de ce profil.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "Les anciennes valeurs de profils sont conservées uniquement pour compatibilité avec les installations précédentes ; elles ne pilotent plus la détection runtime."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Réglages")
@@ -188,85 +165,5 @@ struct TrackerSettingsView: View {
             }
         }
         .preferredColorScheme(.dark)
-    }
-
-    private func profileSummary(_ profile: AutoPauseProfileKind) -> String {
-        let value = tracker.autoPauseProfiles[profile] ?? profile.defaultPreference
-        if !value.enabled { return "Désactivée" }
-        return "Pause \(Int(value.pauseDwell.rounded())) s · reprise \(Int(value.resumeDwell.rounded())) s"
-    }
-}
-
-private struct AutoPauseProfileSettingsView: View {
-    @EnvironmentObject private var tracker: TrackerModel
-    let profile: AutoPauseProfileKind
-
-    private var preference: AutoPauseProfilePreference {
-        tracker.autoPauseProfiles[profile] ?? profile.defaultPreference
-    }
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle(
-                    "Activer pour \(profile.label.lowercased())",
-                    isOn: Binding(
-                        get: { preference.enabled },
-                        set: { tracker.setAutoPauseProfile(profile, enabled: $0) }
-                    )
-                )
-                .tint(.mint)
-            }
-
-            if preference.enabled {
-                Section("Pause") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Pause après")
-                            Spacer()
-                            Text("\(Int(preference.pauseDwell.rounded())) s")
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                        Slider(
-                            value: Binding(
-                                get: { preference.pauseDwell },
-                                set: { tracker.setAutoPauseProfile(profile, pauseDwell: $0) }
-                            ),
-                            in: profile.pauseRange,
-                            step: 1
-                        )
-                    }
-                }
-
-                Section("Reprise") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Reprise après")
-                            Spacer()
-                            Text("\(Int(preference.resumeDwell.rounded())) s")
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                        Slider(
-                            value: Binding(
-                                get: { preference.resumeDwell },
-                                set: { tracker.setAutoPauseProfile(profile, resumeDwell: $0) }
-                            ),
-                            in: profile.resumeRange,
-                            step: 1
-                        )
-                    }
-                }
-            }
-
-            Section {
-                Text("La détection elle-même reste sport-aware sur la Watch. Ces durées règlent seulement combien de temps l’état doit rester stable avant pause ou reprise.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .navigationTitle(profile.label)
-        .navigationBarTitleDisplayMode(.inline)
     }
 }

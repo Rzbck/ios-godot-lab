@@ -42,6 +42,24 @@ final class TrackerAutoPolicyTests: XCTestCase {
         XCTAssertEqual(decision?.dwellSeconds, 2.0)
     }
 
+    func testConcreteAutoDecisionsDoNotUseTenSecondDwell() {
+        let frames: [(TrackerMotionEvidence, Double, Double)] = [
+            (.init(walking: true, confidence: .high), 1.2, 90),
+            (.init(running: true, confidence: .high), 2.8, 165),
+            (.init(cycling: true, confidence: .high), 4.5, 0),
+        ]
+
+        for (evidence, speed, cadence) in frames {
+            let decision = TrackerAutoPolicy.decision(
+                from: evidence,
+                speedMps: speed,
+                cadenceSPM: cadence
+            )
+            XCTAssertNotNil(decision)
+            XCTAssertLessThanOrEqual(decision?.dwellSeconds ?? 99, 2.5)
+        }
+    }
+
     func testWalkingFlagCannotBeatStrongCyclingGPS() {
         let decision = TrackerAutoPolicy.decision(
             from: TrackerMotionEvidence(

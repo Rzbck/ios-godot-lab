@@ -44,6 +44,7 @@ struct TrackerAutoDecision: Equatable {
     let activity: ActivityKind
     let confidence: String
     let provenance: String
+    /// Internal stabilization only. This is deliberately not a user setting.
     let dwellSeconds: TimeInterval
 }
 
@@ -52,63 +53,95 @@ struct TrackerAutoDecision: Equatable {
 /// CI supplies synthetic evidence and replays it at full speed.
 enum TrackerAutoPolicy {
     static func decision(
-        from evidence: TrackerMotionEvidence
+        from evidence: TrackerMotionEvidence,
+        speedMps: Double = 0,
+        cadenceSPM: Double = 0
     ) -> TrackerAutoDecision? {
-        guard evidence.confidence != .low else { return nil }
-
+        let speed = max(0, speedMps)
+        let cadence = max(0, cadenceSPM)
+        let motionTrusted = evidence.confidence != .low
         let confidence = evidence.confidence.label
-        if evidence.running {
+
+        // Core Motion remains the strongest semantic signal when it is clear.
+        // Fresh GPS/cadence is used to prevent the historical failure where a
+        // fast bicycle ride stayed classified as walking for the whole workout.
+        if motionTrusted, evidence.running {
             return TrackerAutoDecision(
                 activity: .running,
                 confidence: confidence,
                 provenance: "Core Motion · course",
-                dwellSeconds: 7
+                dwellSeconds: 2.0
             )
         }
-        if evidence.cycling {
+
+        if motionTrusted, evidence.cycling {
             return TrackerAutoDecision(
                 activity: .cycling,
                 confidence: confidence,
                 provenance: "Core Motion · vélo",
-                dwellSeconds: 9
+                dwellSeconds: 2.0
             )
         }
-        if evidence.walking {
+
+        // A real running cadence is a much better discriminator than a stale
+        // walking flag. Keep the speed floor low enough for an easy jog.
+        if speed >= 1.7, cadence >= 95 {
+            return TrackerAutoDecision(
+                activity: .running,
+                confidence: motionTrusted ? confidence : "capteurs",
+                provenance: "GPS + cadence · course",
+                dwellSeconds: 2.0
+            )
+        }
+
+        // Cycling often produces little/no pedometer cadence. If Core Motion is
+        // stuck on walking but GPS clearly shows locomotion too fast for normal
+        // walking and foot cadence is low, prefer cycling.
+        if speed >= 3.0, cadence < 70 {
+            return TrackerAutoDecision(
+                activity: .cycling,
+                confidence: motionTrusted ? confidence : "capteurs",
+                provenance: "GPS · vélo",
+                dwellSeconds: 2.0
+            )
+        }
+
+        if motionTrusted, evidence.walking {
             return TrackerAutoDecision(
                 activity: .walking,
                 confidence: confidence,
                 provenance: "Core Motion · marche",
-                dwellSeconds: 8
+                dwellSeconds: 2.5
             )
         }
+
+        // Sensor fallback when Core Motion has not produced a usable semantic
+        // label yet. It intentionally covers only obvious locomotion.
+        if speed >= 0.55, speed < 2.2, cadence >= 35 {
+            return TrackerAutoDecision(
+                activity: .walking,
+                confidence: "capteurs",
+                provenance: "GPS + cadence · marche",
+                dwellSeconds: 2.5
+            )
+        }
+
         return nil
     }
 
-    /// Prevents a zero-speed startup from being interpreted as a real stop.
-    /// Outdoor locomotion only arms auto-pause after actual movement has been
-    /// observed and GPS is currently trustworthy.
+    /// Auto-pause must never fire from the zero-speed startup state. Once real
+    /// movement has been observed and GPS is trustworthy, it may react without
+    /// an arbitrary user-configurable startup timer.
     static func canArmPause(
         activity: ActivityKind,
         elapsedSeconds: TimeInterval,
         horizontalAccuracy: Double,
         movementObserved: Bool
     ) -> Bool {
+        _ = activity
+        _ = elapsedSeconds
         guard movementObserved else { return false }
-        guard horizontalAccuracy >= 0, horizontalAccuracy <= 30 else { return false }
-
-        let minimumElapsed: TimeInterval
-        switch activity {
-        case .cycling, .handCycling:
-            minimumElapsed = 20
-        case .running, .trackAndField:
-            minimumElapsed = 15
-        case .walking, .hiking:
-            minimumElapsed = 15
-        default:
-            minimumElapsed = 10
-        }
-
-        return elapsedSeconds >= minimumElapsed
+        return horizontalAccuracy >= 0 && horizontalAccuracy <= 30
     }
 
     static func shouldStagePause(
@@ -119,20 +152,24 @@ enum TrackerAutoPolicy {
         cadenceSPM: Double
     ) -> Bool {
         guard enabled else { return false }
+        let speed = max(0, speedMps)
+        let cadence = max(0, cadenceSPM)
 
         switch activity {
         case .walking, .hiking:
-            return speedMps <= 0.45
-                || (stationary && speedMps <= 0.9 && cadenceSPM < 45)
+            return (stationary && speed <= 0.9 && cadence < 35)
+                || (speed <= 0.22 && cadence < 25)
         case .running, .trackAndField:
-            return speedMps <= 0.35
-                || (stationary && speedMps <= 1.0 && cadenceSPM < 60)
+            return (stationary && speed <= 1.0 && cadence < 50)
+                || (speed <= 0.22 && cadence < 40)
         case .cycling, .handCycling:
-            return speedMps <= 0.50
-                || (stationary && speedMps <= 1.2)
+            return (stationary && speed <= 1.2)
+                || speed <= 0.30
         default:
-            return speedMps <= 0.35
-                || (stationary && speedMps <= 0.8)
+            // Generic outdoor fallback for the rest of the Apple activity
+            // catalog. The master auto-pause toggle remains the only setting.
+            return (stationary && speed <= 0.8)
+                || speed <= 0.20
         }
     }
 
@@ -152,21 +189,21 @@ enum TrackerAutoPolicy {
         // waking a genuinely stopped workout.
         switch activity {
         case .walking, .hiking:
-            return speedMps >= 0.7
-                || cadenceSPM >= 35
+            return speedMps >= 0.65
+                || cadenceSPM >= 32
                 || (!stationary && (
                     motionCandidate == .walking
                     || motionCandidate == .hiking
                 ))
         case .running, .trackAndField:
-            return speedMps >= 1.2
-                || cadenceSPM >= 65
+            return speedMps >= 1.0
+                || cadenceSPM >= 60
                 || (!stationary && motionCandidate == .running)
         case .cycling, .handCycling:
-            return speedMps >= 1.4
+            return speedMps >= 1.1
                 || (!stationary && motionCandidate == .cycling)
         default:
-            return speedMps >= 0.7
+            return speedMps >= 0.6
                 || (!stationary && motionCandidate != nil)
         }
     }

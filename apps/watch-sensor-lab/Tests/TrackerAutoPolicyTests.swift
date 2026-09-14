@@ -1,7 +1,7 @@
 import XCTest
 
 final class TrackerAutoPolicyTests: XCTestCase {
-    func testLowConfidenceEvidenceIsIgnored() {
+    func testLowConfidenceMotionAloneIsIgnored() {
         let decision = TrackerAutoPolicy.decision(
             from: TrackerMotionEvidence(
                 walking: true,
@@ -12,43 +12,73 @@ final class TrackerAutoPolicyTests: XCTestCase {
         XCTAssertNil(decision)
     }
 
-    func testRunningWinsWhenRunningEvidenceIsPresent() {
+    func testCoreMotionRunningWinsWhenTrusted() {
         let decision = TrackerAutoPolicy.decision(
             from: TrackerMotionEvidence(
                 walking: true,
                 running: true,
                 confidence: .high
-            )
+            ),
+            speedMps: 3.0,
+            cadenceSPM: 165
         )
 
         XCTAssertEqual(decision?.activity, .running)
-        XCTAssertEqual(decision?.dwellSeconds, 7)
+        XCTAssertEqual(decision?.dwellSeconds, 2.0)
     }
 
-    func testCyclingDetectionIsDeterministic() {
+    func testCoreMotionCyclingIsDeterministic() {
         let decision = TrackerAutoPolicy.decision(
             from: TrackerMotionEvidence(
                 cycling: true,
                 confidence: .medium
-            )
+            ),
+            speedMps: 5.0,
+            cadenceSPM: 0
         )
 
         XCTAssertEqual(decision?.activity, .cycling)
         XCTAssertEqual(decision?.confidence, "moyenne")
-        XCTAssertEqual(decision?.dwellSeconds, 9)
+        XCTAssertEqual(decision?.dwellSeconds, 2.0)
     }
 
-    func testWalkingDetectionIsDeterministic() {
+    func testWalkingFlagCannotBeatStrongCyclingGPS() {
         let decision = TrackerAutoPolicy.decision(
             from: TrackerMotionEvidence(
                 walking: true,
                 confidence: .high
-            )
+            ),
+            speedMps: 4.2,
+            cadenceSPM: 0
+        )
+
+        XCTAssertEqual(decision?.activity, .cycling)
+        XCTAssertEqual(decision?.provenance, "GPS · vélo")
+    }
+
+    func testWalkingFlagCannotBeatRunningCadenceAndSpeed() {
+        let decision = TrackerAutoPolicy.decision(
+            from: TrackerMotionEvidence(
+                walking: true,
+                confidence: .high
+            ),
+            speedMps: 2.8,
+            cadenceSPM: 168
+        )
+
+        XCTAssertEqual(decision?.activity, .running)
+        XCTAssertEqual(decision?.provenance, "GPS + cadence · course")
+    }
+
+    func testSensorFallbackCanClassifyWalkingWithoutCoreMotionLabel() {
+        let decision = TrackerAutoPolicy.decision(
+            from: TrackerMotionEvidence(confidence: .low),
+            speedMps: 1.2,
+            cadenceSPM: 92
         )
 
         XCTAssertEqual(decision?.activity, .walking)
-        XCTAssertEqual(decision?.confidence, "élevée")
-        XCTAssertEqual(decision?.dwellSeconds, 8)
+        XCTAssertEqual(decision?.confidence, "capteurs")
     }
 
     func testNoMovementCandidateReturnsNil() {
@@ -57,13 +87,48 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 from: TrackerMotionEvidence(
                     stationary: true,
                     confidence: .high
-                )
+                ),
+                speedMps: 0,
+                cadenceSPM: 0
             )
         )
     }
 
-    func testWalkingPauseThresholds() {
+    func testPauseCannotArmBeforeRealMovement() {
+        XCTAssertFalse(
+            TrackerAutoPolicy.canArmPause(
+                activity: .cycling,
+                elapsedSeconds: 120,
+                horizontalAccuracy: 5,
+                movementObserved: false
+            )
+        )
+    }
+
+    func testPauseArmsImmediatelyAfterRealMovementWithGoodGPS() {
         XCTAssertTrue(
+            TrackerAutoPolicy.canArmPause(
+                activity: .cycling,
+                elapsedSeconds: 2,
+                horizontalAccuracy: 6,
+                movementObserved: true
+            )
+        )
+    }
+
+    func testPauseStillRejectsBadGPS() {
+        XCTAssertFalse(
+            TrackerAutoPolicy.canArmPause(
+                activity: .running,
+                elapsedSeconds: 40,
+                horizontalAccuracy: 80,
+                movementObserved: true
+            )
+        )
+    }
+
+    func testWalkingDoesNotPauseWhileCadenceShowsMovement() {
+        XCTAssertFalse(
             TrackerAutoPolicy.shouldStagePause(
                 activity: .walking,
                 enabled: true,
@@ -73,70 +138,36 @@ final class TrackerAutoPolicyTests: XCTestCase {
             )
         )
 
-        XCTAssertFalse(
+        XCTAssertTrue(
             TrackerAutoPolicy.shouldStagePause(
                 activity: .walking,
                 enabled: true,
-                stationary: false,
-                speedMps: 1.2,
-                cadenceSPM: 90
-            )
-        )
-    }
-
-    func testCyclingPauseThresholds() {
-        XCTAssertTrue(
-            TrackerAutoPolicy.shouldStagePause(
-                activity: .cycling,
-                enabled: true,
-                stationary: false,
-                speedMps: 0.3,
-                cadenceSPM: 0
-            )
-        )
-
-        XCTAssertFalse(
-            TrackerAutoPolicy.shouldStagePause(
-                activity: .cycling,
-                enabled: true,
-                stationary: false,
-                speedMps: 4.0,
+                stationary: true,
+                speedMps: 0.1,
                 cadenceSPM: 0
             )
         )
     }
 
-    func testAutoPauseDoesNotArmBeforeRealCyclingMovement() {
-        XCTAssertFalse(
-            TrackerAutoPolicy.canArmPause(
-                activity: .cycling,
-                elapsedSeconds: 60,
-                horizontalAccuracy: 5,
-                movementObserved: false
-            )
-        )
-        XCTAssertFalse(
-            TrackerAutoPolicy.canArmPause(
-                activity: .cycling,
-                elapsedSeconds: 12,
-                horizontalAccuracy: 5,
-                movementObserved: true
-            )
-        )
-        XCTAssertFalse(
-            TrackerAutoPolicy.canArmPause(
-                activity: .cycling,
-                elapsedSeconds: 25,
-                horizontalAccuracy: 80,
-                movementObserved: true
-            )
-        )
+    func testGenericSportGetsSameAutoPauseBehavior() {
         XCTAssertTrue(
-            TrackerAutoPolicy.canArmPause(
-                activity: .cycling,
-                elapsedSeconds: 25,
-                horizontalAccuracy: 6,
-                movementObserved: true
+            TrackerAutoPolicy.shouldStagePause(
+                activity: .soccer,
+                enabled: true,
+                stationary: true,
+                speedMps: 0.1,
+                cadenceSPM: 0
+            )
+        )
+
+        XCTAssertTrue(
+            TrackerAutoPolicy.shouldStageResume(
+                activity: .soccer,
+                enabled: true,
+                stationary: false,
+                speedMps: 1.0,
+                cadenceSPM: 0,
+                motionCandidate: .running
             )
         )
     }
@@ -201,30 +232,6 @@ final class TrackerAutoPolicyTests: XCTestCase {
         )
     }
 
-    func testResumeRequiresMovementAndRejectsStationaryMotionOnlyEvidence() {
-        XCTAssertTrue(
-            TrackerAutoPolicy.shouldStageResume(
-                activity: .running,
-                enabled: true,
-                stationary: false,
-                speedMps: 1.5,
-                cadenceSPM: 0,
-                motionCandidate: nil
-            )
-        )
-
-        XCTAssertFalse(
-            TrackerAutoPolicy.shouldStageResume(
-                activity: .running,
-                enabled: true,
-                stationary: true,
-                speedMps: 0,
-                cadenceSPM: 0,
-                motionCandidate: .running
-            )
-        )
-    }
-
     func testAutoResumeProbeRejectsStaleAndPoorAccuracySamples() {
         var probe = TrackerAutoResumeProbe()
 
@@ -272,38 +279,21 @@ final class TrackerAutoPolicyTests: XCTestCase {
         XCTAssertEqual(probe.recentSpeedMps(now: 106), 0)
     }
 
-    func testAutoResumeProbeCanFallbackToDerivedSpeed() {
-        var probe = TrackerAutoResumeProbe()
-
-        let speed = probe.observe(
-            sampleTimestamp: 200,
-            now: 200,
-            horizontalAccuracy: 8,
-            nativeSpeedMps: -1,
-            derivedSpeedMps: 2.8,
-            plausibleMaxSpeedMps: 28
-        )
-
-        XCTAssertEqual(speed ?? -1, 2.8, accuracy: 0.001)
-    }
-
     func testSyntheticWalkRunCycleReplayProducesExpectedCandidates() {
-        let frames: [TrackerMotionEvidence] = [
-            .init(walking: true, confidence: .high),
-            .init(walking: true, confidence: .high),
-            .init(running: true, confidence: .high),
-            .init(running: true, confidence: .high),
-            .init(cycling: true, confidence: .high),
-            .init(cycling: true, confidence: .high),
+        let frames: [(TrackerMotionEvidence, Double, Double)] = [
+            (.init(walking: true, confidence: .high), 1.2, 90),
+            (.init(walking: true, confidence: .high), 2.8, 165),
+            (.init(walking: true, confidence: .high), 4.5, 0),
         ]
 
-        let activities = frames.compactMap {
-            TrackerAutoPolicy.decision(from: $0)?.activity
+        let activities = frames.compactMap { evidence, speed, cadence in
+            TrackerAutoPolicy.decision(
+                from: evidence,
+                speedMps: speed,
+                cadenceSPM: cadence
+            )?.activity
         }
 
-        XCTAssertEqual(
-            activities,
-            [.walking, .walking, .running, .running, .cycling, .cycling]
-        )
+        XCTAssertEqual(activities, [.walking, .running, .cycling])
     }
 }

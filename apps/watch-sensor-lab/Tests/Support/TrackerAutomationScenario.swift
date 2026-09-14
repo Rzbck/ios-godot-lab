@@ -96,6 +96,7 @@ enum TrackerAutomationReplayer {
         var totalDistance = 0.0
         var maxSpeed = 0.0
         var finalHeartRate = 0.0
+        var movementObserved = false
         var currentActivity = scenario.selectedActivity
 
         for (index, frame) in scenario.frames.enumerated() {
@@ -109,7 +110,16 @@ enum TrackerAutomationReplayer {
                 currentActivity = decision.activity
             }
 
-            if TrackerAutoPolicy.shouldStagePause(
+            if frame.distanceDeltaMeters > 0 {
+                movementObserved = true
+            }
+
+            if TrackerAutoPolicy.canArmPause(
+                activity: currentActivity,
+                elapsedSeconds: frame.offsetSeconds,
+                horizontalAccuracy: frame.horizontalAccuracyMeters,
+                movementObserved: movementObserved
+            ), TrackerAutoPolicy.shouldStagePause(
                 activity: currentActivity,
                 enabled: scenario.autoPauseEnabled,
                 stationary: frame.motion.stationary,

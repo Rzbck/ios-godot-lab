@@ -1,16 +1,84 @@
 import Foundation
 import SwiftUI
 
+private struct HistoricalRecoveryPreset: Identifiable {
+    let sessionID: String
+    let authoritativeDistanceMeters: Double
+    let targetActivity: ActivityKind
+    let title: String
+    let subtitle: String
+    let symbol: String
+
+    var id: String { sessionID }
+
+    static let knownCases: [HistoricalRecoveryPreset] = [
+        HistoricalRecoveryPreset(
+            sessionID: "1789374106082",
+            authoritativeDistanceMeters: 9052.45442214305,
+            targetActivity: .cycling,
+            title: "Sortie vélo · dossier forensic",
+            subtitle: "9,05 km · preuve archivée avant réinstallation",
+            symbol: "bicycle"
+        ),
+    ]
+}
+
 struct HistoricalHealthKitRepairV4View: View {
     @ObservedObject private var coordinator = HistoricalHealthKitRepairV4Coordinator.shared
+    @ObservedObject private var orphanCoordinator = HistoricalHealthKitOrphanRepairCoordinator.shared
     @State private var summaries: [TrackerSummary] = []
+    @State private var showManualRecovery = false
     private let store = NativeSessionStore()
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    HistoricalHealthKitOrphanRepairCard()
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("Dossiers de récupération", systemImage: "archivebox.fill")
+                            .font(.headline.weight(.bold))
+                        Text(
+                            "Charge un dossier connu en un geste. Tracker renseigne automatiquement la preuve forensic, le sport cible et lance l’inspection HealthKit sans écrire."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                        ForEach(HistoricalRecoveryPreset.knownCases) { preset in
+                            Button {
+                                loadRecoveryPreset(preset)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: preset.symbol)
+                                        .font(.title3)
+                                        .frame(width: 28)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(preset.title)
+                                            .font(.subheadline.weight(.semibold))
+                                        Text(preset.subtitle)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "arrow.right.circle.fill")
+                                        .foregroundStyle(.mint)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(orphanCoordinator.busy)
+                        }
+                    }
+                    .padding(14)
+                    .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 20))
+
+                    DisclosureGroup(
+                        "Détails / saisie manuelle avancée",
+                        isExpanded: $showManualRecovery
+                    ) {
+                        HistoricalHealthKitOrphanRepairCard()
+                            .padding(.top, 8)
+                    }
+                    .font(.subheadline.weight(.semibold))
 
                     if summaries.isEmpty {
                         ContentUnavailableView(
@@ -46,6 +114,18 @@ struct HistoricalHealthKitRepairV4View: View {
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    private func loadRecoveryPreset(_ preset: HistoricalRecoveryPreset) {
+        orphanCoordinator.sessionID = preset.sessionID
+        orphanCoordinator.authoritativeDistanceText = String(
+            format: "%.14f",
+            preset.authoritativeDistanceMeters
+        )
+        orphanCoordinator.targetActivity = preset.targetActivity
+        orphanCoordinator.perceivedEffort = nil
+        showManualRecovery = true
+        orphanCoordinator.inspect()
     }
 }
 

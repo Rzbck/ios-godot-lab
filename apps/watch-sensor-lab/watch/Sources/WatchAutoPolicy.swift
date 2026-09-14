@@ -9,6 +9,8 @@ struct WatchAutoDecision: Equatable {
 }
 
 enum WatchAutoPolicy {
+    private static let maximumReactiveDwell: TimeInterval = 2.5
+
     static func decision(
         from motion: CMMotionActivity,
         elapsedSeconds: TimeInterval,
@@ -59,7 +61,7 @@ enum WatchAutoPolicy {
             activity: decision.activity,
             confidence: decision.confidence,
             provenance: decision.provenance,
-            dwellSeconds: decision.dwellSeconds
+            dwellSeconds: min(decision.dwellSeconds, maximumReactiveDwell)
         )
     }
 

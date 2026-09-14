@@ -8,8 +8,15 @@ import HealthKit
 /// It never writes or deletes HealthKit objects.
 @MainActor
 struct NearbyHealthKitWorkoutDiagnostic {
+    private static let recentSentinel = "__recent__"
+
     func inspect(sessionID: String) async throws -> [String: Any] {
         let recovery = HistoricalHealthKitRepairV4Coordinator.shared
+
+        if sessionID == Self.recentSentinel {
+            return try await inspectRecent(hours: 12, recovery: recovery)
+        }
+
         let workoutType = HKObjectType.workoutType()
 
         let targetPredicate = HKQuery.predicateForObjects(
@@ -76,6 +83,45 @@ struct NearbyHealthKitWorkoutDiagnostic {
         ]
     }
 
+    private func inspectRecent(
+        hours: Double,
+        recovery: HistoricalHealthKitRepairV4Coordinator
+    ) async throws -> [String: Any] {
+        let windowEnd = Date()
+        let windowStart = windowEnd.addingTimeInterval(-max(1, hours) * 3600)
+        let workoutType = HKObjectType.workoutType()
+        let timePredicate = HKQuery.predicateForSamples(
+            withStart: windowStart,
+            end: windowEnd,
+            options: [.strictStartDate]
+        )
+        let samples = try await recovery.querySamples(
+            type: workoutType,
+            predicate: timePredicate
+        )
+        let workouts = samples.compactMap { $0 as? HKWorkout }
+            .sorted { $0.startDate < $1.startDate }
+
+        return [
+            "session_id": Self.recentSentinel,
+            "target_found": false,
+            "target_uuid": NSNull(),
+            "target_start_timestamp": NSNull(),
+            "target_start_iso": NSNull(),
+            "window_start_iso": iso(windowStart),
+            "window_end_iso": iso(windowEnd),
+            "workout_count": workouts.count,
+            "workouts": workouts.map {
+                workoutSnapshot(
+                    $0,
+                    targetStart: windowStart,
+                    sessionID: "",
+                    recovery: recovery
+                )
+            },
+        ]
+    }
+
     private func workoutSnapshot(
         _ workout: HKWorkout,
         targetStart: Date,
@@ -113,7 +159,7 @@ struct NearbyHealthKitWorkoutDiagnostic {
             "source_version": nullableString(source.version),
             "source_product_type": nullableString(source.productType),
             "tracker_session_id": nullableString(metadataSessionID),
-            "is_target_session": metadataSessionID == sessionID,
+            "is_target_session": !sessionID.isEmpty && metadataSessionID == sessionID,
             "source_matches_installed_bundle":
                 source.source.bundleIdentifier == Bundle.main.bundleIdentifier,
             "device_name": nullableString(workout.device?.name),

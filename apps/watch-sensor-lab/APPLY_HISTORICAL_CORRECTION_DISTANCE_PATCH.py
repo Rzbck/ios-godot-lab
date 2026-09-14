@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Build-time safety patch for historical activity-type correction.
+"""Build-time safety patch for the active iPhone HealthKit v4 repair flow.
 
-The normal Watch-owned correction path must not clone a walking/running distance
-sample into a cycling workout. When Tracker's synchronized recent-history digest
-is available and agrees with the saved HealthKit route geometry, that Tracker
-summary distance is the scalar authority. Existing distance quantity samples are
-removed and replaced with one quantity sample whose HealthKit type matches the
-requested target activity.
+A Tracker-managed normal workout may coexist temporarily with one generated v4
+candidate. The candidate is created from Tracker raw evidence and verified while
+the normal source remains intact. Only an explicit finalization action may delete
+the old normal workout, and it re-verifies the candidate immediately before and
+after that deletion.
 
-The patch is intentionally deterministic and idempotent because both the iPhone
-and Watch Xcode projects may invoke it during one CI checkout.
+The patch is deterministic and idempotent because both iPhone and Watch project
+pre-build phases may invoke it in one checkout.
 """
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-TARGET = ROOT / "watch/Sources/WatchAutoHealthReconciler.swift"
-MARKER = "com.rzbck.watchsensorlab.correction_distance_source"
+COORD = ROOT / "iphone/Sources/HistoricalHealthKitRepairV4.swift"
+VIEW = ROOT / "iphone/Sources/HistoricalHealthKitRepairV4View.swift"
+COORD_MARKER = "func finalizeNormalSourceCorrection("
+VIEW_MARKER = "Finaliser après validation Santé/Forme"
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -25,396 +26,350 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-def replace_n(text: str, old: str, new: str, expected: int, label: str) -> str:
-    count = text.count(old)
-    if count != expected:
-        raise SystemExit(f"{label}: expected {expected} matches, got {count}")
-    return text.replace(old, new)
+coord = COORD.read_text(encoding="utf-8")
+view = VIEW.read_text(encoding="utf-8")
 
+if COORD_MARKER not in coord:
+    coord = replace_once(
+        coord,
+        '''        var canReconstruct: Bool {
+            generatedWorkoutCount == 0
+                && normalWorkoutCount == 0
+                && chosenPoints >= 2
+                && !distanceConflict
+                && !severeRouteCounterConflict
+        }
+''',
+        '''        var canReconstruct: Bool {
+            generatedWorkoutCount == 0
+                && normalWorkoutCount <= 1
+                && chosenPoints >= 2
+                && !distanceConflict
+                && !severeRouteCounterConflict
+        }
+''',
+        "allow one normal source",
+    )
 
-text = TARGET.read_text(encoding="utf-8")
+    coord = replace_once(
+        coord,
+        '''                if !normal.isEmpty {
+                    statusBySession[sessionID] =
+                        "Workout Tracker normal détecté · reconstruction historique bloquée."
+                } else if !generated.isEmpty {
+                    let sourceBundle = generated.first?.sourceRevision.source.bundleIdentifier ?? "inconnu"
+                    statusBySession[sessionID] =
+                        "\\(generated.count) restauration(s) v4 présente(s) · source \\(sourceBundle). Nettoyer avant toute nouvelle écriture."
+                } else if conflict {
+''',
+        '''                if normal.count > 1 {
+                    statusBySession[sessionID] =
+                        "Plusieurs workouts Tracker normaux détectés · aucune écriture autorisée."
+                } else if !generated.isEmpty {
+                    let sourceBundle = generated.first?.sourceRevision.source.bundleIdentifier ?? "inconnu"
+                    if normal.count == 1 {
+                        statusBySession[sessionID] =
+                            "Candidat v4 + workout source présents · source conservée. Vérifier Santé/Forme puis finaliser explicitement."
+                    } else {
+                        statusBySession[sessionID] =
+                            "\\(generated.count) restauration(s) v4 présente(s) · source \\(sourceBundle). Nettoyer avant toute nouvelle écriture."
+                    }
+                } else if conflict {
+''',
+        "inspect normal source state",
+    )
 
-if MARKER in text:
-    required = [
-        "historicalCorrectionDistanceAuthority(",
-        "makeHistoricalCorrectionSamples(",
-        "verifyHistoricalCorrectionDistanceSamples(",
-        "correction_distance_m",
-    ]
-    missing = [value for value in required if value not in text]
-    if missing:
-        raise SystemExit(f"historical correction distance patch incomplete: {missing}")
-    print("HISTORICAL CORRECTION DISTANCE PATCH: already applied")
-    raise SystemExit(0)
+    coord = replace_once(
+        coord,
+        '''                let generated = workouts.filter { isGenerated($0, sessionID: sessionID) }
+                let normal = workouts.filter { !isGenerated($0, sessionID: sessionID) }
+                guard normal.isEmpty else {
+                    throw V4Error.operation("workout Tracker normal présent ; nettoyage annulé")
+                }
+                guard !generated.isEmpty else {
+''',
+        '''                let generated = workouts.filter { isGenerated($0, sessionID: sessionID) }
+                guard !generated.isEmpty else {
+''',
+        "cleanup preserves normal source",
+    )
 
-old_create_call = '''        let sourceDistance =
-            distanceMeters(in: sourceWorkouts)
+    coord = replace_once(
+        coord,
+        '''                let generated = existing.filter { isGenerated($0, sessionID: sessionID) }
+                let normal = existing.filter { !isGenerated($0, sessionID: sessionID) }
+                guard normal.isEmpty else {
+                    throw V4Error.operation("workout Tracker normal présent ; aucune écriture effectuée")
+                }
+                guard generated.isEmpty else {
+                    throw V4Error.operation("restauration v4 déjà présente ; nettoyer avant de recommencer")
+                }
+''',
+        '''                let generated = existing.filter { isGenerated($0, sessionID: sessionID) }
+                let normal = existing.filter { !isGenerated($0, sessionID: sessionID) }
+                guard normal.count <= 1 else {
+                    throw V4Error.operation("plusieurs workouts Tracker normaux présents ; aucune écriture effectuée")
+                }
+                if let sourceWorkout = normal.first,
+                   sourceWorkout.workoutActivityType == targetActivity.healthKitType {
+                    throw V4Error.operation("le workout Tracker normal est déjà du sport demandé")
+                }
+                guard generated.isEmpty else {
+                    throw V4Error.operation("restauration v4 déjà présente ; nettoyer avant de recommencer")
+                }
+                let sourceRetained = normal.count == 1
+''',
+        "repair allows one normal source",
+    )
 
-        let created =
-            try await createHistoricalCorrectionWorkout(
-                activity: targetActivity,
-                start: start,
-                end: end,
-                sessionID: sessionID,
-                source: sourceDevice,
-                sourceWorkouts: sourceWorkouts,
-                samples: sourceSamples,
-                events: sourceEvents,
-                locations: routeLocations
-            )
-'''
-new_create_call = '''        let sourceDistance =
-            distanceMeters(in: sourceWorkouts)
+    coord = replace_once(
+        coord,
+        '''                internallyVerifiedSessions.insert(sessionID)
+                auditBySession.removeValue(forKey: sessionID)
+                statusBySession[sessionID] =
+                    "HealthKit v4 segmenté écrit et relu · une seule restauration · PAS encore validé dans Santé/Forme."
+''',
+        '''                internallyVerifiedSessions.insert(sessionID)
+                auditBySession.removeValue(forKey: sessionID)
+                statusBySession[sessionID] =
+                    sourceRetained
+                        ? "Candidat HealthKit v4 écrit et relu · workout source conservé · vérifier Santé/Forme avant finalisation."
+                        : "HealthKit v4 segmenté écrit et relu · une seule restauration · PAS encore validé dans Santé/Forme."
+''',
+        "candidate status",
+    )
 
-        let distanceAuthority =
-            try await historicalCorrectionDistanceAuthority(
-                sessionID: sessionID,
-                sourceDistance: sourceDistance,
-                routeLocations: routeLocations
-            )
+    finalizer = r'''
 
-        let correctionSamples =
-            try makeHistoricalCorrectionSamples(
-                sourceSamples,
-                targetActivity: targetActivity,
-                distanceMeters: distanceAuthority.meters,
-                start: start,
-                end: end,
-                sessionID: sessionID
-            )
+    func finalizeNormalSourceCorrection(sessionID: String) {
+        guard activeSessionID == nil else { return }
+        activeSessionID = sessionID
+        statusBySession[sessionID] =
+            "Relecture du candidat avant suppression de la source…"
 
-        let created =
-            try await createHistoricalCorrectionWorkout(
-                activity: targetActivity,
-                start: start,
-                end: end,
-                sessionID: sessionID,
-                source: sourceDevice,
-                sourceWorkouts: sourceWorkouts,
-                samples: correctionSamples,
-                events: sourceEvents,
-                locations: routeLocations,
-                authoritativeDistanceMeters: distanceAuthority.meters,
-                distanceAuthoritySource: distanceAuthority.source
-            )
-'''
-text = replace_once(text, old_create_call, new_create_call, "correction authority + samples")
+        Task { @MainActor in
+            defer { activeSessionID = nil }
+            do {
+                let summary = try loadSummary(sessionID: sessionID)
+                let raw = try loadRawRoutes(sessionID: sessionID)
+                guard !hasDistanceConflict(summary: summary, raw: raw) else {
+                    throw V4Error.operation("distance summary/raw non confirmée ; source conservée")
+                }
 
-text = replace_n(
-    text,
-    '''            guard
-                verifiedSamples.count
-                    >= sourceSamples.count
-            else {''',
-    '''            guard
-                verifiedSamples.count
-                    >= correctionSamples.count
-            else {''',
-    1,
-    "pre-delete sample count",
-)
+                let existing = try await managedWorkouts(
+                    sessionID: sessionID,
+                    summary: summary
+                )
+                let generated = existing.filter { isGenerated($0, sessionID: sessionID) }
+                let normal = existing.filter { !isGenerated($0, sessionID: sessionID) }
+                guard generated.count == 1, normal.count == 1 else {
+                    throw V4Error.operation("finalisation exige exactement un candidat et un workout source")
+                }
 
-old_distance_verify = '''            if sourceDistance > 1 {
-                let replacementDistance =
-                    distanceMeters(in: [verified])
-
-                let tolerance =
-                    max(
-                        10,
-                        sourceDistance * 0.03
-                    )
-
+                let candidate = generated[0]
+                let sourceWorkout = normal[0]
                 guard
-                    abs(
-                        replacementDistance
-                            - sourceDistance
-                    ) <= tolerance
+                    let targetRaw = candidate.metadata?[correctionTargetKey] as? String,
+                    let targetActivity = ActivityKind(rawValue: targetRaw),
+                    !targetActivity.isAutomatic,
+                    candidate.workoutActivityType == targetActivity.healthKitType
                 else {
-                    throw ReconcileError.operation(
-                        "distance du remplacement incohérente"
-                    )
+                    throw V4Error.operation("sport cible du candidat invalide ; source conservée")
                 }
-            }
-'''
-new_distance_verify = '''            try verifyHistoricalCorrectionDistanceSamples(
-                verifiedSamples,
-                targetActivity: targetActivity
-            )
-
-            if distanceAuthority.meters > 1 {
-                let replacementDistance =
-                    distanceMeters(in: [verified])
-
-                let tolerance =
-                    max(
-                        10,
-                        distanceAuthority.meters * 0.03
-                    )
-
-                guard
-                    abs(
-                        replacementDistance
-                            - distanceAuthority.meters
-                    ) <= tolerance
-                else {
-                    throw ReconcileError.operation(
-                        "distance du remplacement incohérente"
-                    )
+                guard sourceWorkout.workoutActivityType != targetActivity.healthKitType else {
+                    throw V4Error.operation("source déjà du sport cible ; suppression refusée")
                 }
-            }
-'''
-text = replace_once(text, old_distance_verify, new_distance_verify, "pre-delete distance verification")
 
-text = replace_once(
-    text,
-    '''        guard
-            postDeleteSamples.count
-                >= sourceSamples.count
-        else {''',
-    '''        guard
-            postDeleteSamples.count
-                >= correctionSamples.count
-        else {''',
-    "post-delete sample count",
-)
-
-text = replace_once(
-    text,
-    '''        if routeLocations.count >= 2 {
-            let postDeleteRoutes =''',
-    '''        try verifyHistoricalCorrectionDistanceSamples(
-            postDeleteSamples,
-            targetActivity: targetActivity
-        )
-
-        if distanceAuthority.meters > 1 {
-            let durableDistance = distanceMeters(in: [durableReplacement])
-            let tolerance = max(10, distanceAuthority.meters * 0.03)
-            guard abs(durableDistance - distanceAuthority.meters) <= tolerance else {
-                throw ReconcileError.operation(
-                    "distance corrigée non durable après suppression"
+                let payload = try makePayload(
+                    summary: summary,
+                    targetActivity: targetActivity,
+                    raw: raw
                 )
-            }
-        }
-
-        if routeLocations.count >= 2 {
-            let postDeleteRoutes =''',
-    "post-delete distance verification",
-)
-
-text = replace_once(
-    text,
-    '''            sampleCount:
-                sourceSamples.count,
-            routePointCount:''',
-    '''            sampleCount:
-                correctionSamples.count,
-            routePointCount:''',
-    "result sample count",
-)
-
-helper_marker = '''    private func createHistoricalCorrectionWorkout(
-'''
-helpers = '''    private func historicalCorrectionDistanceAuthority(
-        sessionID: String,
-        sourceDistance: Double,
-        routeLocations: [CLLocation]
-    ) async throws -> (meters: Double, source: String) {
-        let recentHistoryDistance = await MainActor.run {
-            WatchRecentHistoryStore.shared.activities
-                .first(where: { $0.sessionID == sessionID })?
-                .distanceMeters
-        }
-
-        guard let trackerDistance = recentHistoryDistance,
-              trackerDistance > 1 else {
-            guard sourceDistance > 1 else {
-                throw ReconcileError.operation(
-                    "aucune distance fiable disponible pour la correction"
+                let choice = chooseRoute(
+                    watch: raw.watch,
+                    phone: raw.phone,
+                    summary: summary,
+                    activity: targetActivity
                 )
-            }
-            return (sourceDistance, "healthkit_source")
-        }
-
-        if routeLocations.count >= 2 {
-            let routeGeometry = routeGeometryMeters(routeLocations)
-            let tolerance = max(300, trackerDistance * 0.15)
-            guard routeGeometry > 1,
-                  abs(routeGeometry - trackerDistance) <= tolerance else {
-                throw ReconcileError.operation(
-                    "distance Tracker incompatible avec la route HealthKit ; original conservé"
-                )
-            }
-            return (trackerDistance, "tracker_recent_history_route_validated")
-        }
-
-        if sourceDistance > 1 {
-            let tolerance = max(50, trackerDistance * 0.05)
-            guard abs(sourceDistance - trackerDistance) <= tolerance else {
-                throw ReconcileError.operation(
-                    "distance Tracker non vérifiable sans parcours ; original conservé"
-                )
-            }
-        }
-
-        return (trackerDistance, "tracker_recent_history")
-    }
-
-    private func routeGeometryMeters(_ locations: [CLLocation]) -> Double {
-        guard locations.count >= 2 else { return 0 }
-        var total = 0.0
-        for index in 1..<locations.count {
-            total += locations[index].distance(from: locations[index - 1])
-        }
-        return total
-    }
-
-    private func makeHistoricalCorrectionSamples(
-        _ samples: [HKSample],
-        targetActivity: ActivityKind,
-        distanceMeters: Double,
-        start: Date,
-        end: Date,
-        sessionID: String
-    ) throws -> [HKSample] {
-        let distanceTypeIDs = Set([
-            HKQuantityTypeIdentifier.distanceWalkingRunning.rawValue,
-            HKQuantityTypeIdentifier.distanceCycling.rawValue,
-            HKQuantityTypeIdentifier.distanceSwimming.rawValue,
-        ])
-
-        var result = samples.filter { sample in
-            guard let quantitySample = sample as? HKQuantitySample else {
-                return true
-            }
-            return !distanceTypeIDs.contains(quantitySample.quantityType.identifier)
-        }
-
-        guard distanceMeters > 1 else { return result }
-        guard let identifier = restoreDistanceIdentifier(for: targetActivity),
-              let distanceType = HKQuantityType.quantityType(forIdentifier: identifier) else {
-            throw ReconcileError.operation(
-                "type de distance HealthKit cible indisponible"
-            )
-        }
-
-        result.append(
-            HKQuantitySample(
-                type: distanceType,
-                quantity: HKQuantity(unit: .meter(), doubleValue: distanceMeters),
-                start: start,
-                end: end,
-                metadata: [
-                    "com.rzbck.watchsensorlab.reconstructed_sample": true,
-                    "com.rzbck.watchsensorlab.correction_distance_authority": true,
-                    sessionKey: sessionID,
-                ]
-            )
-        )
-        return result
-    }
-
-    private func verifyHistoricalCorrectionDistanceSamples(
-        _ samples: [HKSample],
-        targetActivity: ActivityKind
-    ) throws {
-        guard let expected = restoreDistanceIdentifier(for: targetActivity) else {
-            return
-        }
-
-        let allDistanceIDs = Set([
-            HKQuantityTypeIdentifier.distanceWalkingRunning.rawValue,
-            HKQuantityTypeIdentifier.distanceCycling.rawValue,
-            HKQuantityTypeIdentifier.distanceSwimming.rawValue,
-        ])
-        let presentDistanceIDs = Set(
-            samples.compactMap { sample -> String? in
-                guard let quantitySample = sample as? HKQuantitySample else {
-                    return nil
+                guard let selectedRoute = choice.selected,
+                      selectedRoute.points.count >= 2 else {
+                    throw V4Error.operation("route raw insuffisante pour revalider le candidat")
                 }
-                let identifier = quantitySample.quantityType.identifier
-                return allDistanceIDs.contains(identifier) ? identifier : nil
-            }
-        )
+                let routeSegments = segmentRouteForStorage(
+                    selectedRoute,
+                    summary: summary
+                )
+                guard !routeSegments.isEmpty else {
+                    throw V4Error.operation("aucun segment de route durable ; source conservée")
+                }
+                guard !hasSevereRouteCounterConflict(
+                    summary: summary,
+                    route: selectedRoute,
+                    watchRawDistanceMeters: raw.watch.rawDistanceMeters,
+                    phoneRawDistanceMeters: raw.phone.rawDistanceMeters
+                ) else {
+                    throw V4Error.operation("route/compteur incohérents ; source conservée")
+                }
 
-        guard presentDistanceIDs == Set([expected.rawValue]) else {
-            throw ReconcileError.operation(
-                "le remplacement contient un type de distance incompatible avec l’activité cible"
+                guard let attemptID = candidate.metadata?[attemptKey] as? String,
+                      !attemptID.isEmpty else {
+                    throw V4Error.operation("attempt_id du candidat absent ; source conservée")
+                }
+                let candidateRoutes = try await routes(for: candidate)
+                let perceivedEffort = HistoricalHealthKitFullFidelity.savedPerceivedEffort(
+                    sessionID: sessionID
+                )
+
+                try await requestCleanupAuthorization()
+                try await verifyDurably(
+                    payload: payload,
+                    route: selectedRoute,
+                    routeSegments: routeSegments,
+                    workoutUUID: candidate.uuid,
+                    routeUUIDs: Set(candidateRoutes.map(\.uuid)),
+                    attemptID: attemptID,
+                    perceivedEffort: perceivedEffort
+                )
+
+                let sourceRoutes = try await routes(for: sourceWorkout)
+                try await delete([sourceWorkout as HKObject])
+                if !sourceRoutes.isEmpty {
+                    try? await delete(sourceRoutes.map { $0 as HKObject })
+                }
+
+                let afterDelete = try await managedWorkouts(
+                    sessionID: sessionID,
+                    summary: summary
+                )
+                let afterGenerated = afterDelete.filter { isGenerated($0, sessionID: sessionID) }
+                let afterNormal = afterDelete.filter { !isGenerated($0, sessionID: sessionID) }
+                guard afterNormal.isEmpty,
+                      afterGenerated.count == 1,
+                      afterGenerated[0].uuid == candidate.uuid else {
+                    throw V4Error.operation("état HealthKit inattendu après suppression de la source")
+                }
+
+                let durableRoutes = try await routes(for: afterGenerated[0])
+                try await verifyDurably(
+                    payload: payload,
+                    route: selectedRoute,
+                    routeSegments: routeSegments,
+                    workoutUUID: afterGenerated[0].uuid,
+                    routeUUIDs: Set(durableRoutes.map(\.uuid)),
+                    attemptID: attemptID,
+                    perceivedEffort: perceivedEffort
+                )
+
+                internallyVerifiedSessions.insert(sessionID)
+                auditBySession.removeValue(forKey: sessionID)
+                statusBySession[sessionID] =
+                    "Correction finalisée et relue · ancien workout supprimé · vérifier Santé/Forme."
+            } catch {
+                statusBySession[sessionID] =
+                    "Finalisation échouée · \\(error.localizedDescription)"
+            }
+        }
+    }
+'''
+
+    closing = "\n}\n"
+    index = coord.rfind(closing)
+    if index < 0:
+        raise SystemExit("coordinator final class close not found")
+    coord = coord[:index] + finalizer + coord[index:]
+
+if VIEW_MARKER not in view:
+    view = replace_once(
+        view,
+        '''    @State private var confirmCleanup = false
+    @State private var confirmRepair = false
+''',
+        '''    @State private var confirmCleanup = false
+    @State private var confirmRepair = false
+    @State private var confirmFinalize = false
+''',
+        "view finalize state",
+    )
+
+    view = replace_once(
+        view,
+        '''            if let status = coordinator.statusBySession[summary.sessionID] {
+''',
+        '''            if let audit,
+               audit.generatedWorkoutCount == 1,
+               audit.normalWorkoutCount == 1,
+               audit.generatedTargetActivity != nil {
+                Button(role: .destructive) {
+                    confirmFinalize = true
+                } label: {
+                    Label(
+                        "Finaliser après validation Santé/Forme",
+                        systemImage: "checkmark.shield.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(coordinator.activeSessionID != nil)
+            }
+
+            if let status = coordinator.statusBySession[summary.sessionID] {
+''',
+        "view finalize button",
+    )
+
+    view = replace_once(
+        view,
+        '''        } message: {
+            Text(
+                "Distance/énergie sont conservées depuis les totaux Tracker. Les raccords GPS impossibles deviennent des frontières de route ; aucun point n’est inventé."
             )
         }
     }
+''',
+        '''        } message: {
+            Text(
+                "Distance/énergie sont conservées depuis les totaux Tracker. Les raccords GPS impossibles deviennent des frontières de route ; aucun point n’est inventé."
+            )
+        }
+        .confirmationDialog(
+            "Finaliser la correction après vérification dans Santé/Forme ?",
+            isPresented: $confirmFinalize,
+            titleVisibility: .visible
+        ) {
+            Button("Supprimer uniquement l’ancien workout source", role: .destructive) {
+                coordinator.finalizeNormalSourceCorrection(
+                    sessionID: summary.sessionID
+                )
+            }
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text(
+                "Le candidat v4 est relu une nouvelle fois avant suppression. Seul le workout Tracker normal de ce session ID est supprimé ; les raw Tracker et le candidat vérifié restent conservés."
+            )
+        }
+    }
+''',
+        "view finalize dialog",
+    )
 
-'''
-text = replace_once(text, helper_marker, helpers + helper_marker, "historical correction helpers")
-
-old_signature = '''    private func createHistoricalCorrectionWorkout(
-        activity: ActivityKind,
-        start: Date,
-        end: Date,
-        sessionID: String,
-        source: HKWorkout,
-        sourceWorkouts: [HKWorkout],
-        samples: [HKSample],
-        events: [HKWorkoutEvent],
-        locations: [CLLocation]
-    ) async throws'''
-new_signature = '''    private func createHistoricalCorrectionWorkout(
-        activity: ActivityKind,
-        start: Date,
-        end: Date,
-        sessionID: String,
-        source: HKWorkout,
-        sourceWorkouts: [HKWorkout],
-        samples: [HKSample],
-        events: [HKWorkoutEvent],
-        locations: [CLLocation],
-        authoritativeDistanceMeters: Double,
-        distanceAuthoritySource: String
-    ) async throws'''
-text = replace_once(
-    text,
-    old_signature,
-    new_signature,
-    "correction workout signature",
-)
-
-old_metadata = '''                masterActivityKey:
-                    activity.rawValue,
-                algorithmKey:
-                    "tracker-v4-20260910",
-                buildKey:
-                    BuildInfo.gitSHA,
-            ],'''
-new_metadata = '''                masterActivityKey:
-                    activity.rawValue,
-                algorithmKey:
-                    "tracker-v4-20260910",
-                buildKey:
-                    BuildInfo.gitSHA,
-                "com.rzbck.watchsensorlab.correction_distance_m":
-                    authoritativeDistanceMeters,
-                "com.rzbck.watchsensorlab.correction_distance_source":
-                    distanceAuthoritySource,
-            ],'''
-text = replace_once(
-    text,
-    old_metadata,
-    new_metadata,
-    "correction distance metadata",
-)
-
-# Final invariants. These fail the build instead of silently compiling an unsafe
-# correction path if upstream source shape changes.
 for required in [
-    MARKER,
-    "historicalCorrectionDistanceAuthority(",
-    "makeHistoricalCorrectionSamples(",
-    "verifyHistoricalCorrectionDistanceSamples(",
-    "tracker_recent_history_route_validated",
-    "distanceCycling.rawValue",
+    "normalWorkoutCount <= 1",
+    COORD_MARKER,
+    "generated.count == 1, normal.count == 1",
+    "verifyDurably(",
+    "sourceWorkout as HKObject",
 ]:
-    if required not in text:
-        raise SystemExit(f"historical correction distance invariant missing: {required}")
+    if required not in coord:
+        raise SystemExit(f"iphone v4 correction invariant missing: {required}")
 
-TARGET.write_text(text, encoding="utf-8")
-print("HISTORICAL CORRECTION DISTANCE PATCH: OK")
+for required in [
+    VIEW_MARKER,
+    "confirmFinalize",
+    "finalizeNormalSourceCorrection",
+]:
+    if required not in view:
+        raise SystemExit(f"iphone v4 correction view invariant missing: {required}")
+
+COORD.write_text(coord, encoding="utf-8")
+VIEW.write_text(view, encoding="utf-8")
+print("IPHONE V4 NORMAL-WORKOUT CORRECTION PATCH: OK")

@@ -90,6 +90,25 @@ watch = replace_once_or_present(
 )
 watch = replace_once_or_present(
     watch,
+    '''        if !keepActivity {
+            selectedActivity = .automatic
+            effectiveActivity = .walking
+        } else {
+            effectiveActivity = initialEffectiveActivity(for: selectedActivity)
+        }
+''',
+    '''        if !keepActivity {
+            selectedActivity = .automatic
+            effectiveActivity = .automatic
+        } else {
+            effectiveActivity = initialEffectiveActivity(for: selectedActivity)
+        }
+''',
+    "selectedActivity = .automatic\n            effectiveActivity = .automatic",
+    "watch reset must stay neutral",
+)
+watch = replace_once_or_present(
+    watch,
     '''            if selectedActivity.isAutomatic {
                 automaticActivityStartedAt = startedAt ?? Date()
             }
@@ -104,6 +123,19 @@ watch = replace_once_or_present(
 ''',
     "Do not count provisional startup time as walking",
     "watch remove initial walking accounting",
+)
+watch = replace_once_or_present(
+    watch,
+    '''        if selectedActivity.isAutomatic {
+            automaticActivityStartedAt = Date()
+        }
+''',
+    '''        if selectedActivity.isAutomatic, !effectiveActivity.isAutomatic {
+            automaticActivityStartedAt = Date()
+        }
+''',
+    "selectedActivity.isAutomatic, !effectiveActivity.isAutomatic",
+    "watch resume accounts only concrete auto sport",
 )
 watch = replace_once_or_present(
     watch,
@@ -219,9 +251,11 @@ for token in [
 for token in [
     "return activity.isAutomatic ? .automatic : activity",
     "Do not count provisional startup time as walking",
+    "selectedActivity.isAutomatic, !effectiveActivity.isAutomatic",
     "speedMps: self.currentSpeedMps",
     "cadenceSPM: self.cadenceSPM",
     "Swift.max(decision.dwellSeconds, 1.5)",
+    "selectedActivity = .automatic\n            effectiveActivity = .automatic",
 ]:
     if token not in watch:
         raise SystemExit(f"watch auto behavior token missing: {token}")

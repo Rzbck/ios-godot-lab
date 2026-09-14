@@ -269,8 +269,12 @@ extension HistoricalHealthKitRepairV4Coordinator {
         _ metadata: [String: Any],
         to builder: HKWorkoutBuilder
     ) async throws {
+        // Never let a custom workout brand reach HealthKit. Apple uses that metadata as
+        // the visible workout title; the native activity type (Vélo, Marche, etc.) must win.
+        var sanitized = metadata
+        sanitized.removeValue(forKey: HKMetadataKeyWorkoutBrandName)
         try await checked {
-            completion in builder.addMetadata(metadata, completion: completion)
+            completion in builder.addMetadata(sanitized, completion: completion)
         }
     }
 

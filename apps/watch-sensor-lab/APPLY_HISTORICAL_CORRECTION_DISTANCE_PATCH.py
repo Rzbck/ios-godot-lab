@@ -347,33 +347,59 @@ helpers = '''    private func historicalCorrectionDistanceAuthority(
 '''
 text = replace_once(text, helper_marker, helpers + helper_marker, "historical correction helpers")
 
-text = replace_once(
-    text,
-    '''        samples: [HKSample],
+old_signature = '''    private func createHistoricalCorrectionWorkout(
+        activity: ActivityKind,
+        start: Date,
+        end: Date,
+        sessionID: String,
+        source: HKWorkout,
+        sourceWorkouts: [HKWorkout],
+        samples: [HKSample],
         events: [HKWorkoutEvent],
         locations: [CLLocation]
-    ) async throws''',
-    '''        samples: [HKSample],
+    ) async throws'''
+new_signature = '''    private func createHistoricalCorrectionWorkout(
+        activity: ActivityKind,
+        start: Date,
+        end: Date,
+        sessionID: String,
+        source: HKWorkout,
+        sourceWorkouts: [HKWorkout],
+        samples: [HKSample],
         events: [HKWorkoutEvent],
         locations: [CLLocation],
         authoritativeDistanceMeters: Double,
         distanceAuthoritySource: String
-    ) async throws''',
+    ) async throws'''
+text = replace_once(
+    text,
+    old_signature,
+    new_signature,
     "correction workout signature",
 )
 
-text = replace_once(
-    text,
-    '''                buildKey:
+old_metadata = '''                masterActivityKey:
+                    activity.rawValue,
+                algorithmKey:
+                    "tracker-v4-20260910",
+                buildKey:
                     BuildInfo.gitSHA,
-            ],''',
-    '''                buildKey:
+            ],'''
+new_metadata = '''                masterActivityKey:
+                    activity.rawValue,
+                algorithmKey:
+                    "tracker-v4-20260910",
+                buildKey:
                     BuildInfo.gitSHA,
                 "com.rzbck.watchsensorlab.correction_distance_m":
                     authoritativeDistanceMeters,
                 "com.rzbck.watchsensorlab.correction_distance_source":
                     distanceAuthoritySource,
-            ],''',
+            ],'''
+text = replace_once(
+    text,
+    old_metadata,
+    new_metadata,
     "correction distance metadata",
 )
 

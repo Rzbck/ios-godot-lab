@@ -379,6 +379,22 @@ watch = replace_block_or_present(
     "watch resume probe quality telemetry",
 )
 
+# Preserve the exact legacy idempotence markers expected by
+# APPLY_AUTO_PAUSE_SAFETY_PATCH.py. They are comments only; runtime decisions use
+# the fused evidence code above. This prevents a later target/preflight pass
+# from replacing the final pause/resume policy with the older OR-based policy.
+watch = replace_once_or_present(
+    watch,
+    "    private func currentAutoResumeEvidence(now: Date) -> TrackerAutoResumeEvidence {\n",
+    '''    // FUSION_LEGACY_SAFETY_MARKERS
+    // motionMovementObserved: autoPauseMotionObserved
+    // "probe_speed_mps": resumeSpeed
+    private func currentAutoResumeEvidence(now: Date) -> TrackerAutoResumeEvidence {
+''',
+    "// FUSION_LEGACY_SAFETY_MARKERS",
+    "watch preserve legacy safety idempotence markers",
+)
+
 # Explicit generated-source invariants. They prove the code that Xcode sees is
 # the fused policy, not the previous stale-cadence/single-signal version.
 for token in [
@@ -389,6 +405,7 @@ for token in [
     '"gps_sustained": evidence.gpsSustained',
     'lastAutoResumeDecisionReason = decision.reason',
     "lastCadenceEvidenceAt = .distantPast",
+    "// FUSION_LEGACY_SAFETY_MARKERS",
 ]:
     if token not in watch:
         raise SystemExit(f"auto-pause fusion generated source missing token: {token}")

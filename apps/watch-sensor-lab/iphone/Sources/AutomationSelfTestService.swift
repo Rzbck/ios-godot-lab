@@ -421,6 +421,7 @@ private enum SelfTestRunner {
                 speedMps: 1.0,
                 cadenceSPM: 80,
                 motionCandidate: .walking,
+                gpsEvidenceConfirmed: false,
                 motionEvidenceFresh: true,
                 cadenceEvidenceFresh: true
             ),

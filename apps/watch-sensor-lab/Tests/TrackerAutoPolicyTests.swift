@@ -329,7 +329,7 @@ final class TrackerAutoPolicyTests: XCTestCase {
         let frames: [(TrackerMotionEvidence, Double, Double)] = [
             (.init(walking: true, confidence: .high), 1.2, 90),
             (.init(walking: true, confidence: .high), 2.8, 165),
-            (.init(walking: true, confidence: .high), 4.5, 0),
+            (.init(walking: true, confidence: .high), 5.2, 0),
         ]
 
         let activities = frames.compactMap { evidence, speed, cadence in

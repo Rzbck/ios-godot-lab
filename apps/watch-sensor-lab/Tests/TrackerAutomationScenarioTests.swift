@@ -44,7 +44,7 @@ final class TrackerAutomationScenarioTests: XCTestCase {
                 TrackerAutomationFrame(
                     offsetSeconds: 1,
                     motion: TrackerMotionEvidence(walking: true),
-                    speedMps: 4.2,
+                    speedMps: 5.2,
                     cadenceSPM: 0,
                     heartRateBPM: 100,
                     distanceDeltaMeters: 4.2,

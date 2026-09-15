@@ -255,11 +255,21 @@ jobs:
           echo "Case: $CASE_SLUG"
           echo "Simulator: $DEVICE_NAME ($DEVICE_UDID)"
 
-          if [ "$TEST_KIND" = "ui" ]; then
+          # Explicitly boot every destination, including contract targets.
+          # watchOS simulators occasionally time out while booting on a shared
+          # macOS runner; retry once from a clean shutdown before attributing
+          # the failure to the product.
+          for attempt in 1 2; do
             xcrun simctl shutdown "$DEVICE_UDID" >/dev/null 2>&1 || true
             xcrun simctl boot "$DEVICE_UDID" >/dev/null 2>&1 || true
-            xcrun simctl bootstatus "$DEVICE_UDID" -b
-          fi
+            if xcrun simctl bootstatus "$DEVICE_UDID" -b; then
+              break
+            fi
+            if [ "$attempt" = "2" ]; then
+              echo "Simulator failed to boot after two attempts: $DEVICE_NAME ($DEVICE_UDID)" >&2
+              exit 1
+            fi
+          done
 
           set +e
           if [ "$TARGET_PLATFORM" = "iphone" ] && [ "$TEST_KIND" = "contract" ]; then
@@ -312,9 +322,7 @@ jobs:
               --path "$RESULT" --compact > "$SUMMARY" 2>/dev/null || true
           fi
 
-          if [ "$TEST_KIND" = "ui" ]; then
-            xcrun simctl shutdown "$DEVICE_UDID" >/dev/null 2>&1 || true
-          fi
+          xcrun simctl shutdown "$DEVICE_UDID" >/dev/null 2>&1 || true
 
           exit "$rc"
 

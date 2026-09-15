@@ -28,6 +28,14 @@ watch_auto_policy = (
     root / "watch/Sources/WatchAutoPolicy.swift"
 ).read_text(encoding="utf-8")
 
+iphone_settings = (
+    root / "iphone/Sources/TrackerSettingsView.swift"
+).read_text(encoding="utf-8")
+
+watch_auto_pause_settings = (
+    root / "watch/Sources/WatchAutoPauseSettings.swift"
+).read_text(encoding="utf-8")
+
 selftest_service = (
     root / "iphone/Sources/AutomationSelfTestService.swift"
 ).read_text(encoding="utf-8")
@@ -236,6 +244,30 @@ for token in [
         errors.append(
             f"WatchAutoPolicy ne délègue pas au noyau testable: {token}"
         )
+
+# The product has one Auto-Pause toggle. Its short internal dwell is
+# stabilization, never a duration the person configures. Check the actual
+# settings surfaces so a refactor cannot bring back per-sport sliders.
+for surface, source in [
+    ("iPhone", iphone_settings),
+    ("Watch", watch_auto_pause_settings),
+]:
+    if "Pause automatique" not in source and "Pause auto adaptative" not in source:
+        errors.append(f"{surface} sans contrôle maître de pause automatique")
+    if "Aucun délai à régler" not in source:
+        errors.append(f"{surface} réintroduit une configuration de délai Auto")
+
+iphone_settings_body = iphone_settings.split("struct TrackerSettingsView", 1)[-1]
+watch_settings_body = watch_auto_pause_settings.split("struct WatchAutoPauseSettingsView", 1)[-1]
+for surface, source in [
+    ("iPhone", iphone_settings_body),
+    ("Watch", watch_settings_body),
+]:
+    for forbidden in ["Slider(", "Stepper(", "pauseDwell", "resumeDwell"]:
+        if forbidden in source:
+            errors.append(
+                f"{surface} expose encore un réglage de délai Auto: {forbidden}"
+            )
 
 required_test_files = [
     root / "Tests/TrackerWorkflowContractTests.swift",

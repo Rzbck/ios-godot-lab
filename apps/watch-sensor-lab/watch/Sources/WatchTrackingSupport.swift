@@ -18,13 +18,6 @@ extension ActivityKind {
         }
     }
 
-    var autoPauseDelay: TimeInterval {
-        switch self {
-        case .cycling, .handCycling: return 8
-        case .running, .walking, .hiking: return 12
-        default: return 15
-        }
-    }
 }
 
 struct WatchMotionFrame {

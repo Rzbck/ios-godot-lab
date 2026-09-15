@@ -11,9 +11,11 @@ Rendre le mode Auto réactif sans réglage utilisateur de délai, supprimer le b
 - branche : `fix/watch-auto-behavior-20260914`
 - worktree : `E:\_Project\IOS APP\ios-godot-lab\worktrees\watch-auto-behavior`
 - base indiquée comme physiquement validée par l'utilisateur : `f97aaf09181763d9e816fced23da040d6da6819a`
-- candidat applicatif compilé et testé : `bedf8795f3af0f9e5f6ee75e85b582606e28f3d6`
+- candidat applicatif compilé et testé : `f5448629ce80540a1b85edb7269a8452d85caab8`
 
-Le commit documentaire contenant ce HANDOFF est postérieur au candidat applicatif. Il ne modifie aucun fichier compilé. Toujours vérifier les HEAD Git/GitHub réels avant reprise.
+Le HEAD de la branche peut contenir des commits documentaires ou de garde-fou
+postérieurs. L'IPA à tester est celle du SHA candidat indiqué ci-dessus ;
+toujours vérifier Git/GitHub réels avant reprise.
 
 ## Changements du chantier
 
@@ -46,9 +48,10 @@ La chaîne `SESSION_SYNC_PATCH.py` puis les patchs de pré-build a été vérifi
 
 ### BUILD CI VALIDÉ
 
-- SHA : `bedf8795f3af0f9e5f6ee75e85b582606e28f3d6`
+- SHA : `f5448629ce80540a1b85edb7269a8452d85caab8`
 - workflow : `watch-sensor-lab-bootstrap.yml`
-- run : `34886672233`
+- run CI normal : [`34918501826`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34918501826)
+- run artifact candidat : [`34919293286`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34919293286)
 - résultat : succès complet
 - build iPhone unsigned : succès
 - build watchOS unsigned : succès
@@ -58,9 +61,9 @@ La chaîne `SESSION_SYNC_PATCH.py` puis les patchs de pré-build a été vérifi
 
 ### TESTS CI VALIDÉS
 
-- SHA : `bedf8795f3af0f9e5f6ee75e85b582606e28f3d6`
+- SHA : `f5448629ce80540a1b85edb7269a8452d85caab8`
 - workflow : `watch-sensor-lab-tests.yml`
-- run : `34886615605`
+- run : [`34918501818`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34918501818)
 - résultat : succès complet
 - préflight : succès
 - contrat iPhone : 44 tests, succès
@@ -70,8 +73,8 @@ La chaîne `SESSION_SYNC_PATCH.py` puis les patchs de pré-build a été vérifi
 
 ## IPA récupérée et vérifiée
 
-- chemin : `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\bedf8795f3af\WatchSensorLab-companion-unsigned-bedf8795f3af.ipa`
-- SHA-256 : `12d4c50b4232082803c717023c95504947d2dc9486b1365ca56c005492a9067f`
+- chemin : `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\f5448629ce80\WatchSensorLab-companion-unsigned-f5448629ce80.ipa`
+- SHA-256 : `b0efddc7493acbcbb1e0e48ac78ac42bf785839a3b4850eb7fa7bef3e281d484`
 - metadata locale : `E:\_Project\IOS APP\ios-godot-lab\artifacts\watch-sensor-lab\LATEST.json`
 - récupération effectuée avec `UPDATE_WATCH_SENSOR_LAB.ps1 -ExpectedBranch fix/watch-auto-behavior-20260914 -NoAutoBuild`
 

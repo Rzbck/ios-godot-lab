@@ -91,6 +91,30 @@ watch = replace_once_or_present(
     "watch adaptive startup pause arming",
 )
 
+# A stationary Watch can produce a first pair of GPS points several metres
+# apart while both accuracy circles overlap. Core Location reports no native
+# speed for those points (`speed == -1`), so treating their derived distance as
+# movement leaves currentSpeedMps high and blocks the first auto-pause.
+watch = replace_once_or_present(
+    watch,
+    '''            let accuracyOK = max(previous.horizontalAccuracy, location.horizontalAccuracy) <= 25
+            let plausible = dt > 0.15 && dt < 12 && delta >= 0.6 && delta < 150 && implied <= limit * 1.35 && nativeSpeed <= limit * 1.35
+
+            deltaMeters = delta
+''',
+    '''            let accuracyOK = max(previous.horizontalAccuracy, location.horizontalAccuracy) <= 25
+            let startupGPSJitter = !autoPauseMovementObserved
+                && elapsedSeconds <= 12
+                && location.speed < 0
+                && delta <= max(8, previous.horizontalAccuracy + location.horizontalAccuracy)
+            let plausible = dt > 0.15 && dt < 12 && delta >= 0.6 && delta < 150 && implied <= limit * 1.35 && nativeSpeed <= limit * 1.35 && !startupGPSJitter
+
+            deltaMeters = delta
+''',
+    "let startupGPSJitter = !autoPauseMovementObserved",
+    "watch reject unproven startup GPS jitter",
+)
+
 watch = replace_once_or_present(
     watch,
     '''        if reason == "auto" {
@@ -400,6 +424,7 @@ for token in [
     '"gps_sustained": evidence.gpsSustained',
     'lastAutoResumeDecisionReason = decision.reason',
     "lastCadenceEvidenceAt = .distantPast",
+    "let startupGPSJitter = !autoPauseMovementObserved",
     "// FUSION_LEGACY_SAFETY_MARKERS",
 ]:
     if token not in watch:

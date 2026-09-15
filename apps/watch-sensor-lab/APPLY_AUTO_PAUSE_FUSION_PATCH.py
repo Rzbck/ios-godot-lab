@@ -90,8 +90,6 @@ watch = replace_once_or_present(
     "watch adaptive startup pause arming",
 )
 
-# Once auto-paused the pedometer is intentionally stopped, so its last cadence
-# must not survive as live resume evidence.
 watch = replace_once_or_present(
     watch,
     '''        if reason == "auto" {
@@ -114,8 +112,6 @@ watch = replace_once_or_present(
     "watch clear stale cadence on auto pause",
 )
 
-# Preserve the evidence that actually caused the pause before presentation
-# speed/cadence are reset.
 watch = replace_once_or_present(
     watch,
     '''    private func pauseCore(reason: String) {
@@ -340,8 +336,6 @@ watch = replace_block_or_present(
             plausibleMaxSpeedMps: displayActivity.plausibleMaxSpeedMps
         ) ?? 0
 
-        // Presentation may show current position/accuracy, but the paused probe
-        // never appends to route, healthRouteLocations, or distanceMeters.
         horizontalAccuracy = location.horizontalAccuracy
         currentCoordinate = location.coordinate
 
@@ -379,14 +373,13 @@ watch = replace_block_or_present(
     "watch resume probe quality telemetry",
 )
 
-# Preserve the exact legacy idempotence markers expected by
-# APPLY_AUTO_PAUSE_SAFETY_PATCH.py. They are comments only; runtime decisions use
-# the fused evidence code above. This prevents a later target/preflight pass
-# from replacing the final pause/resume policy with the older OR-based policy.
+# Preserve exact legacy strings expected by APPLY_AUTO_PAUSE_SAFETY_PATCH.py.
+# They are comments only; runtime decisions use the fused policy above.
 watch = replace_once_or_present(
     watch,
     "    private func currentAutoResumeEvidence(now: Date) -> TrackerAutoResumeEvidence {\n",
     '''    // FUSION_LEGACY_SAFETY_MARKERS
+    // TrackerAutoPolicy.canArmPause(
     // motionMovementObserved: autoPauseMotionObserved
     // "probe_speed_mps": resumeSpeed
     private func currentAutoResumeEvidence(now: Date) -> TrackerAutoResumeEvidence {
@@ -395,8 +388,6 @@ watch = replace_once_or_present(
     "watch preserve legacy safety idempotence markers",
 )
 
-# Explicit generated-source invariants. They prove the code that Xcode sees is
-# the fused policy, not the previous stale-cadence/single-signal version.
 for token in [
     "TrackerAutoPolicy.canArmAdaptivePause(",
     "if activity.stationary {\n                autoPauseMotionObserved = true",

@@ -24,9 +24,9 @@ def apply(script: str) -> None:
 # SESSION_SYNC_PATCH owns the established dependency order for auto-pause,
 # terminal/runtime integrity, and historical correction. Reactive Auto behavior
 # comes next, then the field-tested sensor-fusion correction is applied last.
-# The fusion patch keeps legacy safety idempotence markers as comments so both
-# the CI double-pass and later Xcode target pre-build passes preserve the final
-# fused runtime instead of restoring the older single-signal resume policy.
+# Fusion preserves all legacy safety-patch idempotence/invariant strings as
+# comments only; repeated CI/Xcode passes therefore cannot restore old runtime
+# behavior while the old integration patches remain in the build chain.
 apply("SESSION_SYNC_PATCH.py")
 apply("APPLY_AUTO_BEHAVIOR_PATCH.py")
 apply("APPLY_AUTO_PAUSE_FUSION_PATCH.py")

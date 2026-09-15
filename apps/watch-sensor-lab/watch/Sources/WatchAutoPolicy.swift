@@ -38,15 +38,11 @@ enum WatchAutoPolicy {
         )
     }
 
-    /// Re-evaluate the exact same Auto policy whenever fresh GPS/cadence arrives,
-    /// even if Core Motion has not emitted a new semantic activity callback.
     static func decision(
         from evidence: TrackerMotionEvidence,
         speedMps: Double,
         cadenceSPM: Double
     ) -> WatchAutoDecision? {
-        // Binding here covers both the Core Motion callback and sensor-only
-        // reevaluations. bind(to:) is idempotent.
         WatchAutoHealthReconciler.shared.bind(to: SensorModel.shared)
 
         guard let decision = TrackerAutoPolicy.decision(
@@ -82,6 +78,17 @@ enum WatchAutoPolicy {
 
     static func pauseDwell(for activity: ActivityKind) -> TimeInterval {
         WatchAutoPauseSettings.pauseDwell(for: activity)
+    }
+
+    static func resumeDecision(
+        activity: ActivityKind,
+        evidence: TrackerAutoResumeEvidence
+    ) -> TrackerAutoResumeDecision {
+        TrackerAutoPolicy.resumeDecision(
+            activity: activity,
+            enabled: WatchAutoPauseSettings.isEnabled(for: activity),
+            evidence: evidence
+        )
     }
 
     static func shouldStageResume(

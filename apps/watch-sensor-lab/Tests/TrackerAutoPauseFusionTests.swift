@@ -134,6 +134,27 @@ final class TrackerAutoPauseFusionTests: XCTestCase {
         XCTAssertEqual(decision.reason, "strong_sustained_gps")
     }
 
+    func testFreshWalkingCadenceCanResumeWithoutGPSOrMotionClassifier() {
+        let decision = TrackerAutoPolicy.resumeDecision(
+            activity: .walking,
+            enabled: true,
+            evidence: TrackerAutoResumeEvidence(
+                speedMps: 0,
+                gpsFresh: false,
+                gpsReliable: false,
+                gpsSustained: false,
+                cadenceSPM: 99,
+                cadenceFresh: true,
+                stationary: false,
+                motionCandidate: nil,
+                motionFresh: false
+            )
+        )
+
+        XCTAssertTrue(decision.shouldResume)
+        XCTAssertEqual(decision.reason, "strong_fresh_cadence")
+    }
+
     func testUnreliableGPSCannotResumeEvenAtCyclingSpeed() {
         let decision = TrackerAutoPolicy.resumeDecision(
             activity: .cycling,

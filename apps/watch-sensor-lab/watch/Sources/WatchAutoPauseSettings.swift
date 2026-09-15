@@ -49,6 +49,22 @@ enum WatchAutoPauseSettings {
         return TrackerAutoPauseStabilityPolicy.resumeDwell(for: activity)
     }
 
+    static func stationaryEvidenceFreshness(
+        for activity: ActivityKind,
+        defaults: UserDefaults = .standard
+    ) -> TimeInterval {
+        _ = defaults
+        return TrackerAutoPauseStabilityPolicy.stationaryEvidenceFreshness(for: activity)
+    }
+
+    static func speedEvidenceFreshness(
+        for activity: ActivityKind,
+        defaults: UserDefaults = .standard
+    ) -> TimeInterval {
+        _ = defaults
+        return TrackerAutoPauseStabilityPolicy.speedEvidenceFreshness(for: activity)
+    }
+
     static func repauseCooldown(
         for activity: ActivityKind,
         defaults: UserDefaults = .standard

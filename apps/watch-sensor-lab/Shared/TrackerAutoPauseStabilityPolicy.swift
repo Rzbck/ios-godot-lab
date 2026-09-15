@@ -3,7 +3,7 @@ import Foundation
 /// Conservative, platform-neutral stop detection for Watch auto-pause.
 ///
 /// False pauses are more disruptive than slightly late pauses, so production
-/// requires fresh stationary Core Motion evidence plus sport-specific low-motion
+/// requires stationary Core Motion evidence plus sport-specific low-motion
 /// evidence. Unsupported activities fail closed and keep recording.
 enum TrackerAutoPauseStabilityPolicy {
     static func supports(_ activity: ActivityKind) -> Bool {
@@ -20,6 +20,7 @@ enum TrackerAutoPauseStabilityPolicy {
         enabled: Bool,
         stationary: Bool,
         speedMps: Double,
+        speedFresh: Bool = true,
         cadenceSPM: Double
     ) -> Bool {
         guard enabled, supports(activity), stationary else { return false }
@@ -29,18 +30,18 @@ enum TrackerAutoPauseStabilityPolicy {
 
         switch activity {
         case .walking, .hiking:
-            // Walking GPS often reports zero indoors or between fixes. Never let
-            // GPS-zero alone pause a moving pedestrian; Core Motion must also be
-            // stationary and fresh cadence must be essentially absent.
-            return speed <= 0.35 && cadence < 10
+            // A fresh moving speed vetoes pause. An old filtered speed is not
+            // evidence that the person is still moving: stationary Core Motion
+            // plus essentially absent cadence may still arm the dwell.
+            return (!speedFresh || speed <= 0.35) && cadence < 10
 
         case .running, .trackAndField:
-            return speed <= 0.45 && cadence < 25
+            return (!speedFresh || speed <= 0.45) && cadence < 25
 
         case .cycling, .handCycling:
-            // CMPedometer is not cycling cadence. Require stationary Core Motion
-            // and a near-zero location speed instead of step cadence.
-            return speed <= 0.40
+            // CMPedometer is not cycling cadence. A fresh moving GPS speed is a
+            // veto; stale speed is unknown and cannot override stationary motion.
+            return !speedFresh || speed <= 0.40
 
         default:
             return false
@@ -68,6 +69,34 @@ enum TrackerAutoPauseStabilityPolicy {
             return 0.8
         default:
             return 1.0
+        }
+    }
+
+    /// Maximum age of the callback that confirmed the current stationary state.
+    /// CMMotionActivity.startDate is the transition time, not the observation
+    /// arrival time, so an already-stationary workout must not be rejected just
+    /// because that state began before the workout started.
+    static func stationaryEvidenceFreshness(for activity: ActivityKind) -> TimeInterval {
+        switch activity {
+        case .walking, .hiking:
+            return 12.0
+        case .running, .trackAndField, .cycling, .handCycling:
+            return 10.0
+        default:
+            return 10.0
+        }
+    }
+
+    /// A filtered speed is only a movement veto for a short time after that
+    /// speed was actually updated. Without this, the final moving value can
+    /// remain frozen indefinitely when Core Location stops producing usable
+    /// speed samples.
+    static func speedEvidenceFreshness(for activity: ActivityKind) -> TimeInterval {
+        switch activity {
+        case .walking, .hiking, .running, .trackAndField, .cycling, .handCycling:
+            return 4.0
+        default:
+            return 4.0
         }
     }
 

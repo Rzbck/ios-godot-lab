@@ -37,6 +37,30 @@ final class TrackerAutoPauseStabilityPolicyTests: XCTestCase {
         )
     }
 
+    func testFieldFailureStaleWalkingSpeedDoesNotBlockPauseForever() {
+        XCTAssertTrue(
+            TrackerAutoPauseStabilityPolicy.shouldStagePause(
+                activity: .walking,
+                enabled: true,
+                stationary: true,
+                speedMps: 0.6327603595463153,
+                speedFresh: false,
+                cadenceSPM: 0
+            )
+        )
+
+        XCTAssertFalse(
+            TrackerAutoPauseStabilityPolicy.shouldStagePause(
+                activity: .walking,
+                enabled: true,
+                stationary: true,
+                speedMps: 0.6327603595463153,
+                speedFresh: true,
+                cadenceSPM: 0
+            )
+        )
+    }
+
     func testRunningCadenceVetoesFalsePause() {
         XCTAssertFalse(
             TrackerAutoPauseStabilityPolicy.shouldStagePause(
@@ -83,6 +107,16 @@ final class TrackerAutoPauseStabilityPolicyTests: XCTestCase {
                 )
             )
         }
+    }
+
+    func testPauseEvidenceWindowsOutliveWalkingDwellButSpeedExpiresQuickly() {
+        XCTAssertEqual(TrackerAutoPauseStabilityPolicy.pauseDwell(for: .walking), 6.0)
+        XCTAssertEqual(TrackerAutoPauseStabilityPolicy.stationaryEvidenceFreshness(for: .walking), 12.0)
+        XCTAssertEqual(TrackerAutoPauseStabilityPolicy.speedEvidenceFreshness(for: .walking), 4.0)
+        XCTAssertGreaterThan(
+            TrackerAutoPauseStabilityPolicy.stationaryEvidenceFreshness(for: .walking),
+            TrackerAutoPauseStabilityPolicy.pauseDwell(for: .walking)
+        )
     }
 
     func testPauseIsSlowerThanResumeAndHasPostResumeHysteresis() {

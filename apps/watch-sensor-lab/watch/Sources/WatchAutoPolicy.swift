@@ -65,6 +65,7 @@ enum WatchAutoPolicy {
         activity: ActivityKind,
         stationary: Bool,
         speedMps: Double,
+        speedFresh: Bool = true,
         cadenceSPM: Double
     ) -> Bool {
         TrackerAutoPauseStabilityPolicy.shouldStagePause(
@@ -72,6 +73,7 @@ enum WatchAutoPolicy {
             enabled: WatchAutoPauseSettings.isEnabled(for: activity),
             stationary: stationary,
             speedMps: speedMps,
+            speedFresh: speedFresh,
             cadenceSPM: cadenceSPM
         )
     }

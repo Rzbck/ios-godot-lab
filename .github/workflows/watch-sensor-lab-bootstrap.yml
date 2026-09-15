@@ -28,6 +28,7 @@ on:
       - 'apps/watch-sensor-lab/APPLY_GENERATED_SOURCE_CHAIN.py'
       - 'apps/watch-sensor-lab/APPLY_AUTO_BEHAVIOR_PATCH.py'
       - 'apps/watch-sensor-lab/APPLY_AUTO_PAUSE_SAFETY_PATCH.py'
+      - 'apps/watch-sensor-lab/APPLY_AUTO_PAUSE_FUSION_PATCH.py'
       - 'apps/watch-sensor-lab/APPLY_RUNTIME_INTEGRITY_PATCH.py'
       - 'apps/watch-sensor-lab/APPLY_TERMINAL_SYNC_RELIABILITY_PATCH.py'
       - 'apps/watch-sensor-lab/APPLY_HISTORICAL_CORRECTION_DISTANCE_PATCH.py'

@@ -114,29 +114,6 @@ enum WatchAutoPolicy {
         )
     }
 
-    static func shouldStageResume(
-        activity: ActivityKind,
-        stationary: Bool,
-        speedMps: Double,
-        cadenceSPM: Double,
-        motionCandidate: ActivityKind?,
-        gpsEvidenceConfirmed: Bool,
-        motionEvidenceFresh: Bool,
-        cadenceEvidenceFresh: Bool
-    ) -> Bool {
-        TrackerAutoPolicy.shouldStageResume(
-            activity: activity,
-            enabled: WatchAutoPauseSettings.isEnabled(for: activity),
-            stationary: stationary,
-            speedMps: speedMps,
-            cadenceSPM: cadenceSPM,
-            motionCandidate: motionCandidate,
-            gpsEvidenceConfirmed: gpsEvidenceConfirmed,
-            motionEvidenceFresh: motionEvidenceFresh,
-            cadenceEvidenceFresh: cadenceEvidenceFresh
-        )
-    }
-
     static func resumeDwell(for activity: ActivityKind) -> TimeInterval {
         WatchAutoPauseSettings.resumeDwell(for: activity)
     }

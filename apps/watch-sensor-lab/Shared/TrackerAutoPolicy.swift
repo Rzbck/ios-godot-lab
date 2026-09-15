@@ -398,9 +398,9 @@ enum TrackerAutoPolicy {
         speedMps: Double,
         cadenceSPM: Double,
         motionCandidate: ActivityKind?,
-        gpsEvidenceConfirmed: Bool,
-        motionEvidenceFresh: Bool,
-        cadenceEvidenceFresh: Bool
+        gpsEvidenceConfirmed: Bool = false,
+        motionEvidenceFresh: Bool = false,
+        cadenceEvidenceFresh: Bool = false
     ) -> Bool {
         resumeDecision(
             activity: activity,

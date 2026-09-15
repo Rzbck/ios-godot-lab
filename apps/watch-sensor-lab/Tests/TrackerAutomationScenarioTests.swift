@@ -56,7 +56,7 @@ final class TrackerAutomationScenarioTests: XCTestCase {
         let result = try TrackerAutomationReplayer.replay(scenario)
 
         XCTAssertEqual(result.activityCandidates, [.cycling])
-        XCTAssertFalse(result.pauseCandidateFrameIndexes.contains(0))
+        XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(0))
     }
 
     func testStopAndResumeWalkingNeedsMoreThanOneMovingGPSFix() throws {

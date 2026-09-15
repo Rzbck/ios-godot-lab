@@ -126,13 +126,9 @@ enum TrackerAutomationReplayer {
                 movementObserved = true
             }
 
-            let canPause = TrackerAutoPolicy.canArmPause(
-                activity: currentActivity,
-                elapsedSeconds: frame.offsetSeconds,
+            let canPause = TrackerAutoPolicy.canArmAdaptivePause(
                 horizontalAccuracy: frame.horizontalAccuracyMeters,
-                movementObserved: movementObserved,
-                motionMovementObserved: motionMovementObserved,
-                stationaryEvidence: frame.motion.stationary
+                motionEvidenceObserved: frame.motion.stationary || motionMovementObserved || movementObserved
             ) && TrackerAutoPolicy.shouldStagePause(
                 activity: currentActivity,
                 enabled: scenario.autoPauseEnabled,

@@ -184,10 +184,10 @@ watch = replace_once_or_present(
                     elevationGainMeters: self.elevationGainMeters,
                     elevationLossMeters: self.elevationLossMeters,
                     speedMps: self.currentSpeedMps,
-                    cadenceSPM: self.cadenceSPM
+                    cadenceSPM: self.freshCadenceSPM
                ) {
 ''',
-    "speedMps: self.currentSpeedMps,\n                    cadenceSPM: self.cadenceSPM",
+    "speedMps: self.currentSpeedMps,\n                    cadenceSPM: self.freshCadenceSPM",
     "watch feed GPS/cadence to auto sport",
 )
 watch = replace_once_or_present(
@@ -197,17 +197,17 @@ watch = replace_once_or_present(
         guard selectedActivity.isAutomatic, phase == .active else { return }
 
         let evidence = TrackerMotionEvidence(
-            walking: lastMotionCandidate == .walking,
-            running: lastMotionCandidate == .running,
-            cycling: lastMotionCandidate == .cycling,
-            stationary: lastMotionWasStationary,
-            confidence: lastMotionCandidate == nil ? .low : .medium
+            walking: freshMotionCandidate == .walking,
+            running: freshMotionCandidate == .running,
+            cycling: freshMotionCandidate == .cycling,
+            stationary: freshMotionWasStationary,
+            confidence: freshMotionCandidate == nil ? .low : .medium
         )
 
         guard let decision = WatchAutoPolicy.decision(
             from: evidence,
             speedMps: currentSpeedMps,
-            cadenceSPM: cadenceSPM
+            cadenceSPM: freshCadenceSPM
         ) else { return }
 
         updateAutoEvidence(decision)
@@ -251,6 +251,13 @@ watch = replace_once_or_present(
     "        let dwell = Swift.max(decision.dwellSeconds, 1.5)\n",
     "Swift.max(decision.dwellSeconds, 1.5)",
     "watch responsive auto sport dwell",
+)
+watch = replace_once_or_present(
+    watch,
+    "        if autoCandidate != candidate || autoCandidateDecision != decision {\n",
+    "        if autoCandidate != candidate {\n",
+    "if autoCandidate != candidate {",
+    "watch auto dwell follows sport only",
 )
 watch = replace_once_or_present(
     watch,
@@ -339,7 +346,7 @@ for token in [
     "WatchAutoHealthReconciler.shared.bind(to: self)",
     "selectedActivity.isAutomatic, !effectiveActivity.isAutomatic",
     "speedMps: self.currentSpeedMps",
-    "cadenceSPM: self.cadenceSPM",
+    "cadenceSPM: self.freshCadenceSPM",
     "reevaluateAutomaticActivityFromLiveSensors()",
     "Swift.max(decision.dwellSeconds, 1.5)",
     "selectedActivity = .automatic\n            effectiveActivity = .automatic",

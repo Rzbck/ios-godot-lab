@@ -121,6 +121,9 @@ final class SensorModel: NSObject, ObservableObject {
     private var autoResumeCandidateSince: Date?
     private var lastMotionWasStationary = false
     private var lastMotionCandidate: ActivityKind?
+    private var lastMotionEvidenceAt = Date.distantPast
+    private var lastCadenceEvidenceAt = Date.distantPast
+    private let autoEvidenceFreshness: TimeInterval = 3
     private var usingBarometricElevation = false
     private var hasAbsoluteBarometricAltitude = false
     private var pedometerBaseSteps = 0
@@ -768,6 +771,8 @@ final class SensorModel: NSObject, ObservableObject {
         autoResumeCandidateSince = nil
         lastMotionWasStationary = false
         lastMotionCandidate = nil
+        lastMotionEvidenceAt = .distantPast
+        lastCadenceEvidenceAt = .distantPast
         usingBarometricElevation = false
         hasAbsoluteBarometricAltitude = false
         pedometerBaseSteps = 0
@@ -840,11 +845,24 @@ final class SensorModel: NSObject, ObservableObject {
         elapsedSeconds = max(0, end.timeIntervalSince(startedAt) - pausedDuration)
     }
 
+    private var freshMotionWasStationary: Bool {
+        Date().timeIntervalSince(lastMotionEvidenceAt) <= autoEvidenceFreshness && lastMotionWasStationary
+    }
+
+    private var freshMotionCandidate: ActivityKind? {
+        Date().timeIntervalSince(lastMotionEvidenceAt) <= autoEvidenceFreshness ? lastMotionCandidate : nil
+    }
+
+    private var freshCadenceSPM: Double {
+        Date().timeIntervalSince(lastCadenceEvidenceAt) <= autoEvidenceFreshness ? cadenceSPM : 0
+    }
+
     private func startMotionClassifierIfNeeded() {
         guard CMMotionActivityManager.isActivityAvailable(), selectedActivity.isAutomatic || autoPauseEnabled || selectedActivity == .swimBikeRun else { return }
         activityManager.startActivityUpdates(to: .main) { [weak self] activity in
             guard let self, let activity, self.running else { return }
             guard activity.confidence != .low else { return }
+            self.lastMotionEvidenceAt = Date()
 
             let rawMotionCandidate: ActivityKind?
             if activity.running { rawMotionCandidate = .running }
@@ -870,7 +888,7 @@ final class SensorModel: NSObject, ObservableObject {
                         activity: self.displayActivity,
                         stationary: false,
                         speedMps: self.currentSpeedMps,
-                        cadenceSPM: self.cadenceSPM
+                        cadenceSPM: self.freshCadenceSPM
                     ) {
                         self.stageAutoPauseIfNeeded()
                     } else {
@@ -1023,9 +1041,9 @@ final class SensorModel: NSObject, ObservableObject {
         guard autoPauseEnabled, phase == .active else { return }
         guard WatchAutoPolicy.shouldStagePause(
             activity: displayActivity,
-            stationary: lastMotionWasStationary,
+            stationary: freshMotionWasStationary,
             speedMps: currentSpeedMps,
-            cadenceSPM: cadenceSPM
+            cadenceSPM: freshCadenceSPM
         ) else {
             cancelPendingAutoPause()
             return
@@ -1046,9 +1064,9 @@ final class SensorModel: NSObject, ObservableObject {
                   self.autoPauseToken == token,
                   WatchAutoPolicy.shouldStagePause(
                     activity: self.displayActivity,
-                    stationary: self.lastMotionWasStationary,
+                    stationary: self.freshMotionWasStationary,
                     speedMps: self.currentSpeedMps,
-                    cadenceSPM: self.cadenceSPM
+                    cadenceSPM: self.freshCadenceSPM
                   ) else { return }
             self.autoPauseCandidateSince = nil
             self.autoPaused = true
@@ -1067,10 +1085,10 @@ final class SensorModel: NSObject, ObservableObject {
         guard autoPauseEnabled, phase == .paused, autoPaused else { return }
         guard WatchAutoPolicy.shouldStageResume(
             activity: displayActivity,
-            stationary: lastMotionWasStationary,
+            stationary: freshMotionWasStationary,
             speedMps: currentSpeedMps,
-            cadenceSPM: cadenceSPM,
-            motionCandidate: lastMotionCandidate
+            cadenceSPM: freshCadenceSPM,
+            motionCandidate: freshMotionCandidate
         ) else {
             cancelPendingAutoResume()
             return
@@ -1083,17 +1101,17 @@ final class SensorModel: NSObject, ObservableObject {
         sendEvent("auto_resume_candidate", payload: [
             "activity": displayActivity.rawValue,
             "dwell_s": delay,
-            "motion_candidate": lastMotionCandidate?.rawValue ?? "none",
+            "motion_candidate": freshMotionCandidate?.rawValue ?? "none",
         ])
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.phase == .paused, self.autoPaused, self.autoPauseEnabled,
                   self.autoResumeToken == token,
                   WatchAutoPolicy.shouldStageResume(
                     activity: self.displayActivity,
-                    stationary: self.lastMotionWasStationary,
+                    stationary: self.freshMotionWasStationary,
                     speedMps: self.currentSpeedMps,
-                    cadenceSPM: self.cadenceSPM,
-                    motionCandidate: self.lastMotionCandidate
+                    cadenceSPM: self.freshCadenceSPM,
+                    motionCandidate: self.freshMotionCandidate
                   ) else { return }
             self.autoResumeCandidateSince = nil
             self.authorityRevision += 1
@@ -1223,9 +1241,8 @@ final class SensorModel: NSObject, ObservableObject {
                 }
                 guard let data else { return }
                 self.steps = self.pedometerBaseSteps + data.numberOfSteps.intValue
-                if let cadence = data.currentCadence?.doubleValue, cadence > 0 {
-                    self.cadenceSPM = cadence * 60
-                }
+                self.cadenceSPM = max(0, (data.currentCadence?.doubleValue ?? 0) * 60)
+                self.lastCadenceEvidenceAt = Date()
                 var payload: [String: Any] = ["steps": self.steps]
                 if self.cadenceSPM > 0 { payload["cadence_spm"] = self.cadenceSPM }
                 if let pace = data.currentPace?.doubleValue { payload["pace_s_per_m"] = pace }
@@ -1826,6 +1843,9 @@ extension SensorModel: WCSessionDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.phoneReachable = session.isReachable
             if let error { self?.sessionStatus = "iPhone: \(error.localizedDescription)" }
+            if activationState == .activated {
+                WatchAutoHealthReconciler.shared.retryPendingPlans(after: .connectivityActivated)
+            }
         }
     }
 
@@ -1834,6 +1854,9 @@ extension SensorModel: WCSessionDelegate {
             guard let self else { return }
             let changed = self.phoneReachable != session.isReachable
             self.phoneReachable = session.isReachable
+            WatchAutoHealthReconciler.shared.retryPendingPlans(
+                after: .reachabilityChanged(isReachable: session.isReachable)
+            )
             if changed, self.running {
                 self.sendEvent("iphone_reachability_changed", payload: ["reachable": session.isReachable])
                 self.sendMetricSnapshotIfNeeded(force: true)

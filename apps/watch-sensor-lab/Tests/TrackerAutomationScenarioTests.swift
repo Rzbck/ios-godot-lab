@@ -67,6 +67,28 @@ final class TrackerAutomationScenarioTests: XCTestCase {
         XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(1))
         XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(2))
         XCTAssertTrue(result.resumeCandidateFrameIndexes.contains(3))
+        XCTAssertEqual(result.autoPauseFrameIndexes, [2])
+        XCTAssertTrue(result.endedPaused)
+    }
+
+    func testReplayRequiresDwellBeforePauseAndResume() throws {
+        let scenario = TrackerAutomationScenario(
+            name: "dwell-state-machine",
+            frames: [
+                frame(at: 0, stationary: false, speed: 1.2, cadence: 90, distance: 2),
+                frame(at: 1, stationary: true, speed: 0.1, cadence: 0, distance: 0),
+                frame(at: 2.5, stationary: true, speed: 0.1, cadence: 0, distance: 0),
+                frame(at: 3.1, stationary: true, speed: 0.1, cadence: 0, distance: 0),
+                frame(at: 4, stationary: false, speed: 1.1, cadence: 90, distance: 1),
+                frame(at: 5, stationary: false, speed: 1.2, cadence: 92, distance: 1),
+            ]
+        )
+
+        let result = try TrackerAutomationReplayer.replay(scenario)
+
+        XCTAssertEqual(result.autoPauseFrameIndexes, [3])
+        XCTAssertEqual(result.autoResumeFrameIndexes, [5])
+        XCTAssertFalse(result.endedPaused)
     }
 
     func testAutoPauseDisabledRemovesPauseAndResumeCandidates() throws {
@@ -125,14 +147,20 @@ final class TrackerAutomationScenarioTests: XCTestCase {
         }
     }
 
-    private func frame(at offset: TimeInterval) -> TrackerAutomationFrame {
+    private func frame(
+        at offset: TimeInterval,
+        stationary: Bool = false,
+        speed: Double = 1,
+        cadence: Double = 90,
+        distance: Double = 1
+    ) -> TrackerAutomationFrame {
         TrackerAutomationFrame(
             offsetSeconds: offset,
-            motion: TrackerMotionEvidence(walking: true),
-            speedMps: 1,
-            cadenceSPM: 90,
+            motion: TrackerMotionEvidence(walking: !stationary, stationary: stationary),
+            speedMps: speed,
+            cadenceSPM: cadence,
             heartRateBPM: 90,
-            distanceDeltaMeters: 1,
+            distanceDeltaMeters: distance,
             horizontalAccuracyMeters: 5
         )
     }

@@ -3,8 +3,16 @@ run-name: Watch Sensor Lab · ${{ github.ref_name }} · ${{ github.sha }}
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'apps/watch-sensor-lab/**'
+      - '.github/workflows/watch-sensor-lab-bootstrap.yml'
+      - '.github/workflows/watch-sensor-lab-tests.yml'
   push:
     branches:
+      - main
       - 'feat/watch-sensor-*'
       - 'fix/watch-*'
     paths:
@@ -14,6 +22,13 @@ on:
       - 'apps/watch-sensor-lab/godot/**'
       - 'apps/watch-sensor-lab/GENERATE_APP_ICON.py'
       - 'apps/watch-sensor-lab/SESSION_SYNC_PATCH.py'
+      - 'apps/watch-sensor-lab/APPLY_GENERATED_SOURCE_CHAIN.py'
+      - 'apps/watch-sensor-lab/APPLY_AUTO_BEHAVIOR_PATCH.py'
+      - 'apps/watch-sensor-lab/APPLY_AUTO_PAUSE_SAFETY_PATCH.py'
+      - 'apps/watch-sensor-lab/APPLY_RUNTIME_INTEGRITY_PATCH.py'
+      - 'apps/watch-sensor-lab/APPLY_TERMINAL_SYNC_RELIABILITY_PATCH.py'
+      - 'apps/watch-sensor-lab/APPLY_HISTORICAL_CORRECTION_DISTANCE_PATCH.py'
+      - 'apps/watch-sensor-lab/RUN_HISTORICAL_CORRECTION_DISTANCE_PATCH.py'
       - 'apps/watch-sensor-lab/CHECK_WORKFLOW_PARITY.py'
       - 'apps/watch-sensor-lab/CHECK_PRODUCT_INVARIANTS.py'
       - '.github/workflows/watch-sensor-lab-bootstrap.yml'
@@ -56,11 +71,12 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           xcrun --sdk watchos --show-sdk-version
 
-      - name: Apply deterministic session-sync candidate patch
+      - name: Apply complete generated-source chain twice
         shell: bash
         run: |
           set -euo pipefail
-          python3 "$APP_DIR/SESSION_SYNC_PATCH.py"
+          python3 "$APP_DIR/APPLY_GENERATED_SOURCE_CHAIN.py"
+          python3 "$APP_DIR/APPLY_GENERATED_SOURCE_CHAIN.py"
 
       - name: Verify shared iPhone Watch workflow parity
         shell: bash

@@ -14,7 +14,22 @@ IPHONE = ROOT / "iphone/Sources/TrackerModel.swift"
 WATCH = ROOT / "watch/Sources/SensorModel.swift"
 
 
+def run_child_patch(name: str) -> None:
+    """Run an idempotent child patch without letting a successful early exit
+    prevent the rest of the generated-source chain from being verified."""
+    try:
+        runpy.run_path(str(ROOT / name), run_name="__main__")
+    except SystemExit as error:
+        if error.code not in (0, None):
+            raise
+
+
 def replace_once(text: str, old: str, new: str, label: str) -> str:
+    # Candidate scripts may be invoked by CI and again by Xcode pre-build.
+    # Treat their exact replacement as the idempotence marker instead of
+    # requiring the pre-patch text on every pass.
+    if old not in text:
+        return text
     count = text.count(old)
     if count != 1:
         raise SystemExit(f"{label}: expected one match, got {count}")
@@ -22,6 +37,8 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 def replace_block(text: str, start: str, end: str, replacement: str, label: str) -> str:
+    if replacement in text or start not in text:
+        return text
     a = text.find(start)
     if a < 0:
         raise SystemExit(f"{label}: start marker not found")
@@ -373,9 +390,9 @@ print("SESSION SYNC BUILD PATCH: OK")
 
 # Production candidate chain. The workflow deliberately invokes only this
 # orchestrator so the runtime-critical patches can never drift apart.
-runpy.run_path(str(ROOT / "APPLY_AUTO_PAUSE_SAFETY_PATCH.py"), run_name="__main__")
-runpy.run_path(str(ROOT / "APPLY_TERMINAL_SYNC_RELIABILITY_PATCH.py"), run_name="__main__")
-runpy.run_path(str(ROOT / "APPLY_HISTORICAL_CORRECTION_DISTANCE_PATCH.py"), run_name="__main__")
+run_child_patch("APPLY_AUTO_PAUSE_SAFETY_PATCH.py")
+run_child_patch("APPLY_TERMINAL_SYNC_RELIABILITY_PATCH.py")
+run_child_patch("APPLY_HISTORICAL_CORRECTION_DISTANCE_PATCH.py")
 
 # The historical patch inserts Swift through a Python raw string. Normalize only
 # the two escape forms that must be single-backslash Swift syntax. This keeps the
@@ -392,5 +409,28 @@ historical_text = historical_text.replace(
     r"map(\.uuid)",
 )
 historical_core.write_text(historical_text, encoding="utf-8")
+
+# `replace_once` deliberately accepts an already generated tree. Re-read the
+# two authoritative runtime files so an unrelated source drift still fails
+# closed rather than being mistaken for a valid second invocation.
+for path, tokens in {
+    IPHONE: [
+        "pendingControlToken",
+        "makeControlCommand(",
+        "parseControlAcknowledgement(",
+        "ack.token == pendingControlToken",
+    ],
+    WATCH: [
+        "lastControlToken",
+        "parseControlCommand(",
+        "message.revision == authorityRevision",
+        'result: "stale_revision"',
+        'result: "expired"',
+    ],
+}.items():
+    content = path.read_text(encoding="utf-8")
+    missing = [token for token in tokens if token not in content]
+    if missing:
+        raise SystemExit(f"session-sync generated source missing {path.name} tokens: {missing}")
 
 print("TRACKER BUILD PATCH CHAIN: OK")

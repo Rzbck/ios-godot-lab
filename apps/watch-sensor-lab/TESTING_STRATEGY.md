@@ -77,7 +77,7 @@ Ce self-test :
 
 ### 6. UI automation
 
-Étape suivante : ajouter des `accessibilityIdentifier` stables et des cibles UI-test iPhone/watchOS. Les UI tests démarreront l’application avec un état synthétique et vérifieront les actions de fin sans créer une vraie séance HealthKit.
+Les cibles UI-test iPhone/watchOS montent les vues SwiftUI de production avec des modèles synthétiques sans dépendance matérielle. La CI exécute séparément les parcours `force`, `preserve` et `cancel` sur chaque plateforme, sans créer de vraie séance HealthKit.
 
 Identifiants réservés :
 
@@ -109,6 +109,10 @@ Deux workflows ont des rôles distincts :
 - `watch-sensor-lab-tests.yml` : logique/tests simulateurs, sans IPA ;
 - `watch-sensor-lab-bootstrap.yml` : compilation iPhone + watchOS, vérifications produit et packaging exact-SHA.
 
+Les deux workflows appellent exclusivement `APPLY_GENERATED_SOURCE_CHAIN.py` pour préparer les sources, deux fois de suite afin de vérifier l'idempotence de la chaîne complète. Les scripts individuels restent dans les phases de pré-build Xcode comme garde-fous pour les compilations locales directes.
+
+Ils s'exécutent pour les pull requests vers `main` qui touchent cette application ou ses workflows, pour les pushes concernés sur `main`, `feat/watch-sensor-*` et `fix/watch-*`, ainsi que manuellement. Les filtres incluent tous les scripts de génération et l'icône afin qu'une modification de l'entrée du build ne contourne pas la CI.
+
 Un push normal reste CI-only. Une IPA n’est conservée que lorsqu’un candidat appareil est réellement demandé.
 
 ## Nettoyage
@@ -124,7 +128,7 @@ Ne jamais supprimer des données réelles pour nettoyer des tests.
 
 ## Dette transitoire connue
 
-`SESSION_SYNC_PATCH.py` reste un mécanisme candidat de build tant que le correctif de synchronisation n’a pas été replié dans les sources Swift réelles. Il ne doit pas devenir permanent.
+`APPLY_GENERATED_SOURCE_CHAIN.py` centralise temporairement les transformations de build tant que les correctifs n'ont pas été repliés dans les sources Swift réelles. Il ne doit pas devenir permanent.
 
 La fermeture du chantier exige :
 

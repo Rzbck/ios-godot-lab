@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Apply the complete Watch Sensor Lab generated-source chain.
+
+This is the only entry point CI should call before checking or compiling the
+application. Individual patch scripts remain available to Xcode as local
+pre-build safety gates, so every operation in this chain must be idempotent.
+"""
+
+from pathlib import Path
+import runpy
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def apply(script: str) -> None:
+    path = ROOT / script
+    if not path.is_file():
+        raise SystemExit(f"generated-source chain missing required script: {path}")
+    print(f"[generated-source-chain] {script}")
+    runpy.run_path(str(path), run_name="__main__")
+
+
+# SESSION_SYNC_PATCH owns the established dependency order for auto-pause,
+# terminal/runtime integrity, and historical correction. The reactive Auto
+# patch is the remaining Xcode pre-build transformation and therefore belongs
+# explicitly at the end of the CI chain.
+apply("SESSION_SYNC_PATCH.py")
+apply("APPLY_AUTO_BEHAVIOR_PATCH.py")
+
+print("WATCH SENSOR LAB GENERATED SOURCE CHAIN: OK")

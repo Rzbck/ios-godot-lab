@@ -79,6 +79,9 @@ struct TrackerAutomationReplayResult: Equatable {
     let activityCandidates: [ActivityKind]
     let pauseCandidateFrameIndexes: [Int]
     let resumeCandidateFrameIndexes: [Int]
+    let autoPauseFrameIndexes: [Int]
+    let autoResumeFrameIndexes: [Int]
+    let endedPaused: Bool
     let totalDistanceMeters: Double
     let maximumSpeedMps: Double
     let finalHeartRateBPM: Double
@@ -98,6 +101,11 @@ enum TrackerAutomationReplayer {
         var finalHeartRate = 0.0
         var movementObserved = false
         var currentActivity = scenario.selectedActivity
+        var autoPaused = false
+        var pauseEligibleSince: TimeInterval?
+        var resumeEligibleSince: TimeInterval?
+        var autoPauseIndexes: [Int] = []
+        var autoResumeIndexes: [Int] = []
 
         for (index, frame) in scenario.frames.enumerated() {
             let decision = TrackerAutoPolicy.decision(
@@ -110,34 +118,66 @@ enum TrackerAutomationReplayer {
                 currentActivity = decision.activity
             }
 
+            let motionMovementObserved = frame.motion.walking
+                || frame.motion.running
+                || frame.motion.cycling
             if frame.distanceDeltaMeters > 0 {
                 movementObserved = true
             }
 
-            if TrackerAutoPolicy.canArmPause(
+            let canPause = TrackerAutoPolicy.canArmPause(
                 activity: currentActivity,
                 elapsedSeconds: frame.offsetSeconds,
                 horizontalAccuracy: frame.horizontalAccuracyMeters,
-                movementObserved: movementObserved
-            ), TrackerAutoPolicy.shouldStagePause(
+                movementObserved: movementObserved,
+                motionMovementObserved: motionMovementObserved
+            ) && TrackerAutoPolicy.shouldStagePause(
                 activity: currentActivity,
                 enabled: scenario.autoPauseEnabled,
                 stationary: frame.motion.stationary,
                 speedMps: frame.speedMps,
                 cadenceSPM: frame.cadenceSPM
-            ) {
+            )
+            if canPause {
                 pauseIndexes.append(index)
             }
 
-            if TrackerAutoPolicy.shouldStageResume(
+            let canResume = TrackerAutoPolicy.shouldStageResume(
                 activity: currentActivity,
                 enabled: scenario.autoPauseEnabled,
                 stationary: frame.motion.stationary,
                 speedMps: frame.speedMps,
                 cadenceSPM: frame.cadenceSPM,
                 motionCandidate: decision?.activity
-            ) {
+            )
+            if canResume {
                 resumeIndexes.append(index)
+            }
+
+            if !autoPaused {
+                if canPause {
+                    if let since = pauseEligibleSince,
+                       frame.offsetSeconds - since >= 2 {
+                        autoPaused = true
+                        autoPauseIndexes.append(index)
+                        pauseEligibleSince = nil
+                    } else if pauseEligibleSince == nil {
+                        pauseEligibleSince = frame.offsetSeconds
+                    }
+                } else {
+                    pauseEligibleSince = nil
+                }
+            } else if canResume {
+                if let since = resumeEligibleSince,
+                   frame.offsetSeconds - since >= 0.8 {
+                    autoPaused = false
+                    autoResumeIndexes.append(index)
+                    resumeEligibleSince = nil
+                } else if resumeEligibleSince == nil {
+                    resumeEligibleSince = frame.offsetSeconds
+                }
+            } else {
+                resumeEligibleSince = nil
             }
 
             totalDistance += frame.distanceDeltaMeters
@@ -149,6 +189,9 @@ enum TrackerAutomationReplayer {
             activityCandidates: candidates,
             pauseCandidateFrameIndexes: pauseIndexes,
             resumeCandidateFrameIndexes: resumeIndexes,
+            autoPauseFrameIndexes: autoPauseIndexes,
+            autoResumeFrameIndexes: autoResumeIndexes,
+            endedPaused: autoPaused,
             totalDistanceMeters: totalDistance,
             maximumSpeedMps: maxSpeed,
             finalHeartRateBPM: finalHeartRate

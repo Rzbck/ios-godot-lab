@@ -97,7 +97,7 @@ enum TrackerAutoPolicy {
         // Cycling often produces little/no pedometer cadence. If Core Motion is
         // stuck on walking but GPS clearly shows locomotion too fast for normal
         // walking and foot cadence is low, prefer cycling.
-        if speed >= 3.0, cadence < 70 {
+        if speed >= 3.0, cadence >= 35, cadence < 95 {
             return TrackerAutoDecision(
                 activity: .cycling,
                 confidence: motionTrusted ? confidence : "capteurs",
@@ -106,7 +106,22 @@ enum TrackerAutoPolicy {
             )
         }
 
-        if motionTrusted, evidence.walking {
+        // With no step cadence, only a clearly cycling-grade speed overrides
+        // a walking label. A fast run with a temporarily missing pedometer
+        // sample stays undecided instead of being mis-recorded as cycling.
+        if speed >= 5.0, cadence == 0 {
+            return TrackerAutoDecision(
+                activity: .cycling,
+                confidence: motionTrusted ? confidence : "capteurs",
+                provenance: "GPS · vélo",
+                dwellSeconds: 2.0
+            )
+        }
+
+        // A walking label at running/cycling speed is contradictory when the
+        // cadence does not resolve it. Keep the current Auto sport instead of
+        // falling back to the historical Walking default.
+        if motionTrusted, evidence.walking, speed < 3.0 {
             return TrackerAutoDecision(
                 activity: .walking,
                 confidence: confidence,
@@ -136,10 +151,12 @@ enum TrackerAutoPolicy {
         activity: ActivityKind,
         elapsedSeconds: TimeInterval,
         horizontalAccuracy: Double,
-        movementObserved: Bool
+        movementObserved: Bool,
+        motionMovementObserved: Bool = false
     ) -> Bool {
         _ = activity
         _ = elapsedSeconds
+        if motionMovementObserved { return true }
         guard movementObserved else { return false }
         return horizontalAccuracy >= 0 && horizontalAccuracy <= 30
     }

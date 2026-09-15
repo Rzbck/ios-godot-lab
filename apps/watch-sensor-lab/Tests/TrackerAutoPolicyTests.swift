@@ -60,18 +60,34 @@ final class TrackerAutoPolicyTests: XCTestCase {
         }
     }
 
-    func testWalkingFlagCannotBeatStrongCyclingGPS() {
+    func testWalkingFlagCannotBeatNoisyCyclingCadence() {
         let decision = TrackerAutoPolicy.decision(
             from: TrackerMotionEvidence(
                 walking: true,
                 confidence: .high
             ),
             speedMps: 4.2,
-            cadenceSPM: 0
+            cadenceSPM: 82
         )
 
         XCTAssertEqual(decision?.activity, .cycling)
         XCTAssertEqual(decision?.provenance, "GPS · vélo")
+    }
+
+    func testWalkingFlagNeedsCyclingGradeSpeedWhenCadenceIsMissing() {
+        let fastRunWithoutCadence = TrackerAutoPolicy.decision(
+            from: TrackerMotionEvidence(walking: true, confidence: .high),
+            speedMps: 3.8,
+            cadenceSPM: 0
+        )
+        let clearCyclingSpeed = TrackerAutoPolicy.decision(
+            from: TrackerMotionEvidence(walking: true, confidence: .high),
+            speedMps: 5.2,
+            cadenceSPM: 0
+        )
+
+        XCTAssertNil(fastRunWithoutCadence)
+        XCTAssertEqual(clearCyclingSpeed?.activity, .cycling)
     }
 
     func testWalkingFlagCannotBeatRunningCadenceAndSpeed() {
@@ -141,6 +157,18 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 elapsedSeconds: 40,
                 horizontalAccuracy: 80,
                 movementObserved: true
+            )
+        )
+    }
+
+    func testPauseArmsFromTrustedIndoorMotionWithoutGPS() {
+        XCTAssertTrue(
+            TrackerAutoPolicy.canArmPause(
+                activity: .other,
+                elapsedSeconds: 2,
+                horizontalAccuracy: 500,
+                movementObserved: false,
+                motionMovementObserved: true
             )
         )
     }

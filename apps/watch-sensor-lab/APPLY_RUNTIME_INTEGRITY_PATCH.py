@@ -86,7 +86,7 @@ watch = replace_once_or_present(
                 automaticActivityStartedAt = startedAt ?? Date()
             }
 ''',
-    "Binding cannot depend on Core Motion",
+    "WatchAutoHealthReconciler.shared.bind(to: self)",
     "watch Auto reconciler lifecycle binding",
 )
 

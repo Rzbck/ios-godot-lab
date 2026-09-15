@@ -135,9 +135,22 @@ final class WatchAutoHealthReconciler: ObservableObject {
         model.$selectedActivity.receive(on: DispatchQueue.main).sink { _ in observe() }.store(in: &cancellables)
         model.$effectiveActivity.receive(on: DispatchQueue.main).sink { _ in observe() }.store(in: &cancellables)
 
-        if !pendingPlans.isEmpty {
+        if TrackerFinishPersistencePolicy.shouldSchedulePendingPlans(
+            pendingCount: pendingPlans.count,
+            reconciliationIsActive: reconciliationTask != nil,
+            trigger: .initialBind
+        ) {
             schedulePendingReconciliation()
         }
+    }
+
+    func retryPendingPlans(after trigger: TrackerPendingPlanRetryTrigger) {
+        guard TrackerFinishPersistencePolicy.shouldSchedulePendingPlans(
+            pendingCount: pendingPlans.count,
+            reconciliationIsActive: reconciliationTask != nil,
+            trigger: trigger
+        ) else { return }
+        schedulePendingReconciliation()
     }
 
     func repairHistoricalActivity(

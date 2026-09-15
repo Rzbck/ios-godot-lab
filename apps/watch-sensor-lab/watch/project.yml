@@ -13,6 +13,7 @@ targets:
       - path: Sources
       - path: ../Shared/TrackerShared.swift
       - path: ../Shared/TrackerSessionControl.swift
+      - path: ../Shared/TrackerFinishPersistencePolicy.swift
       - path: ../Shared/TrackerAutoPolicy.swift
       - path: ../Shared/TrackerAutoResumeProbe.swift
       - path: ../Shared/TelemetryShared.swift
@@ -81,11 +82,13 @@ targets:
     sources:
       - path: ../Shared/TrackerShared.swift
       - path: ../Shared/TrackerSessionControl.swift
+      - path: ../Shared/TrackerFinishPersistencePolicy.swift
       - path: ../Shared/TrackerAutoPolicy.swift
       - path: ../Shared/TrackerAutoResumeProbe.swift
       - path: ../Tests/Support/TrackerAutomationScenario.swift
       - path: ../Tests/TrackerWorkflowContractTests.swift
       - path: ../Tests/TrackerSessionControlTests.swift
+      - path: ../Tests/TrackerFinishPersistencePolicyTests.swift
       - path: ../Tests/TrackerAutoPolicyTests.swift
       - path: ../Tests/TrackerAutomationScenarioTests.swift
     settings:

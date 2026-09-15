@@ -1,5 +1,10 @@
 # HANDOFF — Watch Sensor Lab
 
+> Ce document décrit le bootstrap historique. Pour le chantier actif Auto-pause,
+> Auto-sport et validation de fin de séance, lire d'abord
+> [`HANDOFF_AUTO_BEHAVIOR_2026-09-14.md`](HANDOFF_AUTO_BEHAVIOR_2026-09-14.md),
+> puis vérifier la branche, le SHA et les CI actuels sur GitHub.
+
 Date : **2026-09-09**
 
 ## Objectif

@@ -56,9 +56,10 @@ watch = replace_once_or_present(
     "    private var autoResumeCandidateSince: Date?\n",
     "    private var autoResumeCandidateSince: Date?\n"
     "    private var autoPauseMovementObserved = false\n"
+    "    private var autoPauseMotionObserved = false\n"
     "    private var autoResumeProbe = TrackerAutoResumeProbe()\n"
     "    private var autoResumeProbeLocation: CLLocation?\n",
-    "private var autoResumeProbe = TrackerAutoResumeProbe()",
+    "private var autoPauseMotionObserved = false",
     "watch auto-resume probe state",
 )
 
@@ -112,10 +113,11 @@ watch = replace_once_or_present(
     "        autoResumeCandidateSince = nil\n        lastMotionWasStationary = false\n",
     "        autoResumeCandidateSince = nil\n"
     "        autoPauseMovementObserved = false\n"
+    "        autoPauseMotionObserved = false\n"
     "        autoResumeProbe.reset()\n"
     "        autoResumeProbeLocation = nil\n"
     "        lastMotionWasStationary = false\n",
-    "autoPauseMovementObserved = false\n        autoResumeProbe.reset()",
+    "autoPauseMovementObserved = false\n        autoPauseMotionObserved = false",
     "watch reset probe on new session",
 )
 
@@ -128,13 +130,14 @@ watch = replace_once_or_present(
             activity: displayActivity,
             elapsedSeconds: elapsedSeconds,
             horizontalAccuracy: horizontalAccuracy,
-            movementObserved: autoPauseMovementObserved
+            movementObserved: autoPauseMovementObserved,
+            motionMovementObserved: autoPauseMotionObserved
         ) else {
             cancelPendingAutoPause()
             return
         }
 ''',
-    "movementObserved: autoPauseMovementObserved",
+    "motionMovementObserved: autoPauseMotionObserved",
     "watch auto pause arming guard",
 )
 
@@ -213,6 +216,16 @@ watch = replace_block_or_present(
 ''',
     '"probe_speed_mps": resumeSpeed',
     "watch auto resume uses GPS probe",
+)
+
+watch = replace_once_or_present(
+    watch,
+    "            self.lastMotionCandidate = rawMotionCandidate\n\n            if activity.stationary {\n",
+    "            self.lastMotionCandidate = rawMotionCandidate\n"
+    "            if rawMotionCandidate != nil { autoPauseMotionObserved = true }\n\n"
+    "            if activity.stationary {\n",
+    "if rawMotionCandidate != nil { autoPauseMotionObserved = true }",
+    "watch arm auto pause after motion evidence",
 )
 
 watch = replace_once_or_present(
@@ -428,6 +441,7 @@ watch_after = WATCH.read_text(encoding="utf-8")
 iphone_after = IPHONE.read_text(encoding="utf-8")
 for token in [
     "autoPauseMovementObserved",
+    "autoPauseMotionObserved",
     "TrackerAutoPolicy.canArmPause(",
     "autoResumeProbe.recentSpeedMps(",
     "observeAutoResumeLocation(_ location: CLLocation)",

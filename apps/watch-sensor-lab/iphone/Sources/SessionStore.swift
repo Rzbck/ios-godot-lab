@@ -243,6 +243,8 @@ final class NativeSessionStore {
         var coordinates: [CLLocationCoordinate2D] = []
         coordinates.reserveCapacity(2_000)
 
+        var forcedFinalActivity: ActivityKind?
+
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(line).data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -364,6 +366,13 @@ final class NativeSessionStore {
             let payload = object["payload"] as? [String: Any] ?? [:]
             let date = Date(timeIntervalSince1970: timestamp)
 
+            if let forced = TrackerFinishPersistencePolicy.forcedFinalActivity(
+                event: event,
+                payload: payload
+            ) {
+                forcedFinalActivity = forced
+            }
+
             let nextActivity: String?
             switch event {
             case "multisport_transition_started":
@@ -382,6 +391,19 @@ final class NativeSessionStore {
         }
 
         closeSegment(at: summary.endedAt, nextActivity: nil)
+
+        if let forcedFinalActivity {
+            return [
+                TrackerSegmentSummary(
+                    id: "0-\(forcedFinalActivity.rawValue)",
+                    activity: forcedFinalActivity.rawValue,
+                    startedAt: summary.startedAt,
+                    endedAt: summary.endedAt,
+                    distanceMeters: summary.distanceMeters,
+                    activeEnergyKcal: summary.activeEnergyKcal
+                )
+            ]
+        }
 
         if segments.count == 1, segments[0].distanceMeters == nil {
             let only = segments[0]

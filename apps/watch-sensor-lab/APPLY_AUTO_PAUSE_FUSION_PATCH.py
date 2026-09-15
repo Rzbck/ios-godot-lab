@@ -115,6 +115,22 @@ watch = replace_once_or_present(
     "watch reject unproven startup GPS jitter",
 )
 
+# Auto-resume needs a live GPS probe while HealthKit's workout is paused. The
+# default Core Location policy may stop delivery as soon as the wearer stops,
+# leaving the Watch with no signal from which it can detect movement again.
+watch = replace_once_or_present(
+    watch,
+    '''        locationManager.distanceFilter = 1.0
+        locationManager.allowsBackgroundLocationUpdates = true
+''',
+    '''        locationManager.distanceFilter = 1.0
+        locationManager.allowsBackgroundLocationUpdates = true
+        locationManager.pausesLocationUpdatesAutomatically = false
+''',
+    "locationManager.pausesLocationUpdatesAutomatically = false",
+    "watch keep GPS probe alive during auto pause",
+)
+
 watch = replace_once_or_present(
     watch,
     '''        if reason == "auto" {
@@ -425,6 +441,7 @@ for token in [
     'lastAutoResumeDecisionReason = decision.reason',
     "lastCadenceEvidenceAt = .distantPast",
     "let startupGPSJitter = !autoPauseMovementObserved",
+    "locationManager.pausesLocationUpdatesAutomatically = false",
     "// FUSION_LEGACY_SAFETY_MARKERS",
 ]:
     if token not in watch:

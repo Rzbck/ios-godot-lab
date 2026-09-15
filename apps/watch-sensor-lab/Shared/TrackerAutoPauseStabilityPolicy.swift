@@ -3,8 +3,8 @@ import Foundation
 /// Conservative, platform-neutral stop detection for Watch auto-pause.
 ///
 /// False pauses are more disruptive than slightly late pauses, so production
-/// requires stationary Core Motion evidence plus sport-specific low-motion
-/// evidence. Unsupported activities fail closed and keep recording.
+/// requires corroborated stillness plus sport-specific low-motion evidence.
+/// Unsupported activities fail closed and keep recording.
 enum TrackerAutoPauseStabilityPolicy {
     static func supports(_ activity: ActivityKind) -> Bool {
         switch activity {
@@ -31,8 +31,8 @@ enum TrackerAutoPauseStabilityPolicy {
         switch activity {
         case .walking, .hiking:
             // A fresh moving speed vetoes pause. An old filtered speed is not
-            // evidence that the person is still moving: stationary Core Motion
-            // plus essentially absent cadence may still arm the dwell.
+            // evidence that the person is still moving. The caller supplies a
+            // fused stillness signal from Core Motion and Watch inertial data.
             return (!speedFresh || speed <= 0.35) && cadence < 10
 
         case .running, .trackAndField:
@@ -40,7 +40,7 @@ enum TrackerAutoPauseStabilityPolicy {
 
         case .cycling, .handCycling:
             // CMPedometer is not cycling cadence. A fresh moving GPS speed is a
-            // veto; stale speed is unknown and cannot override stationary motion.
+            // veto; stale speed is unknown and cannot override fused stillness.
             return !speedFresh || speed <= 0.40
 
         default:
@@ -114,5 +114,53 @@ enum TrackerAutoPauseStabilityPolicy {
         default:
             return 10.0
         }
+    }
+}
+
+/// Raw Watch inertial fallback for the field case where CMMotionActivity keeps
+/// reporting `.walking` while the wearer is physically stopped.
+///
+/// This is deliberately only a stillness *vote*. The production pause policy
+/// still requires low sport-specific speed/cadence for its full dwell, so a
+/// quiet wrist sample alone can never pause a workout.
+enum TrackerInertialStillnessPolicy {
+    static let windowDuration: TimeInterval = 3.0
+    static let minimumCoverage: TimeInterval = 2.5
+    static let minimumQuietFraction = 0.80
+    static let minimumSamples = 8
+    static let sampleFreshness: TimeInterval = 1.0
+    static let maxAccelerationNormDeviationG = 0.04
+    static let maxGyroNormRadPerSecond = 0.35
+
+    static func isQuietSample(
+        accelX: Double,
+        accelY: Double,
+        accelZ: Double,
+        gyroX: Double,
+        gyroY: Double,
+        gyroZ: Double
+    ) -> Bool {
+        let accelerationNorm = sqrt(
+            accelX * accelX + accelY * accelY + accelZ * accelZ
+        )
+        let gyroNorm = sqrt(
+            gyroX * gyroX + gyroY * gyroY + gyroZ * gyroZ
+        )
+
+        return abs(accelerationNorm - 1.0) <= maxAccelerationNormDeviationG
+            && gyroNorm <= maxGyroNormRadPerSecond
+    }
+
+    static func isStill(
+        windowCoverage: TimeInterval,
+        quietSamples: Int,
+        totalSamples: Int
+    ) -> Bool {
+        guard windowCoverage >= minimumCoverage,
+              totalSamples >= minimumSamples,
+              quietSamples >= 0,
+              quietSamples <= totalSamples else { return false }
+
+        return Double(quietSamples) / Double(totalSamples) >= minimumQuietFraction
     }
 }

@@ -223,24 +223,29 @@ enum TrackerAutoPolicy {
         let speedThreshold: Double
         let strongSoloSpeedThreshold: Double
         let cadenceThreshold: Double?
+        let strongSoloCadenceThreshold: Double?
 
         switch activity {
         case .walking, .hiking:
             speedThreshold = 0.65
             strongSoloSpeedThreshold = 1.0
             cadenceThreshold = 32
+            strongSoloCadenceThreshold = 60
         case .running, .trackAndField:
             speedThreshold = 1.0
             strongSoloSpeedThreshold = 1.6
             cadenceThreshold = 60
+            strongSoloCadenceThreshold = 90
         case .cycling, .handCycling:
             speedThreshold = 1.1
             strongSoloSpeedThreshold = 2.0
             cadenceThreshold = nil
+            strongSoloCadenceThreshold = nil
         default:
             speedThreshold = 0.6
             strongSoloSpeedThreshold = 1.2
             cadenceThreshold = nil
+            strongSoloCadenceThreshold = 70
         }
 
         let gpsMoving = evidence.gpsFresh
@@ -310,6 +315,20 @@ enum TrackerAutoPolicy {
             return TrackerAutoResumeDecision(
                 shouldResume: true,
                 reason: "strong_sustained_gps",
+                agreeingEvidenceCount: 1
+            )
+        }
+
+        // A high cadence observed after the auto-pause is direct, fresh Watch
+        // movement evidence. It is deliberately stronger than the normal
+        // cadence threshold so an old or incidental sample cannot restart a
+        // workout when GPS and activity classification are unavailable.
+        if let strongSoloCadenceThreshold,
+           evidence.cadenceFresh,
+           cadence >= strongSoloCadenceThreshold {
+            return TrackerAutoResumeDecision(
+                shouldResume: true,
+                reason: "strong_fresh_cadence",
                 agreeingEvidenceCount: 1
             )
         }

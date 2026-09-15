@@ -17,6 +17,10 @@ auto_policy = (
     root / "Shared/TrackerAutoPolicy.swift"
 ).read_text(encoding="utf-8")
 
+auto_pause_stability_policy = (
+    root / "Shared/TrackerAutoPauseStabilityPolicy.swift"
+).read_text(encoding="utf-8")
+
 iphone_model = (
     root / "iphone/Sources/TrackerModel.swift"
 ).read_text(encoding="utf-8")
@@ -206,6 +210,7 @@ for forbidden in [
 for name, source in [
     ("TrackerSessionControl", session_control),
     ("TrackerAutoPolicy", auto_policy),
+    ("TrackerAutoPauseStabilityPolicy", auto_pause_stability_policy),
 ]:
     for forbidden_import in [
         "import HealthKit",
@@ -239,8 +244,19 @@ for token in [
         errors.append(f"Noyau Auto déterministe incomplet: {token}")
 
 for token in [
+    "TrackerAutoPauseStabilityPolicy",
+    "supports(",
+    "shouldStagePause",
+    "pauseDwell",
+    "resumeDwell",
+    "repauseCooldown",
+]:
+    if token not in auto_pause_stability_policy:
+        errors.append(f"Noyau stabilité Auto-Pause incomplet: {token}")
+
+for token in [
     "TrackerAutoPolicy.decision",
-    "TrackerAutoPolicy.shouldStagePause",
+    "TrackerAutoPauseStabilityPolicy.shouldStagePause",
     "TrackerAutoPolicy.shouldStageResume",
 ]:
     if token not in watch_auto_policy:
@@ -261,17 +277,14 @@ for token in [
     if token not in watch_model:
         errors.append(f"Watch auto-resume fusion incomplète: {token}")
 
-# The product has one Auto-Pause toggle. Its short internal dwell is
-# stabilization, never a duration the person configures. Check the actual
-# settings surfaces so a refactor cannot bring back per-sport sliders.
+# The product has one Auto-Pause toggle. Internal dwell/hysteresis are
+# implementation details, never durations exposed as user-configurable controls.
 for surface, source in [
     ("iPhone", iphone_settings),
     ("Watch", watch_auto_pause_settings),
 ]:
     if "Pause automatique" not in source and "Pause auto adaptative" not in source:
         errors.append(f"{surface} sans contrôle maître de pause automatique")
-    if "Aucun délai à régler" not in source:
-        errors.append(f"{surface} réintroduit une configuration de délai Auto")
 
 iphone_settings_body = iphone_settings.split("struct TrackerSettingsView", 1)[-1]
 watch_settings_body = watch_auto_pause_settings.split("struct WatchAutoPauseSettingsView", 1)[-1]
@@ -279,7 +292,7 @@ for surface, source in [
     ("iPhone", iphone_settings_body),
     ("Watch", watch_settings_body),
 ]:
-    for forbidden in ["Slider(", "Stepper(", "pauseDwell", "resumeDwell"]:
+    for forbidden in ["Slider(", "Stepper(", "pauseDwell", "resumeDwell", "repauseCooldown"]:
         if forbidden in source:
             errors.append(
                 f"{surface} expose encore un réglage de délai Auto: {forbidden}"
@@ -302,6 +315,7 @@ required_test_files = [
     root / "Tests/TrackerWorkflowContractTests.swift",
     root / "Tests/TrackerSessionControlTests.swift",
     root / "Tests/TrackerAutoPolicyTests.swift",
+    root / "Tests/TrackerAutoPauseStabilityPolicyTests.swift",
     root / "Tests/Support/TrackerAutomationScenario.swift",
     root / "Tests/TrackerAutomationScenarioTests.swift",
 ]
@@ -349,6 +363,10 @@ if iphone_project.count("../Shared/TrackerAutoPolicy.swift") < 2:
     errors.append("TrackerAutoPolicy absent de l'app iPhone ou de ses tests")
 if "../Shared/TrackerAutoPolicy.swift" not in watch_project:
     errors.append("TrackerAutoPolicy absent de la target Watch")
+if "../Shared/TrackerAutoPauseStabilityPolicy.swift" not in watch_project:
+    errors.append("TrackerAutoPauseStabilityPolicy absent de la target Watch")
+if "../Tests/TrackerAutoPauseStabilityPolicyTests.swift" not in watch_project:
+    errors.append("Tests stabilité Auto-Pause absents de la target Watch")
 
 selftest_client = root / "WSL_SELFTEST.ps1"
 if not selftest_client.is_file():
@@ -419,7 +437,7 @@ for capability in required_capabilities:
     print(f" - {capability}")
 print("Finish review UI: iPhone + Watch preserve/choose/confirm surfaces present")
 print("Session control: exact-token ACK + Watch revision guard")
-print("Deterministic cores: session-control + Auto policy are platform independent")
+print("Deterministic cores: session-control + Auto classification/resume + conservative Auto-Pause stability")
 print("Synthetic replay: versioned virtual-time scenarios present")
 print("USB self-test: read-only, no HealthKit/workout/session-store mutation")
 print("Finish UI automation: real production SwiftUI views + sensor-free fake models")

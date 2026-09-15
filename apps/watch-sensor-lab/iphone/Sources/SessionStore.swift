@@ -243,8 +243,6 @@ final class NativeSessionStore {
         var coordinates: [CLLocationCoordinate2D] = []
         coordinates.reserveCapacity(2_000)
 
-        var forcedFinalActivity: ActivityKind?
-
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = String(line).data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -292,6 +290,7 @@ final class NativeSessionStore {
         var hasWatchDistanceAtSegmentStart = true
         var hasPhoneDistanceAtSegmentStart = true
         var segments: [TrackerSegmentSummary] = []
+        var forcedFinalActivity: ActivityKind?
 
         func distanceForCurrentSegment() -> Double? {
             if hasWatchDistanceAtSegmentStart, let currentWatchDistance {

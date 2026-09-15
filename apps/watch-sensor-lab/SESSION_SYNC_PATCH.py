@@ -28,7 +28,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     # Candidate scripts may be invoked by CI and again by Xcode pre-build.
     # Treat their exact replacement as the idempotence marker instead of
     # requiring the pre-patch text on every pass.
-    if old not in text:
+    if new in text or old not in text:
         return text
     count = text.count(old)
     if count != 1:
@@ -432,5 +432,14 @@ for path, tokens in {
     missing = [token for token in tokens if token not in content]
     if missing:
         raise SystemExit(f"session-sync generated source missing {path.name} tokens: {missing}")
+
+iphone_content = IPHONE.read_text(encoding="utf-8")
+for declaration in [
+    "private var pendingControlToken: String?",
+    "private static func makeControlCommand(",
+    "private static func parseControlAcknowledgement(",
+]:
+    if iphone_content.count(declaration) != 1:
+        raise SystemExit(f"session-sync generated source duplicated {declaration!r}")
 
 print("TRACKER BUILD PATCH CHAIN: OK")

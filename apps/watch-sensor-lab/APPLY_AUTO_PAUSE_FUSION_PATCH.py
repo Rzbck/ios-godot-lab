@@ -367,8 +367,6 @@ watch = replace_block_or_present(
 
         stageAutoResumeIfNeeded()
     }
-
-    private func sendMotionIfNeeded() {
 ''',
     '"speed_accuracy_mps": location.speedAccuracy',
     "watch resume probe quality telemetry",
@@ -406,6 +404,9 @@ for token in [
 ]:
     if token not in watch:
         raise SystemExit(f"auto-pause fusion generated source missing token: {token}")
+
+if watch.count("    private func sendMotionIfNeeded() {") != 1:
+    raise SystemExit("auto-pause fusion duplicated sendMotionIfNeeded")
 
 WATCH.write_text(watch, encoding="utf-8")
 print("AUTO PAUSE SENSOR FUSION PATCH: OK")

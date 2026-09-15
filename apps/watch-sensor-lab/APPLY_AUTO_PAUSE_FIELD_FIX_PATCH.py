@@ -223,7 +223,8 @@ watch = replace_once_or_present(
     watch,
     '''                lastAutoPauseSpeedEvidenceAt = location.timestamp // AUTO_PAUSE_SPEED_EVIDENCE_MOVING
 ''',
-    '''                if TrackerAutoPauseStabilityPolicy.speedSampleIsReliableForMovementVeto( // AUTO_PAUSE_RELIABLE_MOVING_SPEED_STAMP
+    '''                // AUTO_PAUSE_SPEED_EVIDENCE_MOVING
+                if TrackerAutoPauseStabilityPolicy.speedSampleIsReliableForMovementVeto( // AUTO_PAUSE_RELIABLE_MOVING_SPEED_STAMP
                     nativeSpeedMps: location.speed,
                     speedAccuracyMps: location.speedAccuracy,
                     deltaMeters: delta,
@@ -241,7 +242,8 @@ watch = replace_once_or_present(
     watch,
     '''                    lastAutoPauseSpeedEvidenceAt = location.timestamp // AUTO_PAUSE_SPEED_EVIDENCE_LOW_MOTION
 ''',
-    '''                    if TrackerAutoPauseStabilityPolicy.speedSampleIsReliableForMovementVeto( // AUTO_PAUSE_RELIABLE_LOW_MOTION_SPEED_STAMP
+    '''                    // AUTO_PAUSE_SPEED_EVIDENCE_LOW_MOTION
+                    if TrackerAutoPauseStabilityPolicy.speedSampleIsReliableForMovementVeto( // AUTO_PAUSE_RELIABLE_LOW_MOTION_SPEED_STAMP
                         nativeSpeedMps: location.speed,
                         speedAccuracyMps: location.speedAccuracy,
                         deltaMeters: delta,

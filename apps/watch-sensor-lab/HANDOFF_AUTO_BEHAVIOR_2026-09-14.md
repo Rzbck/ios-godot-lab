@@ -17,6 +17,14 @@ Le HEAD de la branche peut contenir des commits documentaires ou de garde-fou
 postérieurs. L'IPA à tester est celle du SHA candidat indiqué ci-dessus ;
 toujours vérifier Git/GitHub réels avant reprise.
 
+Dernière vérification de branche : `0099bf50ab36bc1266fcff0940aa8d434a8d39ab`
+(`test: guard adaptive auto-pause settings`) est vert en build
+[`34919958760`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34919958760)
+et tests [`34919958710`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34919958710).
+Ce commit ne modifie pas la politique candidate : il retire une ancienne
+propriété de délai inutilisée et empêche le retour de sliders de délai dans
+les réglages iPhone/Watch. Aucun nouvel artifact matériel n'est requis.
+
 ## Changements du chantier
 
 - un seul contrôle utilisateur `Pause automatique` ; les profils et délais réglables ont disparu de l'interface ;

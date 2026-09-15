@@ -26,7 +26,8 @@ def apply(script: str) -> None:
 # comes next, then sensor fusion, runtime wake-up/anti-oscillation, evidence
 # freshness, raw Watch inertial stillness + HealthKit Auto typing, and finally
 # the field-proven single-owner pause decision + durable diagnostics repair.
-# Every stage remains idempotent because CI and Xcode may apply the chain twice.
+# The field repair preserves the earlier freshness integration markers so the
+# complete chain remains safe to execute repeatedly in CI and Xcode builds.
 apply("SESSION_SYNC_PATCH.py")
 apply("APPLY_AUTO_BEHAVIOR_PATCH.py")
 apply("APPLY_AUTO_PAUSE_FUSION_PATCH.py")

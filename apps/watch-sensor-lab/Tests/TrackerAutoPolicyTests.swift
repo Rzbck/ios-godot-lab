@@ -214,6 +214,7 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 speedMps: 1.0,
                 cadenceSPM: 90,
                 motionCandidate: .running,
+                gpsEvidenceConfirmed: false,
                 motionEvidenceFresh: true,
                 cadenceEvidenceFresh: true
             )
@@ -252,7 +253,9 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 speedMps: 3.0,
                 cadenceSPM: 0,
                 motionCandidate: nil,
-                gpsEvidenceConfirmed: true
+                gpsEvidenceConfirmed: true,
+                motionEvidenceFresh: false,
+                cadenceEvidenceFresh: false
             )
         )
 
@@ -264,7 +267,9 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 speedMps: 2.2,
                 cadenceSPM: 0,
                 motionCandidate: nil,
-                gpsEvidenceConfirmed: true
+                gpsEvidenceConfirmed: true,
+                motionEvidenceFresh: false,
+                cadenceEvidenceFresh: false
             )
         )
     }

@@ -33,7 +33,22 @@ apply("APPLY_AUTO_BEHAVIOR_PATCH.py")
 apply("APPLY_AUTO_PAUSE_FUSION_PATCH.py")
 apply("APPLY_AUTO_RESUME_RUNTIME_PATCH.py")
 apply("APPLY_AUTO_PAUSE_EVIDENCE_FRESHNESS_PATCH.py")
-apply("APPLY_AUTO_PAUSE_INERTIAL_HEALTHKIT_PATCH.py")
+watch_path = ROOT / "watch/Sources/SensorModel.swift"
+watch_text = watch_path.read_text(encoding="utf-8") if watch_path.is_file() else ""
+
+field_fix_applied = (
+    "AUTO_PAUSE_FIELD_FUSED_STAGE" in watch_text
+    and "AUTO_PAUSE_FIELD_FUSED_CONFIRM" in watch_text
+)
+
+if field_fix_applied:
+    print(
+        "[generated-source-chain] "
+        "APPLY_AUTO_PAUSE_INERTIAL_HEALTHKIT_PATCH.py "
+        "(covered by field fix)"
+    )
+else:
+    apply("APPLY_AUTO_PAUSE_INERTIAL_HEALTHKIT_PATCH.py")
 apply("APPLY_AUTO_PAUSE_FIELD_FIX_PATCH.py")
 
 print("WATCH SENSOR LAB GENERATED SOURCE CHAIN: OK")

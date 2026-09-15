@@ -10,6 +10,7 @@ on:
       - 'apps/watch-sensor-lab/**'
       - '.github/workflows/watch-sensor-lab-tests.yml'
       - '.github/workflows/watch-sensor-lab-bootstrap.yml'
+      - '.github/workflows/watch-sensor-lab-bootstrap.yml'
   push:
     branches:
       - main

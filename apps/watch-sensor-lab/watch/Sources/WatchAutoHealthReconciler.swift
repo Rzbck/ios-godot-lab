@@ -1581,6 +1581,35 @@ final class WatchAutoHealthReconciler: ObservableObject {
             throw error
         }
 
+        // HealthKit writes are asynchronous. Prove that every replacement is
+        // queryable before deleting the only original workout. A failure here
+        // rolls back the replacements and leaves the original intact, which is
+        // the recoverable side of this transaction.
+        do {
+            let visibleWorkouts = try await sessionWorkouts(sessionID: plan.sessionID)
+            let visibleWorkoutIDs = Set(visibleWorkouts.map { $0.uuid })
+            let expectedWorkoutIDs = Set(createdWorkouts.map { $0.uuid })
+            guard expectedWorkoutIDs.isSubset(of: visibleWorkoutIDs) else {
+                throw ReconcileError.operation(
+                    "un segment reconstruit n’est pas durable avant suppression du conteneur original"
+                )
+            }
+
+            if !createdRoutes.isEmpty {
+                let visibleRoutes = try await sessionRouteObjects(sessionID: plan.sessionID)
+                let visibleRouteIDs = Set(visibleRoutes.map { $0.uuid })
+                let expectedRouteIDs = Set(createdRoutes.map { $0.uuid })
+                guard expectedRouteIDs.isSubset(of: visibleRouteIDs) else {
+                    throw ReconcileError.operation(
+                        "un parcours reconstruit n’est pas durable avant suppression du parcours original"
+                    )
+                }
+            }
+        } catch {
+            try? await deleteObjects(createdRoutes + createdWorkouts)
+            throw error
+        }
+
         do {
             try await deleteObjects([original])
         } catch {

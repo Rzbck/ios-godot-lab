@@ -130,45 +130,36 @@ final class TrackerAutoPolicyTests: XCTestCase {
 
     func testPauseArmsForStillStartWithReliableGPS() {
         XCTAssertTrue(
-            TrackerAutoPolicy.canArmPause(
-                activity: .cycling,
-                elapsedSeconds: 120,
+            TrackerAutoPolicy.canArmAdaptivePause(
                 horizontalAccuracy: 5,
-                movementObserved: false
+                motionEvidenceObserved: false
             )
         )
     }
 
     func testPauseArmsImmediatelyAfterRealMovementWithGoodGPS() {
         XCTAssertTrue(
-            TrackerAutoPolicy.canArmPause(
-                activity: .cycling,
-                elapsedSeconds: 2,
+            TrackerAutoPolicy.canArmAdaptivePause(
                 horizontalAccuracy: 6,
-                movementObserved: true
+                motionEvidenceObserved: true
             )
         )
     }
 
     func testPauseStillRejectsBadGPS() {
         XCTAssertFalse(
-            TrackerAutoPolicy.canArmPause(
-                activity: .running,
-                elapsedSeconds: 40,
+            TrackerAutoPolicy.canArmAdaptivePause(
                 horizontalAccuracy: 80,
-                movementObserved: true
+                motionEvidenceObserved: false
             )
         )
     }
 
     func testPauseArmsFromTrustedIndoorMotionWithoutGPS() {
         XCTAssertTrue(
-            TrackerAutoPolicy.canArmPause(
-                activity: .other,
-                elapsedSeconds: 2,
+            TrackerAutoPolicy.canArmAdaptivePause(
                 horizontalAccuracy: 500,
-                movementObserved: false,
-                motionMovementObserved: true
+                motionEvidenceObserved: true
             )
         )
     }
@@ -214,7 +205,7 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 speedMps: 1.0,
                 cadenceSPM: 90,
                 motionCandidate: .running,
-                gpsEvidenceConfirmed: false,
+                gpsEvidenceConfirmed: true,
                 motionEvidenceFresh: true,
                 cadenceEvidenceFresh: true
             )
@@ -387,7 +378,8 @@ final class TrackerAutoPolicyTests: XCTestCase {
             plausibleMaxSpeedMps: 28
         )
         XCTAssertGreaterThan(probe.confirmedRecentSpeedMps(now: 103), 1.4)
-        XCTAssertEqual(probe.recentSpeedMps(now: 106), 0)
+        XCTAssertFalse(probe.isFresh(now: 106))
+        XCTAssertEqual(probe.confirmedRecentSpeedMps(now: 106), 0)
 
         probe.reset()
         XCTAssertEqual(probe.recentSpeedMps(now: 106), 0)

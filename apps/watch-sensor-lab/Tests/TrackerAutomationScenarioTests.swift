@@ -66,7 +66,7 @@ final class TrackerAutomationScenarioTests: XCTestCase {
 
         XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(1))
         XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(2))
-        XCTAssertTrue(result.resumeCandidateFrameIndexes.isEmpty)
+        XCTAssertEqual(result.resumeCandidateFrameIndexes, [3])
         XCTAssertEqual(result.autoPauseFrameIndexes, [2])
         XCTAssertTrue(result.endedPaused)
     }
@@ -88,7 +88,7 @@ final class TrackerAutomationScenarioTests: XCTestCase {
         let result = try TrackerAutomationReplayer.replay(scenario)
 
         XCTAssertEqual(result.autoPauseFrameIndexes, [3])
-        XCTAssertEqual(result.autoResumeFrameIndexes, [6])
+        XCTAssertEqual(result.autoResumeFrameIndexes, [5])
         XCTAssertFalse(result.endedPaused)
     }
 

@@ -54,13 +54,20 @@ watch = replace_once_or_present(
     "watch resume decision state",
 )
 
-# Any trusted Core Motion callback is real evidence. Stationary at workout
-# startup must be able to arm auto-pause without requiring fake movement first.
+# Keep the older safety-patch movement marker intact so the complete generated
+# chain remains idempotent. Add stationary as trusted Motion evidence inside its
+# own branch instead: startup immobility can arm pause without rewriting the
+# safety patch's marker on the first pass.
 watch = replace_once_or_present(
     watch,
-    "            if rawMotionCandidate != nil { autoPauseMotionObserved = true }\n",
-    "            autoPauseMotionObserved = true\n",
-    "            autoPauseMotionObserved = true\n",
+    '''            if activity.stationary {
+                self.lastMotionWasStationary = true
+''',
+    '''            if activity.stationary {
+                autoPauseMotionObserved = true
+                self.lastMotionWasStationary = true
+''',
+    "if activity.stationary {\n                autoPauseMotionObserved = true",
     "watch stationary motion may arm pause",
 )
 
@@ -376,6 +383,7 @@ watch = replace_block_or_present(
 # the fused policy, not the previous stale-cadence/single-signal version.
 for token in [
     "TrackerAutoPolicy.canArmAdaptivePause(",
+    "if activity.stationary {\n                autoPauseMotionObserved = true",
     "private func currentAutoResumeEvidence(now: Date)",
     "speedAccuracyMps: location.speedAccuracy",
     '"gps_sustained": evidence.gpsSustained',

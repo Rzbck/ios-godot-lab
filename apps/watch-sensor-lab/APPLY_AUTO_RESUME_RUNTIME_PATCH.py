@@ -3,8 +3,7 @@
 
 Runs after the existing auto-pause fusion patch. It fixes the hardware failure
 where auto-pause succeeds but the workout never resumes because fresh paused
-pedometer evidence is recorded without re-evaluating the resume policy, and
-Core Location may independently pause its standard location service.
+pedometer evidence is recorded without re-evaluating the resume policy.
 
 The patch is fail-closed and idempotent. During an automatic pause, sensor
 updates are resume evidence only: canonical route, distance, elevation and step
@@ -129,32 +128,6 @@ watch = replace_once_or_present(
     "watch resume must reset pedometer baseline",
 )
 
-# The standard Core Location service is allowed to pause itself. Apple requires
-# the delegate to restart it when the app still needs live fixes. Do that for an
-# active workout and for the read-only GPS resume probe of an automatic pause.
-watch = replace_once_or_present(
-    watch,
-    '''    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-''',
-    '''    func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.sendEvent("location_updates_paused_by_system", payload: [
-                "phase": self.phase.rawValue,
-                "auto_paused": self.autoPaused,
-            ])
-            guard self.phase == .active || (self.phase == .paused && self.autoPaused) else { return }
-            // AUTO_RESUME_RESTART_SYSTEM_PAUSED_LOCATION
-            manager.startUpdatingLocation()
-        }
-    }
-
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-''',
-    "// AUTO_RESUME_RESTART_SYSTEM_PAUSED_LOCATION",
-    "watch Core Location auto-pause must be restarted",
-)
-
 for token in [
     "// AUTO_RESUME_RUNTIME_TIMER",
     "// AUTO_RESUME_PEDOMETER_PROBE_ONLY",
@@ -162,8 +135,6 @@ for token in [
     '"canonical_steps_unchanged": true',
     "self.stageAutoResumeIfNeeded()",
     "// AUTO_RESUME_RESET_PEDOMETER_BASELINE",
-    "func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager)",
-    "// AUTO_RESUME_RESTART_SYSTEM_PAUSED_LOCATION",
 ]:
     if token not in watch:
         raise SystemExit(f"auto-resume runtime generated source missing token: {token}")
@@ -172,8 +143,8 @@ if watch.count("// AUTO_RESUME_RUNTIME_TIMER") != 1:
     raise SystemExit("auto-resume runtime duplicated timer integration")
 if watch.count("// AUTO_RESUME_PEDOMETER_PROBE_ONLY") != 1:
     raise SystemExit("auto-resume runtime duplicated pedometer probe integration")
-if watch.count("func locationManagerDidPauseLocationUpdates(_ manager: CLLocationManager)") != 1:
-    raise SystemExit("auto-resume runtime duplicated Core Location pause delegate")
+if watch.count("// AUTO_RESUME_RESET_PEDOMETER_BASELINE") != 1:
+    raise SystemExit("auto-resume runtime duplicated pedometer baseline reset")
 
 WATCH.write_text(watch, encoding="utf-8")
 print("AUTO RESUME RUNTIME PATCH: OK")

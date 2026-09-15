@@ -862,7 +862,9 @@ final class SensorModel: NSObject, ObservableObject {
         activityManager.startActivityUpdates(to: .main) { [weak self] activity in
             guard let self, let activity, self.running else { return }
             guard activity.confidence != .low else { return }
-            self.lastMotionEvidenceAt = Date()
+            // Core Motion can deliver a delayed classification. Its original
+            // timestamp, rather than callback arrival, decides freshness.
+            self.lastMotionEvidenceAt = activity.startDate
 
             let rawMotionCandidate: ActivityKind?
             if activity.running { rawMotionCandidate = .running }
@@ -1242,7 +1244,9 @@ final class SensorModel: NSObject, ObservableObject {
                 guard let data else { return }
                 self.steps = self.pedometerBaseSteps + data.numberOfSteps.intValue
                 self.cadenceSPM = max(0, (data.currentCadence?.doubleValue ?? 0) * 60)
-                self.lastCadenceEvidenceAt = Date()
+                // A delayed CMPedometer callback must not make an old cadence
+                // look fresh after an auto-pause.
+                self.lastCadenceEvidenceAt = data.endDate
                 var payload: [String: Any] = ["steps": self.steps]
                 if self.cadenceSPM > 0 { payload["cadence_spm"] = self.cadenceSPM }
                 if let pace = data.currentPace?.doubleValue { payload["pace_s_per_m"] = pace }

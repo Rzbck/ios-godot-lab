@@ -420,7 +420,9 @@ private enum SelfTestRunner {
                 stationary: false,
                 speedMps: 1.0,
                 cadenceSPM: 80,
-                motionCandidate: .walking
+                motionCandidate: .walking,
+                motionEvidenceFresh: true,
+                cadenceEvidenceFresh: true
             ),
             detail: "Walking movement did not stage resume"
         )

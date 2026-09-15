@@ -128,8 +128,8 @@ final class TrackerAutoPolicyTests: XCTestCase {
         )
     }
 
-    func testPauseCannotArmBeforeRealMovement() {
-        XCTAssertFalse(
+    func testPauseArmsForStillStartWithReliableGPS() {
+        XCTAssertTrue(
             TrackerAutoPolicy.canArmPause(
                 activity: .cycling,
                 elapsedSeconds: 120,
@@ -212,8 +212,10 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 enabled: true,
                 stationary: false,
                 speedMps: 1.0,
-                cadenceSPM: 0,
-                motionCandidate: .running
+                cadenceSPM: 90,
+                motionCandidate: .running,
+                motionEvidenceFresh: true,
+                cadenceEvidenceFresh: true
             )
         )
     }
@@ -249,7 +251,8 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 stationary: true,
                 speedMps: 3.0,
                 cadenceSPM: 0,
-                motionCandidate: nil
+                motionCandidate: nil,
+                gpsEvidenceConfirmed: true
             )
         )
 
@@ -260,7 +263,8 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 stationary: true,
                 speedMps: 2.2,
                 cadenceSPM: 0,
-                motionCandidate: nil
+                motionCandidate: nil,
+                gpsEvidenceConfirmed: true
             )
         )
     }
@@ -274,6 +278,54 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 speedMps: 0,
                 cadenceSPM: 0,
                 motionCandidate: .cycling
+            )
+        )
+    }
+
+    func testFrozenCadenceCannotResumeAfterAutoPause() {
+        XCTAssertFalse(
+            TrackerAutoPolicy.shouldStageResume(
+                activity: .walking,
+                enabled: true,
+                stationary: false,
+                speedMps: 0,
+                cadenceSPM: 113,
+                motionCandidate: nil,
+                gpsEvidenceConfirmed: false,
+                motionEvidenceFresh: false,
+                cadenceEvidenceFresh: false
+            )
+        )
+    }
+
+    func testSingleFreshMotionCallbackCannotResume() {
+        XCTAssertFalse(
+            TrackerAutoPolicy.shouldStageResume(
+                activity: .running,
+                enabled: true,
+                stationary: false,
+                speedMps: 0,
+                cadenceSPM: 0,
+                motionCandidate: .running,
+                gpsEvidenceConfirmed: false,
+                motionEvidenceFresh: true,
+                cadenceEvidenceFresh: false
+            )
+        )
+    }
+
+    func testFreshMotionAndCadenceCanResumeWithoutGPS() {
+        XCTAssertTrue(
+            TrackerAutoPolicy.shouldStageResume(
+                activity: .running,
+                enabled: true,
+                stationary: false,
+                speedMps: 0,
+                cadenceSPM: 150,
+                motionCandidate: .running,
+                gpsEvidenceConfirmed: false,
+                motionEvidenceFresh: true,
+                cadenceEvidenceFresh: true
             )
         )
     }
@@ -319,10 +371,61 @@ final class TrackerAutoPolicyTests: XCTestCase {
         )
         XCTAssertEqual(first ?? -1, 3.4, accuracy: 0.001)
         XCTAssertGreaterThan(probe.recentSpeedMps(now: 103), 1.4)
+        XCTAssertEqual(probe.confirmedRecentSpeedMps(now: 103), 0)
+
+        _ = probe.observe(
+            sampleTimestamp: 102,
+            now: 102,
+            horizontalAccuracy: 6,
+            nativeSpeedMps: 3.6,
+            derivedSpeedMps: 3.5,
+            plausibleMaxSpeedMps: 28
+        )
+        XCTAssertGreaterThan(probe.confirmedRecentSpeedMps(now: 103), 1.4)
         XCTAssertEqual(probe.recentSpeedMps(now: 106), 0)
 
         probe.reset()
         XCTAssertEqual(probe.recentSpeedMps(now: 106), 0)
+    }
+
+    func testAutoResumeProbeRejectsPoorSpeedAccuracy() {
+        var probe = TrackerAutoResumeProbe()
+
+        XCTAssertNil(
+            probe.observe(
+                sampleTimestamp: 100,
+                now: 100,
+                horizontalAccuracy: 4,
+                nativeSpeedMps: 4,
+                derivedSpeedMps: 4,
+                plausibleMaxSpeedMps: 28,
+                speedAccuracyMps: 12
+            )
+        )
+        XCTAssertEqual(probe.confirmedRecentSpeedMps(now: 100), 0)
+    }
+
+    func testAutoResumeProbeRequiresTemporallyCoherentGPSFixes() {
+        var probe = TrackerAutoResumeProbe()
+
+        _ = probe.observe(
+            sampleTimestamp: 100,
+            now: 100,
+            horizontalAccuracy: 5,
+            nativeSpeedMps: 3.2,
+            derivedSpeedMps: 3.2,
+            plausibleMaxSpeedMps: 28
+        )
+        _ = probe.observe(
+            sampleTimestamp: 109,
+            now: 109,
+            horizontalAccuracy: 5,
+            nativeSpeedMps: 3.4,
+            derivedSpeedMps: 3.4,
+            plausibleMaxSpeedMps: 28
+        )
+
+        XCTAssertEqual(probe.confirmedRecentSpeedMps(now: 109), 0)
     }
 
     func testSyntheticWalkRunCycleReplayProducesExpectedCandidates() {

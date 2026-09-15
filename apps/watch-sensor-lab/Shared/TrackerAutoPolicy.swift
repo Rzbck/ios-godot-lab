@@ -144,20 +144,23 @@ enum TrackerAutoPolicy {
         return nil
     }
 
-    /// Auto-pause must never fire from the zero-speed startup state. Once real
-    /// movement has been observed and GPS is trustworthy, it may react without
-    /// an arbitrary user-configurable startup timer.
+    /// Auto-pause must work when a workout starts and the person remains
+    /// still. A credible GPS fix, trusted stationary motion, or a prior real
+    /// movement may arm the pause candidate; the regular pause dwell still
+    /// decides whether the pause actually happens.
     static func canArmPause(
         activity: ActivityKind,
         elapsedSeconds: TimeInterval,
         horizontalAccuracy: Double,
         movementObserved: Bool,
-        motionMovementObserved: Bool = false
+        motionMovementObserved: Bool = false,
+        stationaryEvidence: Bool = false
     ) -> Bool {
         _ = activity
         _ = elapsedSeconds
-        if motionMovementObserved { return true }
-        guard movementObserved else { return false }
+        if stationaryEvidence || motionMovementObserved || movementObserved {
+            return true
+        }
         return horizontalAccuracy >= 0 && horizontalAccuracy <= 30
     }
 
@@ -196,32 +199,31 @@ enum TrackerAutoPolicy {
         stationary: Bool,
         speedMps: Double,
         cadenceSPM: Double,
-        motionCandidate: ActivityKind?
+        motionCandidate: ActivityKind?,
+        gpsEvidenceConfirmed: Bool = false,
+        motionEvidenceFresh: Bool = false,
+        cadenceEvidenceFresh: Bool = false
     ) -> Bool {
         guard enabled else { return false }
-
-        // A stale Core Motion `stationary` classification must never veto
-        // strong fresh GPS/cadence evidence. Motion-only evidence is still
-        // rejected while stationary, which prevents a noisy classifier from
-        // waking a genuinely stopped workout.
+        let cadenceFloor: Double
         switch activity {
-        case .walking, .hiking:
-            return speedMps >= 0.65
-                || cadenceSPM >= 32
-                || (!stationary && (
-                    motionCandidate == .walking
-                    || motionCandidate == .hiking
-                ))
-        case .running, .trackAndField:
-            return speedMps >= 1.0
-                || cadenceSPM >= 60
-                || (!stationary && motionCandidate == .running)
-        case .cycling, .handCycling:
-            return speedMps >= 1.1
-                || (!stationary && motionCandidate == .cycling)
-        default:
-            return speedMps >= 0.6
-                || (!stationary && motionCandidate != nil)
+        case .walking, .hiking: cadenceFloor = 32
+        case .running, .trackAndField: cadenceFloor = 60
+        default: cadenceFloor = 35
         }
+
+        // Resuming is intentionally stricter than pausing. A GPS probe earns
+        // `gpsEvidenceConfirmed` only after multiple recent, precise moving
+        // fixes. Without it, a fresh semantic motion callback and a fresh
+        // cadence sample must agree. A value cached before the pause never
+        // counts as either source.
+        if gpsEvidenceConfirmed { return true }
+
+        let motionShowsMovement = motionEvidenceFresh
+            && !stationary
+            && motionCandidate != nil
+        let cadenceShowsMovement = cadenceEvidenceFresh
+            && cadenceSPM >= cadenceFloor
+        return motionShowsMovement && cadenceShowsMovement
     }
 }

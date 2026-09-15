@@ -89,7 +89,10 @@ enum WatchAutoPolicy {
         stationary: Bool,
         speedMps: Double,
         cadenceSPM: Double,
-        motionCandidate: ActivityKind?
+        motionCandidate: ActivityKind?,
+        gpsEvidenceConfirmed: Bool = false,
+        motionEvidenceFresh: Bool = false,
+        cadenceEvidenceFresh: Bool = false
     ) -> Bool {
         TrackerAutoPolicy.shouldStageResume(
             activity: activity,
@@ -97,7 +100,10 @@ enum WatchAutoPolicy {
             stationary: stationary,
             speedMps: speedMps,
             cadenceSPM: cadenceSPM,
-            motionCandidate: motionCandidate
+            motionCandidate: motionCandidate,
+            gpsEvidenceConfirmed: gpsEvidenceConfirmed,
+            motionEvidenceFresh: motionEvidenceFresh,
+            cadenceEvidenceFresh: cadenceEvidenceFresh
         )
     }
 

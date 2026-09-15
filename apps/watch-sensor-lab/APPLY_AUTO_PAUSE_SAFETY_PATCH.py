@@ -75,6 +75,16 @@ watch = replace_once_or_present(
         autoResumeProbe.reset()
         autoResumeProbeLocation = nil
 
+        // Clear every pre-pause signal. A cadence or motion callback from the
+        // active phase cannot be evidence for a later auto-resume.
+        if reason == "auto" {
+            cadenceSPM = 0
+            lastCadenceEvidenceAt = .distantPast
+            lastMotionWasStationary = false
+            lastMotionCandidate = nil
+            lastMotionEvidenceAt = .distantPast
+        }
+
         if reason == "auto" {
             // Keep GPS alive strictly as resume evidence. `accept(location:)`
             // is never called while paused, so canonical route/distance and
@@ -88,7 +98,7 @@ watch = replace_once_or_present(
         }
         workoutSession?.pause()
 ''',
-    "Keep GPS alive strictly as resume evidence",
+    "Clear every pre-pause signal.",
     "watch auto pause must retain GPS probe",
 )
 
@@ -131,13 +141,14 @@ watch = replace_once_or_present(
             elapsedSeconds: elapsedSeconds,
             horizontalAccuracy: horizontalAccuracy,
             movementObserved: autoPauseMovementObserved,
-            motionMovementObserved: autoPauseMotionObserved
+            motionMovementObserved: autoPauseMotionObserved,
+            stationaryEvidence: freshMotionWasStationary
         ) else {
             cancelPendingAutoPause()
             return
         }
 ''',
-    "motionMovementObserved: autoPauseMotionObserved",
+    "stationaryEvidence: freshMotionWasStationary",
     "watch auto pause arming guard",
 )
 
@@ -148,19 +159,19 @@ watch = replace_block_or_present(
     '''    private func stageAutoResumeIfNeeded() {
         guard autoPauseEnabled, phase == .paused, autoPaused else { return }
 
-        let resumeSpeed = Swift.max(
-            currentSpeedMps,
-            autoResumeProbe.recentSpeedMps(
-                now: Date().timeIntervalSince1970
-            )
+        let resumeSpeed = autoResumeProbe.confirmedRecentSpeedMps(
+            now: Date().timeIntervalSince1970
         )
 
         guard WatchAutoPolicy.shouldStageResume(
             activity: displayActivity,
-            stationary: lastMotionWasStationary,
+            stationary: freshMotionWasStationary,
             speedMps: resumeSpeed,
-            cadenceSPM: cadenceSPM,
-            motionCandidate: lastMotionCandidate
+            cadenceSPM: freshCadenceSPM,
+            motionCandidate: freshMotionCandidate,
+            gpsEvidenceConfirmed: resumeSpeed > 0,
+            motionEvidenceFresh: freshMotionCandidate != nil || freshMotionWasStationary,
+            cadenceEvidenceFresh: freshCadenceSPM > 0
         ) else {
             cancelPendingAutoResume()
             return
@@ -174,7 +185,7 @@ watch = replace_block_or_present(
         sendEvent("auto_resume_candidate", payload: [
             "activity": displayActivity.rawValue,
             "dwell_s": delay,
-            "motion_candidate": lastMotionCandidate?.rawValue ?? "none",
+            "motion_candidate": freshMotionCandidate?.rawValue ?? "none",
             "probe_speed_mps": resumeSpeed,
         ])
 
@@ -187,19 +198,19 @@ watch = replace_block_or_present(
                 self.autoResumeToken == token
             else { return }
 
-            let confirmedSpeed = Swift.max(
-                self.currentSpeedMps,
-                self.autoResumeProbe.recentSpeedMps(
-                    now: Date().timeIntervalSince1970
-                )
+            let confirmedSpeed = self.autoResumeProbe.confirmedRecentSpeedMps(
+                now: Date().timeIntervalSince1970
             )
 
             guard WatchAutoPolicy.shouldStageResume(
                 activity: self.displayActivity,
-                stationary: self.lastMotionWasStationary,
+                stationary: self.freshMotionWasStationary,
                 speedMps: confirmedSpeed,
-                cadenceSPM: self.cadenceSPM,
-                motionCandidate: self.lastMotionCandidate
+                cadenceSPM: self.freshCadenceSPM,
+                motionCandidate: self.freshMotionCandidate,
+                gpsEvidenceConfirmed: confirmedSpeed > 0,
+                motionEvidenceFresh: self.freshMotionCandidate != nil || self.freshMotionWasStationary,
+                cadenceEvidenceFresh: self.freshCadenceSPM > 0
             ) else {
                 self.cancelPendingAutoResume()
                 return
@@ -214,7 +225,7 @@ watch = replace_block_or_present(
     }
 
 ''',
-    '"probe_speed_mps": resumeSpeed',
+    "gpsEvidenceConfirmed: resumeSpeed > 0",
     "watch auto resume uses GPS probe",
 )
 
@@ -266,7 +277,8 @@ watch = replace_once_or_present(
             horizontalAccuracy: location.horizontalAccuracy,
             nativeSpeedMps: location.speed,
             derivedSpeedMps: derivedSpeed,
-            plausibleMaxSpeedMps: displayActivity.plausibleMaxSpeedMps
+            plausibleMaxSpeedMps: displayActivity.plausibleMaxSpeedMps,
+            speedAccuracyMps: location.speedAccuracy
         ) else { return }
 
         // Presentation may show current position/accuracy, but the paused probe
@@ -443,7 +455,9 @@ for token in [
     "autoPauseMovementObserved",
     "autoPauseMotionObserved",
     "TrackerAutoPolicy.canArmPause(",
-    "autoResumeProbe.recentSpeedMps(",
+    "autoResumeProbe.confirmedRecentSpeedMps(",
+    "cadenceSPM: freshCadenceSPM",
+    "motionCandidate: freshMotionCandidate",
     "observeAutoResumeLocation(_ location: CLLocation)",
     "canonical_distance_unchanged",
 ]:

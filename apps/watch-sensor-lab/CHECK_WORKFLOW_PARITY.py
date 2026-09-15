@@ -248,6 +248,19 @@ for token in [
             f"WatchAutoPolicy ne délègue pas au noyau testable: {token}"
         )
 
+# The temporary generator owns the Watch-specific bridge. Keep it fail-closed:
+# stale raw cadence or a lone GPS callback must never be wired back into resume.
+for token in [
+    "autoResumeProbe.confirmedRecentSpeedMps(",
+    "cadenceSPM: freshCadenceSPM",
+    "motionCandidate: freshMotionCandidate",
+    "gpsEvidenceConfirmed: resumeSpeed > 0",
+    "speedAccuracyMps: location.speedAccuracy",
+    "Clear every pre-pause signal.",
+]:
+    if token not in watch_model:
+        errors.append(f"Watch auto-resume fusion incomplète: {token}")
+
 # The product has one Auto-Pause toggle. Its short internal dwell is
 # stabilization, never a duration the person configures. Check the actual
 # settings surfaces so a refactor cannot bring back per-sport sliders.

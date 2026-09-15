@@ -59,14 +59,14 @@ final class TrackerAutomationScenarioTests: XCTestCase {
         XCTAssertFalse(result.pauseCandidateFrameIndexes.contains(0))
     }
 
-    func testStopAndResumeWalkingExposesPauseAndResumeCandidates() throws {
+    func testStopAndResumeWalkingNeedsMoreThanOneMovingGPSFix() throws {
         let result = try TrackerAutomationReplayer.replay(
             TrackerAutomationFixtures.stopAndResumeWalking
         )
 
         XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(1))
         XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(2))
-        XCTAssertTrue(result.resumeCandidateFrameIndexes.contains(3))
+        XCTAssertTrue(result.resumeCandidateFrameIndexes.isEmpty)
         XCTAssertEqual(result.autoPauseFrameIndexes, [2])
         XCTAssertTrue(result.endedPaused)
     }
@@ -81,13 +81,14 @@ final class TrackerAutomationScenarioTests: XCTestCase {
                 frame(at: 3.1, stationary: true, speed: 0.1, cadence: 0, distance: 0),
                 frame(at: 4, stationary: false, speed: 1.1, cadence: 90, distance: 1),
                 frame(at: 5, stationary: false, speed: 1.2, cadence: 92, distance: 1),
+                frame(at: 6, stationary: false, speed: 1.2, cadence: 92, distance: 1),
             ]
         )
 
         let result = try TrackerAutomationReplayer.replay(scenario)
 
         XCTAssertEqual(result.autoPauseFrameIndexes, [3])
-        XCTAssertEqual(result.autoResumeFrameIndexes, [5])
+        XCTAssertEqual(result.autoResumeFrameIndexes, [6])
         XCTAssertFalse(result.endedPaused)
     }
 

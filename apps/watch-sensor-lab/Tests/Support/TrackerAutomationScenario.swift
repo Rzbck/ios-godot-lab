@@ -106,6 +106,7 @@ enum TrackerAutomationReplayer {
         var resumeEligibleSince: TimeInterval?
         var autoPauseIndexes: [Int] = []
         var autoResumeIndexes: [Int] = []
+        var consecutivePreciseMovingGPSFrames = 0
 
         for (index, frame) in scenario.frames.enumerated() {
             let decision = TrackerAutoPolicy.decision(
@@ -130,7 +131,8 @@ enum TrackerAutomationReplayer {
                 elapsedSeconds: frame.offsetSeconds,
                 horizontalAccuracy: frame.horizontalAccuracyMeters,
                 movementObserved: movementObserved,
-                motionMovementObserved: motionMovementObserved
+                motionMovementObserved: motionMovementObserved,
+                stationaryEvidence: frame.motion.stationary
             ) && TrackerAutoPolicy.shouldStagePause(
                 activity: currentActivity,
                 enabled: scenario.autoPauseEnabled,
@@ -142,13 +144,23 @@ enum TrackerAutomationReplayer {
                 pauseIndexes.append(index)
             }
 
+            let preciseMovingGPS = frame.horizontalAccuracyMeters >= 0
+                && frame.horizontalAccuracyMeters <= 35
+                && frame.speedMps >= 0.20
+            consecutivePreciseMovingGPSFrames = preciseMovingGPS
+                ? consecutivePreciseMovingGPSFrames + 1
+                : 0
+
             let canResume = TrackerAutoPolicy.shouldStageResume(
                 activity: currentActivity,
                 enabled: scenario.autoPauseEnabled,
                 stationary: frame.motion.stationary,
                 speedMps: frame.speedMps,
                 cadenceSPM: frame.cadenceSPM,
-                motionCandidate: decision?.activity
+                motionCandidate: decision?.activity,
+                gpsEvidenceConfirmed: consecutivePreciseMovingGPSFrames >= 2,
+                motionEvidenceFresh: decision != nil || frame.motion.stationary,
+                cadenceEvidenceFresh: frame.cadenceSPM > 0
             )
             if canResume {
                 resumeIndexes.append(index)

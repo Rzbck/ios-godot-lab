@@ -55,6 +55,7 @@ Les fixtures peuvent simuler en quelques millisecondes :
 - marche → course → vélo ;
 - arrêt/reprise ;
 - GPS/métriques limites ;
+- arrêt immobile avec cadence figée, puis preuve de reprise convergente ;
 - futurs retards/pertes de liaison.
 
 Le format reste indépendant du matériel pour être réutilisable par XCTest, UI tests et outils de self-test.

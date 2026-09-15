@@ -160,14 +160,12 @@ watch = replace_once_or_present(
 )
 
 # Production stop detection must not re-arm immediately after an automatic
-# resume. The field failure repeatedly returned to pause about two seconds after
-# walking had already produced ~104 SPM; this cooldown bridges the sensor-reset
-# window and makes pause/resume a hysteretic state machine.
+# resume. Match only the stable function prologue because the fusion patch adds
+# adaptive arming between this prologue and the final pause-policy evaluation.
 watch = replace_once_or_present(
     watch,
     '''    private func stageAutoPauseIfNeeded() {
         guard autoPauseEnabled, phase == .active else { return }
-        guard WatchAutoPolicy.shouldStagePause(
 ''',
     '''    private func stageAutoPauseIfNeeded() {
         guard autoPauseEnabled, phase == .active else { return }
@@ -178,7 +176,6 @@ watch = replace_once_or_present(
             cancelPendingAutoPause()
             return
         }
-        guard WatchAutoPolicy.shouldStagePause(
 ''',
     "// AUTO_RESUME_REPAUSE_COOLDOWN",
     "watch auto pause must respect post-resume hysteresis",

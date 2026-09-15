@@ -1,0 +1,4 @@
+# Watch Sensor Lab review ownership. These paths are intentionally scoped to
+# this application and do not assign ownership for other repository projects.
+/apps/watch-sensor-lab/** @Rzbck
+/.github/workflows/watch-sensor-lab-*.yml @Rzbck

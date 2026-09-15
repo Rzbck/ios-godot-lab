@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 
 root = Path(__file__).resolve().parent
+repository_root = root.parents[1]
 
 shared = (
     root / "Shared/TrackerShared.swift"
@@ -35,6 +36,8 @@ iphone_settings = (
 watch_auto_pause_settings = (
     root / "watch/Sources/WatchAutoPauseSettings.swift"
 ).read_text(encoding="utf-8")
+
+codeowners_path = repository_root / ".github/CODEOWNERS"
 
 selftest_service = (
     root / "iphone/Sources/AutomationSelfTestService.swift"
@@ -268,6 +271,19 @@ for surface, source in [
             errors.append(
                 f"{surface} expose encore un réglage de délai Auto: {forbidden}"
             )
+
+# GitHub review routing remains app-only: this file must not depend on a
+# repository-wide main branch policy which would affect unrelated apps.
+if not codeowners_path.is_file():
+    errors.append("CODEOWNERS Watch Sensor Lab absent")
+else:
+    codeowners = codeowners_path.read_text(encoding="utf-8")
+    for token in [
+        "/apps/watch-sensor-lab/** @Rzbck",
+        "/.github/workflows/watch-sensor-lab-*.yml @Rzbck",
+    ]:
+        if token not in codeowners:
+            errors.append(f"CODEOWNERS Watch Sensor Lab incomplet: {token}")
 
 required_test_files = [
     root / "Tests/TrackerWorkflowContractTests.swift",

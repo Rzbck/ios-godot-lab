@@ -13,6 +13,11 @@ Avant toute modification, lire dans cet ordre :
 
 Toujours vérifier `git worktree list --porcelain`, la branche, le HEAD et l'état CLEAN/DIRTY. Un chantier actif utilise une branche et un worktree dédiés. Quand l'environnement d'agents partage nécessairement le même système de fichiers, le coordinateur attribue des fichiers exclusifs et interdit les commits concurrents ; sinon, chaque agent d'écriture utilise son propre worktree.
 
+Les changements de cette application et de ses deux workflows sont associés à
+`@Rzbck` par le `CODEOWNERS` racine. Cette attribution est volontairement
+limitée à Watch Sensor Lab : aucune protection globale de `main` ne doit être
+ajoutée pour contourner les autres projets du dépôt.
+
 ## Répartition parallèle
 
 Le coordinateur découpe le travail en périmètres sans fichiers communs :

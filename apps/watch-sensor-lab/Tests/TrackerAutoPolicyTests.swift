@@ -397,9 +397,9 @@ final class TrackerAutoPolicyTests: XCTestCase {
                 now: 100,
                 horizontalAccuracy: 4,
                 nativeSpeedMps: 4,
+                speedAccuracyMps: 12,
                 derivedSpeedMps: 4,
-                plausibleMaxSpeedMps: 28,
-                speedAccuracyMps: 12
+                plausibleMaxSpeedMps: 28
             )
         )
         XCTAssertEqual(probe.confirmedRecentSpeedMps(now: 100), 0)

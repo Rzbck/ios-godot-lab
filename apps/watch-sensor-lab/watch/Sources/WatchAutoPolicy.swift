@@ -38,15 +38,11 @@ enum WatchAutoPolicy {
         )
     }
 
-    /// Re-evaluate the exact same Auto policy whenever fresh GPS/cadence arrives,
-    /// even if Core Motion has not emitted a new semantic activity callback.
     static func decision(
         from evidence: TrackerMotionEvidence,
         speedMps: Double,
         cadenceSPM: Double
     ) -> WatchAutoDecision? {
-        // Binding here covers both the Core Motion callback and sensor-only
-        // reevaluations. bind(to:) is idempotent.
         WatchAutoHealthReconciler.shared.bind(to: SensorModel.shared)
 
         guard let decision = TrackerAutoPolicy.decision(
@@ -84,6 +80,17 @@ enum WatchAutoPolicy {
         WatchAutoPauseSettings.pauseDwell(for: activity)
     }
 
+    static func resumeDecision(
+        activity: ActivityKind,
+        evidence: TrackerAutoResumeEvidence
+    ) -> TrackerAutoResumeDecision {
+        TrackerAutoPolicy.resumeDecision(
+            activity: activity,
+            enabled: WatchAutoPauseSettings.isEnabled(for: activity),
+            evidence: evidence
+        )
+    }
+
     static func shouldStageResume(
         activity: ActivityKind,
         stationary: Bool,
@@ -93,6 +100,29 @@ enum WatchAutoPolicy {
         gpsEvidenceConfirmed: Bool = false,
         motionEvidenceFresh: Bool = false,
         cadenceEvidenceFresh: Bool = false
+    ) -> Bool {
+        TrackerAutoPolicy.shouldStageResume(
+            activity: activity,
+            enabled: WatchAutoPauseSettings.isEnabled(for: activity),
+            stationary: stationary,
+            speedMps: speedMps,
+            cadenceSPM: cadenceSPM,
+            motionCandidate: motionCandidate,
+            gpsEvidenceConfirmed: gpsEvidenceConfirmed,
+            motionEvidenceFresh: motionEvidenceFresh,
+            cadenceEvidenceFresh: cadenceEvidenceFresh
+        )
+    }
+
+    static func shouldStageResume(
+        activity: ActivityKind,
+        stationary: Bool,
+        speedMps: Double,
+        cadenceSPM: Double,
+        motionCandidate: ActivityKind?,
+        gpsEvidenceConfirmed: Bool,
+        motionEvidenceFresh: Bool,
+        cadenceEvidenceFresh: Bool
     ) -> Bool {
         TrackerAutoPolicy.shouldStageResume(
             activity: activity,

@@ -48,6 +48,24 @@ struct TrackerAutoDecision: Equatable {
     let dwellSeconds: TimeInterval
 }
 
+struct TrackerAutoResumeEvidence: Equatable {
+    var speedMps: Double
+    var gpsFresh: Bool
+    var gpsReliable: Bool
+    var gpsSustained: Bool
+    var cadenceSPM: Double
+    var cadenceFresh: Bool
+    var stationary: Bool
+    var motionCandidate: ActivityKind?
+    var motionFresh: Bool
+}
+
+struct TrackerAutoResumeDecision: Equatable {
+    let shouldResume: Bool
+    let reason: String
+    let agreeingEvidenceCount: Int
+}
+
 /// Deterministic Auto-mode rules with no HealthKit/CoreMotion/UserDefaults/UI
 /// dependency. Production adapters supply platform evidence and preferences;
 /// CI supplies synthetic evidence and replays it at full speed.
@@ -83,8 +101,6 @@ enum TrackerAutoPolicy {
             )
         }
 
-        // A real running cadence is a much better discriminator than a stale
-        // walking flag. Keep the speed floor low enough for an easy jog.
         if speed >= 1.7, cadence >= 95 {
             return TrackerAutoDecision(
                 activity: .running,
@@ -94,9 +110,6 @@ enum TrackerAutoPolicy {
             )
         }
 
-        // Cycling often produces little/no pedometer cadence. If Core Motion is
-        // stuck on walking but GPS clearly shows locomotion too fast for normal
-        // walking and foot cadence is low, prefer cycling.
         if speed >= 3.0, cadence >= 35, cadence < 95 {
             return TrackerAutoDecision(
                 activity: .cycling,
@@ -106,9 +119,6 @@ enum TrackerAutoPolicy {
             )
         }
 
-        // With no step cadence, only a clearly cycling-grade speed overrides
-        // a walking label. A fast run with a temporarily missing pedometer
-        // sample stays undecided instead of being mis-recorded as cycling.
         if speed >= 5.0, cadence == 0 {
             return TrackerAutoDecision(
                 activity: .cycling,
@@ -118,9 +128,6 @@ enum TrackerAutoPolicy {
             )
         }
 
-        // A walking label at running/cycling speed is contradictory when the
-        // cadence does not resolve it. Keep the current Auto sport instead of
-        // falling back to the historical Walking default.
         if motionTrusted, evidence.walking, speed < 3.0 {
             return TrackerAutoDecision(
                 activity: .walking,
@@ -130,8 +137,6 @@ enum TrackerAutoPolicy {
             )
         }
 
-        // Sensor fallback when Core Motion has not produced a usable semantic
-        // label yet. It intentionally covers only obvious locomotion.
         if speed >= 0.55, speed < 2.2, cadence >= 35 {
             return TrackerAutoDecision(
                 activity: .walking,
@@ -144,23 +149,31 @@ enum TrackerAutoPolicy {
         return nil
     }
 
-    /// Auto-pause must work when a workout starts and the person remains
-    /// still. A credible GPS fix, trusted stationary motion, or a prior real
-    /// movement may arm the pause candidate; the regular pause dwell still
-    /// decides whether the pause actually happens.
+    /// Legacy arming rule retained for replay compatibility. Production adaptive
+    /// auto-pause uses `canArmAdaptivePause`, which accepts trustworthy stationary
+    /// evidence at startup instead of requiring a fake first movement.
     static func canArmPause(
         activity: ActivityKind,
         elapsedSeconds: TimeInterval,
         horizontalAccuracy: Double,
         movementObserved: Bool,
-        motionMovementObserved: Bool = false,
-        stationaryEvidence: Bool = false
+        motionMovementObserved: Bool = false
     ) -> Bool {
         _ = activity
         _ = elapsedSeconds
-        if stationaryEvidence || motionMovementObserved || movementObserved {
-            return true
-        }
+        if motionMovementObserved { return true }
+        guard movementObserved else { return false }
+        return horizontalAccuracy >= 0 && horizontalAccuracy <= 30
+    }
+
+    /// Adaptive production rule: an actual sensor observation is enough to arm
+    /// pause. A good GPS fix with zero speed or any trusted Core Motion state can
+    /// therefore pause a workout that started while the user was already still.
+    static func canArmAdaptivePause(
+        horizontalAccuracy: Double,
+        motionEvidenceObserved: Bool
+    ) -> Bool {
+        if motionEvidenceObserved { return true }
         return horizontalAccuracy >= 0 && horizontalAccuracy <= 30
     }
 
@@ -186,13 +199,198 @@ enum TrackerAutoPolicy {
             return (stationary && speed <= 1.2)
                 || speed <= 0.30
         default:
-            // Generic outdoor fallback for the rest of the Apple activity
-            // catalog. The master auto-pause toggle remains the only setting.
             return (stationary && speed <= 0.8)
                 || speed <= 0.20
         }
     }
 
+    static func resumeDecision(
+        activity: ActivityKind,
+        enabled: Bool,
+        evidence: TrackerAutoResumeEvidence
+    ) -> TrackerAutoResumeDecision {
+        guard enabled else {
+            return TrackerAutoResumeDecision(
+                shouldResume: false,
+                reason: "disabled",
+                agreeingEvidenceCount: 0
+            )
+        }
+
+        let speed = max(0, evidence.speedMps)
+        let cadence = max(0, evidence.cadenceSPM)
+
+        let speedThreshold: Double
+        let strongSoloSpeedThreshold: Double
+        let cadenceThreshold: Double?
+
+        switch activity {
+        case .walking, .hiking:
+            speedThreshold = 0.65
+            strongSoloSpeedThreshold = 1.0
+            cadenceThreshold = 32
+        case .running, .trackAndField:
+            speedThreshold = 1.0
+            strongSoloSpeedThreshold = 1.6
+            cadenceThreshold = 60
+        case .cycling, .handCycling:
+            speedThreshold = 1.1
+            strongSoloSpeedThreshold = 2.0
+            cadenceThreshold = nil
+        default:
+            speedThreshold = 0.6
+            strongSoloSpeedThreshold = 1.2
+            cadenceThreshold = nil
+        }
+
+        let gpsMoving = evidence.gpsFresh
+            && evidence.gpsReliable
+            && evidence.gpsSustained
+            && speed >= speedThreshold
+
+        let strongGPS = evidence.gpsFresh
+            && evidence.gpsReliable
+            && evidence.gpsSustained
+            && speed >= strongSoloSpeedThreshold
+
+        let cadenceMoving: Bool
+        if let cadenceThreshold {
+            cadenceMoving = evidence.cadenceFresh && cadence >= cadenceThreshold
+        } else {
+            cadenceMoving = false
+        }
+
+        let motionMatches: Bool
+        switch activity {
+        case .walking, .hiking:
+            motionMatches = evidence.motionCandidate == .walking
+                || evidence.motionCandidate == .hiking
+        case .running, .trackAndField:
+            motionMatches = evidence.motionCandidate == .running
+                || evidence.motionCandidate == .trackAndField
+        case .cycling, .handCycling:
+            motionMatches = evidence.motionCandidate == .cycling
+                || evidence.motionCandidate == .handCycling
+        default:
+            motionMatches = evidence.motionCandidate != nil
+        }
+
+        let motionMoving = evidence.motionFresh
+            && !evidence.stationary
+            && motionMatches
+
+        if gpsMoving && motionMoving {
+            return TrackerAutoResumeDecision(
+                shouldResume: true,
+                reason: "gps_motion_consensus",
+                agreeingEvidenceCount: 2
+            )
+        }
+
+        if gpsMoving && cadenceMoving {
+            return TrackerAutoResumeDecision(
+                shouldResume: true,
+                reason: "gps_cadence_consensus",
+                agreeingEvidenceCount: 2
+            )
+        }
+
+        if cadenceMoving && motionMoving {
+            return TrackerAutoResumeDecision(
+                shouldResume: true,
+                reason: "cadence_motion_consensus",
+                agreeingEvidenceCount: 2
+            )
+        }
+
+        // Strong, sustained and quality-checked GPS can stand alone. This keeps
+        // cycling responsive when Core Motion remains incorrectly stuck on
+        // walking, while rejecting a single coordinate jump.
+        if strongGPS {
+            return TrackerAutoResumeDecision(
+                shouldResume: true,
+                reason: "strong_sustained_gps",
+                agreeingEvidenceCount: 1
+            )
+        }
+
+        if evidence.cadenceSPM > 0 && !evidence.cadenceFresh {
+            return TrackerAutoResumeDecision(
+                shouldResume: false,
+                reason: "stale_cadence_rejected",
+                agreeingEvidenceCount: 0
+            )
+        }
+
+        if speed > 0 && (!evidence.gpsFresh || !evidence.gpsReliable) {
+            return TrackerAutoResumeDecision(
+                shouldResume: false,
+                reason: "unreliable_gps_rejected",
+                agreeingEvidenceCount: 0
+            )
+        }
+
+        if evidence.gpsFresh && evidence.gpsReliable && !evidence.gpsSustained {
+            return TrackerAutoResumeDecision(
+                shouldResume: false,
+                reason: "single_gps_sample_rejected",
+                agreeingEvidenceCount: 0
+            )
+        }
+
+        if motionMoving {
+            return TrackerAutoResumeDecision(
+                shouldResume: false,
+                reason: "motion_only_rejected",
+                agreeingEvidenceCount: 1
+            )
+        }
+
+        if cadenceMoving {
+            return TrackerAutoResumeDecision(
+                shouldResume: false,
+                reason: "cadence_only_rejected",
+                agreeingEvidenceCount: 1
+            )
+        }
+
+        return TrackerAutoResumeDecision(
+            shouldResume: false,
+            reason: "insufficient_fresh_evidence",
+            agreeingEvidenceCount: 0
+        )
+    }
+
+    /// Compatibility surface for older deterministic tests/callers. Runtime code
+    /// now supplies explicit freshness/quality through `resumeDecision`.
+    static func shouldStageResume(
+        activity: ActivityKind,
+        enabled: Bool,
+        stationary: Bool,
+        speedMps: Double,
+        cadenceSPM: Double,
+        motionCandidate: ActivityKind?
+    ) -> Bool {
+        resumeDecision(
+            activity: activity,
+            enabled: enabled,
+            evidence: TrackerAutoResumeEvidence(
+                speedMps: speedMps,
+                gpsFresh: speedMps > 0,
+                gpsReliable: speedMps > 0,
+                gpsSustained: speedMps > 0,
+                cadenceSPM: cadenceSPM,
+                cadenceFresh: cadenceSPM > 0,
+                stationary: stationary,
+                motionCandidate: motionCandidate,
+                motionFresh: motionCandidate != nil || stationary
+            )
+        ).shouldResume
+    }
+
+    /// Explicit evidence variant used by adapters and regression tests. The
+    /// older overload remains for legacy callers, but it cannot manufacture
+    /// freshness from cached values.
     static func shouldStageResume(
         activity: ActivityKind,
         enabled: Bool,
@@ -200,30 +398,24 @@ enum TrackerAutoPolicy {
         speedMps: Double,
         cadenceSPM: Double,
         motionCandidate: ActivityKind?,
-        gpsEvidenceConfirmed: Bool = false,
-        motionEvidenceFresh: Bool = false,
-        cadenceEvidenceFresh: Bool = false
+        gpsEvidenceConfirmed: Bool,
+        motionEvidenceFresh: Bool,
+        cadenceEvidenceFresh: Bool
     ) -> Bool {
-        guard enabled else { return false }
-        let cadenceFloor: Double
-        switch activity {
-        case .walking, .hiking: cadenceFloor = 32
-        case .running, .trackAndField: cadenceFloor = 60
-        default: cadenceFloor = 35
-        }
-
-        // Resuming is intentionally stricter than pausing. A GPS probe earns
-        // `gpsEvidenceConfirmed` only after multiple recent, precise moving
-        // fixes. Without it, a fresh semantic motion callback and a fresh
-        // cadence sample must agree. A value cached before the pause never
-        // counts as either source.
-        if gpsEvidenceConfirmed { return true }
-
-        let motionShowsMovement = motionEvidenceFresh
-            && !stationary
-            && motionCandidate != nil
-        let cadenceShowsMovement = cadenceEvidenceFresh
-            && cadenceSPM >= cadenceFloor
-        return motionShowsMovement && cadenceShowsMovement
+        resumeDecision(
+            activity: activity,
+            enabled: enabled,
+            evidence: TrackerAutoResumeEvidence(
+                speedMps: speedMps,
+                gpsFresh: gpsEvidenceConfirmed,
+                gpsReliable: gpsEvidenceConfirmed,
+                gpsSustained: gpsEvidenceConfirmed,
+                cadenceSPM: cadenceSPM,
+                cadenceFresh: cadenceEvidenceFresh,
+                stationary: stationary,
+                motionCandidate: motionCandidate,
+                motionFresh: motionEvidenceFresh
+            )
+        ).shouldResume
     }
 }

@@ -22,10 +22,13 @@ def apply(script: str) -> None:
 
 
 # SESSION_SYNC_PATCH owns the established dependency order for auto-pause,
-# terminal/runtime integrity, and historical correction. The reactive Auto
-# patch is the remaining Xcode pre-build transformation and therefore belongs
-# explicitly at the end of the CI chain.
+# terminal/runtime integrity, and historical correction. Reactive Auto behavior
+# comes next, then the field-tested sensor-fusion correction is applied last.
+# Fusion preserves all legacy safety-patch idempotence/invariant strings as
+# comments only; repeated CI/Xcode passes therefore cannot restore old runtime
+# behavior while the old integration patches remain in the build chain.
 apply("SESSION_SYNC_PATCH.py")
 apply("APPLY_AUTO_BEHAVIOR_PATCH.py")
+apply("APPLY_AUTO_PAUSE_FUSION_PATCH.py")
 
 print("WATCH SENSOR LAB GENERATED SOURCE CHAIN: OK")

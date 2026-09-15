@@ -91,6 +91,7 @@ targets:
       - path: ../Tests/TrackerSessionControlTests.swift
       - path: ../Tests/TrackerFinishPersistencePolicyTests.swift
       - path: ../Tests/TrackerAutoPolicyTests.swift
+      - path: ../Tests/TrackerAutoPauseFusionTests.swift
       - path: ../Tests/TrackerAutomationScenarioTests.swift
     settings:
       base:

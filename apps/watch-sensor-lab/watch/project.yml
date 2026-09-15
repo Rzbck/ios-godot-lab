@@ -31,6 +31,12 @@ targets:
           set -euo pipefail
           python3 "$SRCROOT/../APPLY_AUTO_BEHAVIOR_PATCH.py"
         basedOnDependencyAnalysis: false
+      - name: Apply Auto Pause Fusion Patch
+        shell: /bin/bash
+        script: |
+          set -euo pipefail
+          python3 "$SRCROOT/../APPLY_AUTO_PAUSE_FUSION_PATCH.py"
+        basedOnDependencyAnalysis: false
       # Safety gate for activity-type repairs: target distance type must match the final sport.
       - name: Apply Historical Correction Distance Patch
         shell: /bin/bash
@@ -90,6 +96,7 @@ targets:
       - path: ../Tests/TrackerSessionControlTests.swift
       - path: ../Tests/TrackerFinishPersistencePolicyTests.swift
       - path: ../Tests/TrackerAutoPolicyTests.swift
+      - path: ../Tests/TrackerAutoPauseFusionTests.swift
       - path: ../Tests/TrackerAutomationScenarioTests.swift
     settings:
       base:

@@ -17,13 +17,22 @@ Le HEAD de la branche peut contenir des commits documentaires ou de garde-fou
 postérieurs. L'IPA à tester est celle du SHA candidat indiqué ci-dessus ;
 toujours vérifier Git/GitHub réels avant reprise.
 
-Dernière vérification de branche : `0099bf50ab36bc1266fcff0940aa8d434a8d39ab`
-(`test: guard adaptive auto-pause settings`) est vert en build
-[`34919958760`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34919958760)
-et tests [`34919958710`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34919958710).
-Ce commit ne modifie pas la politique candidate : il retire une ancienne
-propriété de délai inutilisée et empêche le retour de sliders de délai dans
-les réglages iPhone/Watch. Aucun nouvel artifact matériel n'est requis.
+Dernières vérifications de branche :
+
+- `0099bf50ab36bc1266fcff0940aa8d434a8d39ab`
+  (`test: guard adaptive auto-pause settings`) est vert en build
+  [`34919958760`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34919958760)
+  et tests [`34919958710`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34919958710).
+  Il retire une ancienne propriété de délai inutilisée et empêche le retour de
+  sliders de délai dans les réglages iPhone/Watch.
+- `ae7da6e62a385c89bf4e729143f742c178a47ffb`
+  (`ci: assign Watch Sensor Lab review ownership`) est vert en build
+  [`34920764360`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34920764360)
+  et tests [`34920764394`](https://github.com/Rzbck/ios-godot-lab/actions/runs/34920764394).
+  Il ajoute `CODEOWNERS` et l'invariant de revue app-only.
+
+Aucun de ces commits ne modifie la politique candidate ni ne requiert un
+nouvel artifact matériel.
 
 ## Changements du chantier
 

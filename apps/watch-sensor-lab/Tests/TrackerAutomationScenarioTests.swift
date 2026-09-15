@@ -59,14 +59,17 @@ final class TrackerAutomationScenarioTests: XCTestCase {
         XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(0))
     }
 
-    func testStopAndResumeWalkingNeedsMoreThanOneMovingGPSFix() throws {
+    func testStopAndResumeWalkingUsesFreshConvergentEvidence() throws {
         let result = try TrackerAutomationReplayer.replay(
             TrackerAutomationFixtures.stopAndResumeWalking
         )
 
         XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(1))
         XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(2))
-        XCTAssertEqual(result.resumeCandidateFrameIndexes, [3])
+        // Frame 0 also has fresh motion + cadence and therefore represents
+        // valid movement evidence. It is not acted on because the workout is
+        // active. Frame 3 is the first such evidence after the auto-pause.
+        XCTAssertEqual(result.resumeCandidateFrameIndexes, [0, 3])
         XCTAssertEqual(result.autoPauseFrameIndexes, [2])
         XCTAssertTrue(result.endedPaused)
     }

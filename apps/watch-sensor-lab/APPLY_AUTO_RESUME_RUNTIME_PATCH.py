@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Final runtime wake-up patch for Watch auto-resume.
+"""Final runtime wake-up and anti-oscillation patch for Watch auto-resume.
 
-Runs after the existing auto-pause fusion patch. It fixes the hardware failure
-where auto-pause succeeds but the workout never resumes because fresh paused
-pedometer evidence is recorded without re-evaluating the resume policy.
+Runs after the existing auto-pause fusion patch. It fixes two hardware failures:
+1. auto-pause succeeds but never resumes because fresh paused pedometer evidence
+   is recorded without re-evaluating the resume policy;
+2. a confirmed resume immediately re-enters auto-pause before active-state
+   Core Motion / cadence evidence has repopulated, causing pause/resume thrash.
 
 The patch is fail-closed and idempotent. During an automatic pause, sensor
 updates are resume evidence only: canonical route, distance, elevation and step
@@ -25,6 +27,35 @@ def replace_once_or_present(text: str, old: str, new: str, marker: str, label: s
 
 
 watch = WATCH.read_text(encoding="utf-8")
+
+# Remember the last confirmed automatic resume so pause detection has real
+# hysteresis instead of immediately re-arming on temporarily empty sensor data.
+watch = replace_once_or_present(
+    watch,
+    '    private var lastAutoResumeDecisionReason = "none"\n',
+    '    private var lastAutoResumeDecisionReason = "none"\n'
+    '    private var lastAutoResumeAt = Date.distantPast // AUTO_RESUME_REPAUSE_HYSTERESIS_STATE\n',
+    "// AUTO_RESUME_REPAUSE_HYSTERESIS_STATE",
+    "watch repause hysteresis state",
+)
+
+# A new workout must never inherit the cooldown of a previous session.
+watch = replace_once_or_present(
+    watch,
+    '''            startedAt = Date()
+            pausedAt = nil
+            pausedDuration = 0
+            resetPresentationData(keepActivity: true)
+''',
+    '''            startedAt = Date()
+            pausedAt = nil
+            pausedDuration = 0
+            lastAutoResumeAt = .distantPast // AUTO_RESUME_RESET_REPAUSE_HYSTERESIS
+            resetPresentationData(keepActivity: true)
+''',
+    "// AUTO_RESUME_RESET_REPAUSE_HYSTERESIS",
+    "watch reset repause hysteresis per session",
+)
 
 # Resume policy must keep being evaluated while an automatic pause is active.
 # This makes fresh pedometer/Core Motion evidence actionable even when GPS has
@@ -128,23 +159,77 @@ watch = replace_once_or_present(
     "watch resume must reset pedometer baseline",
 )
 
+# Production stop detection must not re-arm immediately after an automatic
+# resume. The field failure repeatedly returned to pause about two seconds after
+# walking had already produced ~104 SPM; this cooldown bridges the sensor-reset
+# window and makes pause/resume a hysteretic state machine.
+watch = replace_once_or_present(
+    watch,
+    '''    private func stageAutoPauseIfNeeded() {
+        guard autoPauseEnabled, phase == .active else { return }
+        guard WatchAutoPolicy.shouldStagePause(
+''',
+    '''    private func stageAutoPauseIfNeeded() {
+        guard autoPauseEnabled, phase == .active else { return }
+        let timeSinceAutoResume = Date().timeIntervalSince(lastAutoResumeAt)
+        let repauseCooldown = WatchAutoPauseSettings.repauseCooldown(for: displayActivity)
+        if timeSinceAutoResume >= 0, timeSinceAutoResume < repauseCooldown {
+            // AUTO_RESUME_REPAUSE_COOLDOWN
+            cancelPendingAutoPause()
+            return
+        }
+        guard WatchAutoPolicy.shouldStagePause(
+''',
+    "// AUTO_RESUME_REPAUSE_COOLDOWN",
+    "watch auto pause must respect post-resume hysteresis",
+)
+
+# Stamp the cooldown only after the fused resume evidence is confirmed at the
+# end of its dwell. Candidate/cancelled resumes never suppress future pauses.
+watch = replace_once_or_present(
+    watch,
+    '''            self.lastAutoResumeDecisionReason = confirmed.reason
+            self.autoResumeCandidateSince = nil
+            self.authorityRevision += 1
+            self.resumeCore(reason: "auto")
+''',
+    '''            self.lastAutoResumeDecisionReason = confirmed.reason
+            self.autoResumeCandidateSince = nil
+            self.lastAutoResumeAt = Date() // AUTO_RESUME_STAMP_REPAUSE_HYSTERESIS
+            self.authorityRevision += 1
+            self.resumeCore(reason: "auto")
+''',
+    "// AUTO_RESUME_STAMP_REPAUSE_HYSTERESIS",
+    "watch confirmed auto resume must stamp repause hysteresis",
+)
+
 for token in [
+    "// AUTO_RESUME_REPAUSE_HYSTERESIS_STATE",
+    "// AUTO_RESUME_RESET_REPAUSE_HYSTERESIS",
     "// AUTO_RESUME_RUNTIME_TIMER",
     "// AUTO_RESUME_PEDOMETER_PROBE_ONLY",
     'kind: "auto_resume_probe_pedometer"',
     '"canonical_steps_unchanged": true',
     "self.stageAutoResumeIfNeeded()",
     "// AUTO_RESUME_RESET_PEDOMETER_BASELINE",
+    "// AUTO_RESUME_REPAUSE_COOLDOWN",
+    "WatchAutoPauseSettings.repauseCooldown(for: displayActivity)",
+    "// AUTO_RESUME_STAMP_REPAUSE_HYSTERESIS",
 ]:
     if token not in watch:
         raise SystemExit(f"auto-resume runtime generated source missing token: {token}")
 
-if watch.count("// AUTO_RESUME_RUNTIME_TIMER") != 1:
-    raise SystemExit("auto-resume runtime duplicated timer integration")
-if watch.count("// AUTO_RESUME_PEDOMETER_PROBE_ONLY") != 1:
-    raise SystemExit("auto-resume runtime duplicated pedometer probe integration")
-if watch.count("// AUTO_RESUME_RESET_PEDOMETER_BASELINE") != 1:
-    raise SystemExit("auto-resume runtime duplicated pedometer baseline reset")
+for marker in [
+    "// AUTO_RESUME_REPAUSE_HYSTERESIS_STATE",
+    "// AUTO_RESUME_RESET_REPAUSE_HYSTERESIS",
+    "// AUTO_RESUME_RUNTIME_TIMER",
+    "// AUTO_RESUME_PEDOMETER_PROBE_ONLY",
+    "// AUTO_RESUME_RESET_PEDOMETER_BASELINE",
+    "// AUTO_RESUME_REPAUSE_COOLDOWN",
+    "// AUTO_RESUME_STAMP_REPAUSE_HYSTERESIS",
+]:
+    if watch.count(marker) != 1:
+        raise SystemExit(f"auto-resume runtime duplicated integration marker: {marker}")
 
 WATCH.write_text(watch, encoding="utf-8")
-print("AUTO RESUME RUNTIME PATCH: OK")
+print("AUTO RESUME RUNTIME + ANTI-OSCILLATION PATCH: OK")

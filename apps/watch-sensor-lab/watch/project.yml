@@ -15,6 +15,7 @@ targets:
       - path: ../Shared/TrackerSessionControl.swift
       - path: ../Shared/TrackerFinishPersistencePolicy.swift
       - path: ../Shared/TrackerAutoPolicy.swift
+      - path: ../Shared/TrackerAutoPauseStabilityPolicy.swift
       - path: ../Shared/TrackerAutoResumeProbe.swift
       - path: ../Shared/TelemetryShared.swift
       - path: Assets.xcassets
@@ -90,6 +91,7 @@ targets:
       - path: ../Shared/TrackerSessionControl.swift
       - path: ../Shared/TrackerFinishPersistencePolicy.swift
       - path: ../Shared/TrackerAutoPolicy.swift
+      - path: ../Shared/TrackerAutoPauseStabilityPolicy.swift
       - path: ../Shared/TrackerAutoResumeProbe.swift
       - path: ../Tests/Support/TrackerAutomationScenario.swift
       - path: ../Tests/TrackerWorkflowContractTests.swift
@@ -97,6 +99,7 @@ targets:
       - path: ../Tests/TrackerFinishPersistencePolicyTests.swift
       - path: ../Tests/TrackerAutoPolicyTests.swift
       - path: ../Tests/TrackerAutoPauseFusionTests.swift
+      - path: ../Tests/TrackerAutoPauseStabilityPolicyTests.swift
       - path: ../Tests/TrackerAutomationScenarioTests.swift
     settings:
       base:

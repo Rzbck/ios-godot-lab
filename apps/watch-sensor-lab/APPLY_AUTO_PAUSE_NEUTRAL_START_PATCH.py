@@ -208,4 +208,5 @@ POLICY.write_text(policy, encoding="utf-8")
 WATCH.write_text(watch, encoding="utf-8")
 TESTS.write_text(tests, encoding="utf-8")
 
+# DEVICE_CANDIDATE_TRIGGER_20260916: no runtime effect; forces exact-SHA artifact build.
 print("AUTO PAUSE NEUTRAL START PATCH: OK")

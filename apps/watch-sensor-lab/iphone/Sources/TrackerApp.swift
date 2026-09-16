@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 @main
@@ -57,6 +58,7 @@ private enum TrackerAppSection: Hashable {
 private struct TrackerRootView: View {
     @ObservedObject var tracker: TrackerModel
     @ObservedObject var startupPermissions: StartupPermissionCoordinator
+    @ObservedObject private var osmContext = OSMRouteContextService.shared
     @State private var completedSummary: TrackerSummary?
     @State private var selection: TrackerAppSection = .today
 
@@ -85,6 +87,11 @@ private struct TrackerRootView: View {
                 .tag(TrackerAppSection.history)
                 .tabItem { Label("Historique", systemImage: "clock.arrow.circlepath") }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if tracker.isActive, selection == .activity, OSMSurfacePreferences.enabled {
+                OSMLiveSurfaceBar()
+            }
+        }
         .task {
             WatchReliableRecovery.refreshAllAvailableSummaries()
             recentHistoryBridge.publish(summaries: store.listSummaries())
@@ -94,17 +101,32 @@ private struct TrackerRootView: View {
             recentHistoryBridge.publish(summaries: store.listSummaries())
         }
         .onChange(of: tracker.isActive) { _, active in
-            if active { selection = .activity }
+            if active {
+                selection = .activity
+                osmContext.begin(sessionID: tracker.sessionID, activity: tracker.displayActivity.rawValue)
+            }
+        }
+        .onReceive(tracker.$currentCoordinate) { coordinate in
+            guard tracker.isActive, let coordinate else { return }
+            if osmContext.currentSnapshot() == nil {
+                osmContext.begin(sessionID: tracker.sessionID, activity: tracker.displayActivity.rawValue)
+            }
+            osmContext.ingest(
+                coordinate: coordinate,
+                horizontalAccuracy: tracker.horizontalAccuracy,
+                activity: tracker.displayActivity.rawValue
+            )
         }
         .onChange(of: tracker.lastSummary) { previous, current in
             guard let current, previous?.sessionID != current.sessionID else { return }
+            osmContext.finish(sessionID: current.sessionID, endedAt: current.endedAt)
             WatchReliableRecovery.refreshSummaryIfNeeded(sessionID: current.sessionID)
             let summaries = store.listSummaries()
             completedSummary = summaries.first(where: { $0.sessionID == current.sessionID }) ?? current
             recentHistoryBridge.publish(summaries: summaries)
         }
         .sheet(item: $completedSummary) { summary in
-            PostActivitySummaryView(summary: summary)
+            OSMPostActivitySummaryContainer(summary: summary)
         }
     }
 }

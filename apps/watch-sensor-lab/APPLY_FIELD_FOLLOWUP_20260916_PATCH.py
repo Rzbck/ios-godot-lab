@@ -22,6 +22,7 @@ POLICY = ROOT / "Shared/TrackerAutoPolicy.swift"
 FINISH_POLICY = ROOT / "Shared/TrackerFinishPersistencePolicy.swift"
 WATCH = ROOT / "watch/Sources/SensorModel.swift"
 WATCH_HISTORY = ROOT / "watch/Sources/WatchRecentHistory.swift"
+WATCH_UI_FAKE = ROOT / "UITestHarness/watch/FakeSensorModel.swift"
 WATCH_VIEW = ROOT / "watch/Sources/WatchActiveWorkoutView.swift"
 TRACKER_APP = ROOT / "iphone/Sources/TrackerApp.swift"
 PRODUCT = ROOT / "iphone/Sources/ActivityProductContainerView.swift"
@@ -44,6 +45,7 @@ policy = POLICY.read_text(encoding="utf-8")
 finish_policy = FINISH_POLICY.read_text(encoding="utf-8")
 watch = WATCH.read_text(encoding="utf-8")
 watch_history = WATCH_HISTORY.read_text(encoding="utf-8")
+watch_ui_fake = WATCH_UI_FAKE.read_text(encoding="utf-8")
 watch_view = WATCH_VIEW.read_text(encoding="utf-8")
 tracker_app = TRACKER_APP.read_text(encoding="utf-8")
 product = PRODUCT.read_text(encoding="utf-8")
@@ -365,6 +367,19 @@ watch = replace_once_or_present(
     "Watch OSM WC handler",
 )
 
+# ---------------------------------------------------------------------------
+# Watch UI harness parity: WatchActiveWorkoutView is compiled unchanged by
+# the UI harness, so its fake SensorModel must expose every OSM field read by
+# the production view. No HealthKit/WatchConnectivity behavior is added here.
+# ---------------------------------------------------------------------------
+watch_ui_fake = replace_once_or_present(
+    watch_ui_fake,
+    '''    @Published var horizontalAccuracy = 5.0\n''',
+    '''    @Published var horizontalAccuracy = 5.0\n    @Published var osmContextAvailable = false // FIELD_1789561072024_WATCH_UI_HARNESS_OSM\n    @Published var osmSurfaceLabel = "Inconnu"\n    @Published var osmHighwayLabel = "Type de voie inconnu"\n    @Published var osmConfidence: Double = 0\n''',
+    "// FIELD_1789561072024_WATCH_UI_HARNESS_OSM",
+    "Watch UI harness OSM parity",
+)
+
 watch_view = replace_once_or_present(
     watch_view,
     '''            HStack(spacing: 8) {\n                CompactTerrainValue(title: "ALT", value: model.elapsedSeconds > 4 ? "\\(Int(model.altitudeMeters)) m" : "—")\n                CompactTerrainValue(title: "D+", value: model.elapsedSeconds > 4 ? "+\\(Int(model.elevationGainMeters)) m" : "—")\n                CompactTerrainValue(title: "GPS", value: model.horizontalAccuracy >= 0 ? "±\\(Int(model.horizontalAccuracy)) m" : "—")\n            }\n''',
@@ -395,6 +410,7 @@ required = {
         "FIELD_1789561072024_WATCH_USERINFO_MERGED",
     ],
     "watch_view": ["FIELD_1789561072024_WATCH_OSM_TERRAIN_UI"],
+    "watch_ui_fake": ["FIELD_1789561072024_WATCH_UI_HARNESS_OSM"],
     "tracker_app": ["FIELD_1789561072024_OSM_USE_EXISTING_PRODUCT_SLOTS"],
     "product": [
         "FIELD_1789561072024_PRODUCT_OSM_CONTEXT",
@@ -421,6 +437,7 @@ texts = {
     "finish_policy": finish_policy,
     "watch": watch,
     "watch_view": watch_view,
+    "watch_ui_fake": watch_ui_fake,
     "tracker_app": tracker_app,
     "product": product,
     "history": history,
@@ -438,6 +455,7 @@ POLICY.write_text(policy, encoding="utf-8")
 FINISH_POLICY.write_text(finish_policy, encoding="utf-8")
 WATCH.write_text(watch, encoding="utf-8")
 WATCH_HISTORY.write_text(watch_history, encoding="utf-8")
+WATCH_UI_FAKE.write_text(watch_ui_fake, encoding="utf-8")
 WATCH_VIEW.write_text(watch_view, encoding="utf-8")
 TRACKER_APP.write_text(tracker_app, encoding="utf-8")
 PRODUCT.write_text(product, encoding="utf-8")

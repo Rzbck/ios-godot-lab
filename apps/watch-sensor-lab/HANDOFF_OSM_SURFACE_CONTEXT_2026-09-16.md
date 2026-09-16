@@ -16,6 +16,24 @@ Add OpenStreetMap-derived road/surface context to Watch Tracker without touching
 - base status: **CI VALIDATED**, **NOT physically validated**. This base was chosen because it already contains the MapKit product shell and local effort estimator required by this feature. Do not relabel it as physically validated.
 - parallel Auto-pause branch is separate and must not be modified by this chantier.
 
+## Exact OSM implementation candidate
+
+- code SHA: `42d8685655eb5e024e2e154d16323dd3b1106140`
+- commit: `feat(tracker): add OSM road surface context`
+- GitHub Actions run: `35089788558` — **SUCCESS**
+- CI job: `104773123198` — **SUCCESS**
+- artifact id: `10443886292`
+- artifact name: `watch-sensor-lab-companion-42d8685655eb5e024e2e154d16323dd3b1106140`
+- artifact digest: `sha256:c792a21ae3cf6f4a65651b0509aff66cb4d9d58c0b7df9c125be15af48ebf72b`
+- iPhone unsigned build: SUCCESS
+- watchOS unsigned build: SUCCESS
+- HealthKit declarations: SUCCESS
+- embedded Watch companion assembly: SUCCESS
+- exact-SHA companion IPA package/upload: SUCCESS
+- status: **BUILD CI VALIDÉ**, **NOT physically validated on iPhone/Watch**.
+
+This documentation commit may move branch HEAD ahead of the code SHA without launching another build. For installation/testing, resolve the compatible BUILD SHA using the existing updater rather than treating the docs-only HEAD as a new binary.
+
 ## Implementation
 
 New `iphone/Sources/OSMSurfaceContext.swift` provides:
@@ -44,15 +62,14 @@ New `iphone/Sources/OSMSurfaceContext.swift` provides:
 
 ## Validation state
 
-- branch created from exact CI-success base;
-- implementation committed after this handoff update;
-- **CI result for the OSM implementation must be checked before any device install**;
-- **no physical iPhone/Watch validation yet**;
+- **BUILD CI VALIDÉ** for exact code SHA `42d8685655eb5e024e2e154d16323dd3b1106140` / run `35089788558`;
+- **NO physical iPhone/Watch validation yet**;
+- OSM network/map-matching correctness, UI behavior, persistence, battery impact and effort calibration all remain hardware/field-test items;
 - **no merge into Auto-pause, main or release**.
 
 ## Required tests
 
-1. CI compile for iPhone + Watch companion exact SHA.
+1. Install exact compatible artifact for code SHA `42d8685655eb5e024e2e154d16323dd3b1106140` using the existing Watch Sensor Lab updater/iLoader workflow.
 2. Device route with asphalt → gravel/track → asphalt where OSM tags are known.
 3. Route with `highway=*` but no `surface=*`: UI must show `Inconnu`, effort adds no surface penalty for that part.
 4. Parallel roads / intersection and degraded GPS to inspect confidence and false map-matches.

@@ -25,6 +25,7 @@ on:
       - 'apps/watch-sensor-lab/UITestHarness/**'
       - 'apps/watch-sensor-lab/SESSION_SYNC_PATCH.py'
       - 'apps/watch-sensor-lab/APPLY_GENERATED_SOURCE_CHAIN.py'
+      - 'apps/watch-sensor-lab/*PATCH.py'
       - 'apps/watch-sensor-lab/APPLY_AUTO_BEHAVIOR_PATCH.py'
       - 'apps/watch-sensor-lab/APPLY_AUTO_PAUSE_SAFETY_PATCH.py'
       - 'apps/watch-sensor-lab/APPLY_AUTO_PAUSE_FUSION_PATCH.py'

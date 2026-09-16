@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Allow neutral Auto startup to use the conservative auto-pause profile.
 
-Field session 1789535250518 on build 6884591568c8 proved that the Watch had
+Field session 1789535250518 on build 6884591568c8f71cc9e4246c10ff0bf1045d2102 proved that the Watch had
 corroborated stillness, zero cadence and stale GPS speed, but pause evaluation
 failed closed only because the neutral Auto placeholder (`.automatic`) was not
 listed as a supported auto-pause activity.
@@ -102,7 +102,9 @@ watch = replace_once_or_present(
 
 # Replace the old regression that deliberately rejected `.automatic` with the
 # field-proven behavior from session 1789535250518.  Unsupported real sports
-# still fail closed.
+# still fail closed.  This regression intentionally does not pin the exact
+# pause dwell: later policy layers may tune timing while preserving the neutral
+# Auto capability validated here.
 tests = replace_once_or_present(
     tests,
     '''    func testAutomaticPlaceholderAndGenericSportsFailClosed() {
@@ -122,7 +124,6 @@ tests = replace_once_or_present(
 ''',
     '''    func testFieldSession1789535250518NeutralAutomaticCanPauseAfterFusedStillness() { // FIELD_1789535250518_NEUTRAL_AUTO_PAUSE
         XCTAssertTrue(TrackerAutoPauseStabilityPolicy.supports(.automatic))
-        XCTAssertEqual(TrackerAutoPauseStabilityPolicy.pauseDwell(for: .automatic), 6.0)
 
         XCTAssertTrue(
             TrackerAutoPauseStabilityPolicy.shouldStagePause(

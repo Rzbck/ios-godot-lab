@@ -31,9 +31,16 @@ This outing does not validate later Auto-pause reactivity/haptics work such as `
 - Final `pause_until_end`: `36.09 s`.
 - Strong evidence that the final paused interval is subtracted twice from the local Tracker summary when the workout is ended while paused.
 
-### Auto-sport clarification still needed
+### Defect confirmed: fast walking misclassified as running
 
-Final activity is `walking` in Tracker and HealthKit. Auto classification briefly switched `walking -> running -> walking` twice (about 6 s near the start and about 3 s near 12:59 UTC). This is a defect only if the user did not actually jog at those moments.
+User physically confirms the whole outing was walking only; there was no jogging/running. Therefore both short `walking -> running -> walking` transitions are false positives.
+
+The tested Auto policy classifies running from sensors when `speed >= 1.7 m/s` and `cadence >= 95 steps/min` for a 2 s dwell. The forensic run crossed that threshold while fast-walking:
+
+- first false run: Watch about `1.79 m/s` with about `104.5 steps/min`;
+- second false run: Watch about `1.70–1.72 m/s` with about `106 steps/min`.
+
+This threshold is too permissive for fast walkers. Do not fix by speed alone. Rework walk/run classification with stronger gait evidence and hysteresis; cadence near 95–106 steps/min must remain compatible with brisk walking. Published gait-transition literature places spontaneous walk/run transition roughly around 1.9–2.1 m/s for healthy adults and reports cadence around 135–140 steps/min as a substantially stronger transition discriminator than the current 95 steps/min threshold.
 
 ## OSM forensic result
 
@@ -71,16 +78,37 @@ Effort contribution for this walking session:
 
 No app-level error records were returned in the captured error diagnostics. Cache/offline behavior is not proven by this archive because the OSM cache directory was not collected and dedicated Overpass/cache telemetry is insufficient in this candidate.
 
-## Physical UI observations from user
+## Physical OSM/UI observations from user
 
-1. OSM live context is not shown on the Apple Watch. Future UI should expose useful surface/road context on Watch while keeping OSM network requests on iPhone.
-2. On iPhone the OSM bar is inserted at the top of the activity screen even though an existing designated UI slot already exists for this kind of information. Reuse the existing slot instead of adding a competing top safe-area bar.
+The OSM data pipeline worked in the archive, but the feature is not acceptably integrated in the product UI yet.
+
+1. **Apple Watch:** no OSM live context was visible during the workout. Keep OSM network access on iPhone, but mirror the resulting current surface/highway context to Watch and integrate it into the existing Watch route/terrain experience.
+2. **iPhone live activity:** the candidate added a separate OSM bar at the top of the activity screen. This is the wrong location. `ActivityProductContainerView` already contains the intended `Terrain` page and an explicit `SURFACE` slot currently saying `Non déterminée en direct`; wire OSM into that existing slot instead of adding a competing top safe-area bar.
+3. **iPhone map:** the normal activity UI already has a `Carte` page. OSM colored route segments should be rendered in that existing map rather than hidden behind a separate OSM sheet/map that the user could not find.
+4. **History:** after the workout, opening this activity from `Historique` showed no visible OSM information. `ActivityDetailView` must load persisted `osm_context.json`, render the route with surface colors, show surface/highway breakdown and percentages, and expose the OSM contribution to effort there.
+5. **Finish from Watch:** because the workout was ended from Watch, the user saw no final OSM summary. OSM cannot depend on an iPhone-only transient finish sheet; the persisted summary must be discoverable later from History on iPhone, and useful compact context should also reach Watch where practical.
+
+The user did not find or see the separate OSM detail map at any point. Treat this as a product discoverability/integration failure, not as proof that map rendering itself is broken.
+
+## Next implementation targets
+
+1. Fix fast-walk -> running false positives with gait-aware thresholds/hysteresis, not a single low speed/cadence gate.
+2. Fix local duration when ending while auto-paused.
+3. Remove the separate top `OSMLiveSurfaceBar` integration path.
+4. Feed OSM into the existing iPhone `Terrain > SURFACE` slot.
+5. Feed colored OSM segments into the existing iPhone `Carte` page.
+6. Load persisted OSM context in `ActivityDetailView` / History and show map + breakdown + effort contribution.
+7. Mirror compact OSM current context from iPhone to the Watch and integrate it into `WatchRouteTerrainPage`; Watch must never perform Overpass requests itself.
+8. Reconcile OSM segment distances against canonical Tracker/Watch distance before presenting final percentages/distances.
+9. Add regression tests for brisk walking around 1.7–1.9 m/s with ~100–120 steps/min so it cannot become running solely from these signals.
 
 ## Still not physically proven
 
-- detailed OSM map colored segments were visually checked;
-- final OSM summary/percentages were visibly correct;
+- correct visible OSM surface/road context on Watch;
+- OSM colored segments integrated into the normal iPhone map;
+- OSM summary and percentages visible in History;
 - offline/cache behavior;
-- whether the two short automatic running classifications were real jogging or false positives.
+- a corrected walk/run classifier on a new physical build;
+- a corrected stop-while-paused duration on a new physical build.
 
 Do not merge to `main`, release, or call either feature fully validated from this outing alone.

@@ -102,6 +102,7 @@ enum PhoneAutoPausePreferences {
 struct TrackerSettingsView: View {
     @EnvironmentObject private var tracker: TrackerModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("tracker.osmSurface.enabled") private var osmSurfaceEnabled = true
 
     var body: some View {
         NavigationStack {
@@ -111,7 +112,7 @@ struct TrackerSettingsView: View {
                         "Pause automatique",
                         isOn: Binding(
                             get: { tracker.autoPauseEnabled },
-                            set: { tracker.setAutoPauseEnabled($0) }
+                            set: { tracker.workflowSetAutoPauseEnabled($0) }
                         )
                     )
                     .tint(.mint)
@@ -145,6 +146,15 @@ struct TrackerSettingsView: View {
                             }
                         }
                     }
+                }
+
+                Section {
+                    Toggle("Type de revêtement (OSM)", isOn: $osmSurfaceEnabled)
+                        .tint(.cyan)
+                } header: {
+                    Text("Carte")
+                } footer: {
+                    Text("Affiche les chemins OSM colorés par revêtement sous la trace, le revêtement courant, puis le détail dans le résumé. Si OSM ne renseigne pas la surface, Watch Tracker affiche Inconnu.")
                 }
 
                 Section("Connexion") {
@@ -268,6 +278,5 @@ private struct AutoPauseProfileSettingsView: View {
         }
         .navigationTitle(profile.label)
         .navigationBarTitleDisplayMode(.inline)
-        .disabled(tracker.isActive)
     }
 }

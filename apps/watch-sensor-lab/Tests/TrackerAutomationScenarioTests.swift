@@ -1,0 +1,108 @@
+import XCTest
+
+final class TrackerAutomationScenarioTests: XCTestCase {
+    func testScenarioJSONRoundTripIsStable() throws {
+        let scenario = TrackerAutomationFixtures.walkRunCycle
+        try scenario.validate()
+
+        let data = try JSONEncoder().encode(scenario)
+        let decoded = try JSONDecoder().decode(
+            TrackerAutomationScenario.self,
+            from: data
+        )
+
+        XCTAssertEqual(decoded, scenario)
+    }
+
+    func testWalkRunCycleReplayUsesVirtualTimeOnly() throws {
+        let result = try TrackerAutomationReplayer.replay(
+            TrackerAutomationFixtures.walkRunCycle
+        )
+
+        XCTAssertEqual(
+            result.activityCandidates,
+            [.walking, .walking, .running, .running, .cycling, .cycling]
+        )
+        XCTAssertEqual(result.totalDistanceMeters, 110, accuracy: 0.001)
+        XCTAssertEqual(result.maximumSpeedMps, 7.2, accuracy: 0.001)
+        XCTAssertEqual(result.finalHeartRateBPM, 142, accuracy: 0.001)
+    }
+
+    func testStopAndResumeWalkingExposesPauseAndResumeCandidates() throws {
+        let result = try TrackerAutomationReplayer.replay(
+            TrackerAutomationFixtures.stopAndResumeWalking
+        )
+
+        XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(1))
+        XCTAssertTrue(result.pauseCandidateFrameIndexes.contains(2))
+        XCTAssertTrue(result.resumeCandidateFrameIndexes.contains(3))
+    }
+
+    func testAutoPauseDisabledRemovesPauseAndResumeCandidates() throws {
+        let base = TrackerAutomationFixtures.stopAndResumeWalking
+        let disabled = TrackerAutomationScenario(
+            name: base.name,
+            selectedActivity: base.selectedActivity,
+            autoPauseEnabled: false,
+            frames: base.frames
+        )
+
+        let result = try TrackerAutomationReplayer.replay(disabled)
+
+        XCTAssertTrue(result.pauseCandidateFrameIndexes.isEmpty)
+        XCTAssertTrue(result.resumeCandidateFrameIndexes.isEmpty)
+    }
+
+    func testScenarioRejectsNonMonotonicVirtualTime() {
+        let invalid = TrackerAutomationScenario(
+            name: "invalid-time",
+            frames: [
+                frame(at: 5),
+                frame(at: 5),
+            ]
+        )
+
+        XCTAssertThrowsError(try invalid.validate()) { error in
+            XCTAssertEqual(
+                error as? TrackerAutomationScenarioError,
+                .nonMonotonicTime(1)
+            )
+        }
+    }
+
+    func testScenarioRejectsNegativeMetrics() {
+        let invalid = TrackerAutomationScenario(
+            name: "invalid-speed",
+            frames: [
+                TrackerAutomationFrame(
+                    offsetSeconds: 0,
+                    motion: TrackerMotionEvidence(walking: true),
+                    speedMps: -1,
+                    cadenceSPM: 0,
+                    heartRateBPM: 80,
+                    distanceDeltaMeters: 0,
+                    horizontalAccuracyMeters: 5
+                ),
+            ]
+        )
+
+        XCTAssertThrowsError(try invalid.validate()) { error in
+            XCTAssertEqual(
+                error as? TrackerAutomationScenarioError,
+                .negativeMetric(0)
+            )
+        }
+    }
+
+    private func frame(at offset: TimeInterval) -> TrackerAutomationFrame {
+        TrackerAutomationFrame(
+            offsetSeconds: offset,
+            motion: TrackerMotionEvidence(walking: true),
+            speedMps: 1,
+            cadenceSPM: 90,
+            heartRateBPM: 90,
+            distanceDeltaMeters: 1,
+            horizontalAccuracyMeters: 5
+        )
+    }
+}

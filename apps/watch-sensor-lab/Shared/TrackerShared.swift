@@ -248,6 +248,124 @@ enum ActivityKind: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+
+enum TrackerFinishDisposition: String, Codable {
+    /// Conserve les changements d'activité détectés pendant la séance.
+    case preserveDetectedSegments
+
+    /// L'utilisateur confirme que toute la séance doit être considérée
+    /// comme un seul sport.
+    case forceSingleActivity
+}
+
+struct TrackerFinishReviewState {
+    let required: Bool
+    let suggestedActivity: ActivityKind
+}
+
+enum TrackerWorkflowPolicy {
+    static func finishReview(
+        selectedActivity: ActivityKind,
+        effectiveActivity: ActivityKind,
+        suggestedActivity: ActivityKind? = nil
+    ) -> TrackerFinishReviewState {
+        TrackerFinishReviewState(
+            required: selectedActivity.isAutomatic,
+            suggestedActivity: suggestedActivity ?? effectiveActivity
+        )
+    }
+}
+
+
+/// Fonctions de session qui doivent exister sur iPhone ET Apple Watch.
+///
+/// Ajouter une nouvelle fonction commune ici oblige les deux modèles
+/// à l'implémenter, sinon la target concernée ne compile plus.
+enum TrackerSharedWorkflowCapability: String, CaseIterable {
+    case activitySelection
+    case start
+    case autoPauseToggle
+    case pause
+    case resume
+    case finishReview
+    case finishDisposition
+    case purge
+    case historicalActivityCorrection
+}
+
+protocol TrackerSharedWorkflowSurface: AnyObject {
+    var workflowIsRunning: Bool { get }
+    var workflowIsPaused: Bool { get }
+    var workflowSelectedActivity: ActivityKind { get }
+    var workflowEffectiveActivity: ActivityKind { get }
+    var workflowFinishReview: TrackerFinishReviewState { get }
+
+    func workflowSelectActivity(_ activity: ActivityKind)
+    func workflowSetAutoPauseEnabled(_ enabled: Bool)
+
+    func workflowStart()
+    func workflowPause()
+    func workflowResume()
+
+    func workflowFinish(
+        disposition: TrackerFinishDisposition,
+        finalActivity: ActivityKind?
+    )
+
+    func workflowDeleteAllTestData()
+
+    func workflowCorrectHistoricalActivity(
+        sessionID: String,
+        activity: ActivityKind
+    )
+}
+
+
+// Paquet compact et durable construit depuis les raw Tracker iPhone,
+// puis transféré à la Watch. Les logs motion complets ne traversent
+// jamais WatchConnectivity : seuls les éléments nécessaires à la
+// reconstruction Santé sont transportés.
+struct TrackerHealthRestoreHeartRate: Codable, Equatable {
+    let timestamp: TimeInterval
+    let bpm: Double
+}
+
+struct TrackerHealthRestoreLocation: Codable, Equatable {
+    let timestamp: TimeInterval
+    let latitude: Double
+    let longitude: Double
+    let altitudeMeters: Double
+    let horizontalAccuracyMeters: Double
+    let verticalAccuracyMeters: Double
+    let speedMps: Double?
+}
+
+struct TrackerHealthRestorePause: Codable, Equatable {
+    let startedAt: TimeInterval
+    let endedAt: TimeInterval
+}
+
+struct TrackerHealthRestorePayload: Codable, Equatable {
+    static let currentSchema = 1
+
+    let schema: Int
+    let sessionID: String
+    let targetActivity: String
+    let sourceActivity: String
+    let startedAt: TimeInterval
+    let endedAt: TimeInterval
+    let activeDuration: TimeInterval
+    let distanceMeters: Double
+    let activeEnergyKcal: Double?
+    let heartRates: [TrackerHealthRestoreHeartRate]
+    let locations: [TrackerHealthRestoreLocation]
+    let pauses: [TrackerHealthRestorePause]
+    let pauseProvenance: String
+    let sourceBuildSHA: String?
+    let sourceAlgorithmVersion: String?
+}
+
+
 struct TrackerWireMessage: Codable {
     enum Kind: String, Codable { case authority, request, selection, purge }
 
@@ -272,6 +390,12 @@ struct TrackerWireMessage: Codable {
     var heartRateBPM: Double?
     var averageHeartRateBPM: Double?
     var activeEnergyKcal: Double?
+
+    // Workflow de fin partagé iPhone / Watch.
+    var finishReviewRequired: Bool? = nil
+    var suggestedFinalActivity: String? = nil
+    var finishDisposition: String? = nil
+    var finalActivityOverride: String? = nil
 }
 
 enum TrackerWireCodec {

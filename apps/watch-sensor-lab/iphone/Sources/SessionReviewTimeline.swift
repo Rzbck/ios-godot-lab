@@ -59,7 +59,14 @@ struct ActivityReviewStore {
     }
 
     func effectiveActivity(for summary: TrackerSummary) -> String {
-        load(sessionID: summary.sessionID)?.confirmedActivity ?? summary.activity
+        guard
+            let review = load(sessionID: summary.sessionID),
+            review.healthKitSyncState == "replacement_verified"
+        else {
+            return summary.activity
+        }
+
+        return review.confirmedActivity
     }
 
     private func reviewURL(sessionID: String, createRoot: Bool = false) -> URL? {
@@ -211,46 +218,37 @@ final class SessionTimelineLoader {
     }
 }
 
+/// Read-only historical activity summary.
+///
+/// The former picker triggered a second, Watch-side HealthKit mutation path.
+/// Historical HealthKit changes now have a single entry point: the iPhone
+/// Récupération tab backed by HistoricalHealthKitRepairCoordinator.
 struct ActivityReviewCard: View {
     let summary: TrackerSummary
     var requiresConfirmation = false
     var onSaved: ((ActivityReviewRecord) -> Void)?
 
-    @State private var selectedActivity: ActivityKind
     @State private var storedReview: ActivityReviewRecord?
-    @State private var saveError: String?
-
     private let reviewStore = ActivityReviewStore()
-
-    init(
-        summary: TrackerSummary,
-        requiresConfirmation: Bool = false,
-        onSaved: ((ActivityReviewRecord) -> Void)? = nil
-    ) {
-        self.summary = summary
-        self.requiresConfirmation = requiresConfirmation
-        self.onSaved = onSaved
-        let initial = ActivityKind(rawValue: summary.activity) ?? .other
-        _selectedActivity = State(initialValue: initial.isAutomatic ? .other : initial)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("VALIDATION DE L’ACTIVITÉ", systemImage: "checkmark.seal.fill")
+                Label("ACTIVITÉ ENREGISTRÉE", systemImage: "checkmark.seal.fill")
                     .font(.caption.weight(.black))
                     .foregroundStyle(.secondary)
                 Spacer()
-                if storedReview != nil {
-                    Text("CONFIRMÉ")
+                if let storedReview,
+                   storedReview.healthKitSyncState == "replacement_verified" {
+                    Text("ANCIENNE VALIDATION")
                         .font(.caption2.weight(.black))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(.orange)
                 }
             }
 
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Détection enregistrée")
+                    Text("Tracker raw")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     Text(activityLabelForReview(summary.activity))
@@ -262,77 +260,23 @@ struct ActivityReviewCard: View {
                     .foregroundStyle(.mint)
             }
 
-            Picker("Activité réelle", selection: $selectedActivity) {
-                ForEach(ActivityKind.allCases.filter { !$0.isAutomatic }) { activity in
-                    Text(activity.label).tag(activity)
-                }
-            }
-            .pickerStyle(.menu)
-
-            if selectedActivity.rawValue != summary.activity {
-                Label(
-                    "La correction change l’historique Watch Tracker. Le workout HealthKit déjà sauvegardé ne peut pas être modifié sur place ; la synchronisation Santé doit rester explicitement tracée.",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
+            Text("Toute correction ou reconstruction Santé se fait désormais uniquement dans l’onglet Récupération de l’iPhone. Ce panneau ne modifie plus HealthKit.")
                 .font(.caption2)
-                .foregroundStyle(.orange)
-            } else if requiresConfirmation && storedReview == nil {
-                Text("Confirme l’activité avant de fermer ce résumé.")
+                .foregroundStyle(.secondary)
+
+            if requiresConfirmation {
+                Label("Pour corriger le sport, ouvre Récupération.", systemImage: "iphone.and.arrow.forward")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-
-            Button {
-                saveReview()
-            } label: {
-                Label(storedReview == nil ? "Confirmer l’activité" : "Mettre à jour", systemImage: "checkmark.circle.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-
-            if let storedReview, storedReview.changedByUser {
-                Text("Correction utilisateur conservée : \(activityLabelForReview(storedReview.detectedActivity)) → \(activityLabelForReview(storedReview.confirmedActivity)).")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            if let saveError {
-                Text(saveError)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(.orange)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onAppear {
-            if let existing = reviewStore.load(sessionID: summary.sessionID) {
-                storedReview = existing
-                if let activity = ActivityKind(rawValue: existing.confirmedActivity), !activity.isAutomatic {
-                    selectedActivity = activity
-                }
-                onSaved?(existing)
-            }
-        }
-    }
-
-    private func saveReview() {
-        let detected = summary.activity
-        let confirmed = selectedActivity.rawValue
-        let healthState = detected == confirmed ? "matches_saved_workout" : "review_differs_from_saved_workout"
-        let record = ActivityReviewRecord(
-            sessionID: summary.sessionID,
-            detectedActivity: detected,
-            confirmedActivity: confirmed,
-            healthKitSyncState: healthState
-        )
-        do {
-            try reviewStore.save(record)
-            storedReview = record
-            saveError = nil
-            onSaved?(record)
-        } catch {
-            saveError = "Impossible d’enregistrer la correction : \(error.localizedDescription)"
+            let existing = reviewStore.load(sessionID: summary.sessionID)
+            storedReview = existing
+            if let existing { onSaved?(existing) }
         }
     }
 }

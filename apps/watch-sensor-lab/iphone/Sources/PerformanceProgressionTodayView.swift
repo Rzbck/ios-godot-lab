@@ -74,6 +74,12 @@ private struct ComparisonSeriesPointV2: Identifiable {
     var id: Int { index }
 }
 
+private struct AllHistoryPointV2: Identifiable {
+    let date: Date
+    let value: Double
+    var id: Date { date }
+}
+
 private struct SportSliceV2: Identifiable {
     let activity: ActivityKind
     let duration: TimeInterval
@@ -169,47 +175,73 @@ struct PerformanceProgressionTodayView: View {
 
     private var todayQuickGrid: some View {
         let day = bounds(for: .today)
-        let todayRecords = records(in: day.currentStart...day.currentEnd)
+        let todayRecords = records(
+            in: day.currentStart...day.currentEnd
+        )
         let today = aggregate(todayRecords)
 
-        return LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+        return HStack(spacing: 6) {
             NavigationLink {
-                PerformanceMetricDetailV2(title: "Activités aujourd’hui", symbol: "figure.run", accent: .orange, records: todayRecords, metric: .sessions)
-            } label: {
-                ProgressionDrillCardV2(value: "\(today.sessions)", label: "SÉANCES", symbol: "figure.run", accent: .orange)
-            }
-
-            NavigationLink {
-                PerformanceMetricDetailV2(title: "Temps actif aujourd’hui", symbol: "clock.fill", accent: .cyan, records: todayRecords, metric: .duration)
-            } label: {
-                ProgressionDrillCardV2(value: progressionDurationV2(today.duration), label: "TEMPS ACTIF", symbol: "clock.fill", accent: .cyan)
-            }
-
-            NavigationLink {
-                PerformanceMetricDetailV2(title: "Distance aujourd’hui", symbol: "location.fill", accent: .mint, records: todayRecords, metric: .distance)
-            } label: {
-                ProgressionDrillCardV2(value: progressionDistanceV2(today.distance), label: "DISTANCE", symbol: "location.fill", accent: .mint)
-            }
-
-            NavigationLink {
-                HealthSignalDetailV2(
-                    title: "Pas aujourd’hui",
-                    value: health.stepsToday.map { "\(Int($0.rounded()))" } ?? "—",
-                    subtitle: "Total Apple Health du jour",
-                    symbol: "shoeprints.fill",
-                    accent: .green,
-                    points: []
+                PerformanceMetricDetailV2(
+                    title: "Activités aujourd’hui",
+                    symbol: "figure.run",
+                    accent: .orange,
+                    records: todayRecords,
+                    metric: .sessions
                 )
             } label: {
                 ProgressionDrillCardV2(
-                    value: health.stepsToday.map { "\(Int($0.rounded()))" } ?? "—",
-                    label: "PAS",
-                    symbol: "shoeprints.fill",
-                    accent: .green
+                    value: "\(today.sessions)",
+                    label: "SÉANCES",
+                    symbol: "figure.run",
+                    accent: .orange
                 )
             }
+
+            NavigationLink {
+                PerformanceMetricDetailV2(
+                    title: "Temps actif aujourd’hui",
+                    symbol: "clock.fill",
+                    accent: .cyan,
+                    records: todayRecords,
+                    metric: .duration
+                )
+            } label: {
+                ProgressionDrillCardV2(
+                    value: progressionDurationV2(today.duration),
+                    label: "ACTIF",
+                    symbol: "clock.fill",
+                    accent: .cyan
+                )
+            }
+
+            NavigationLink {
+                PerformanceMetricDetailV2(
+                    title: "Distance aujourd’hui",
+                    symbol: "location.fill",
+                    accent: .mint,
+                    records: todayRecords,
+                    metric: .distance
+                )
+            } label: {
+                ProgressionDrillCardV2(
+                    value: progressionDistanceV2(today.distance),
+                    label: "DIST.",
+                    symbol: "location.fill",
+                    accent: .mint
+                )
+            }
+
+            ProgressionDrillCardV2(
+                value: health.stepsToday.map {
+                    "\(Int($0.rounded()))"
+                } ?? "—",
+                label: "PAS",
+                symbol: "shoeprints.fill",
+                accent: .green
+            )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TrackerDepthButtonStyle())
     }
 
     private var periodSelector: some View {
@@ -230,7 +262,7 @@ struct PerformanceProgressionTodayView: View {
                                 .frame(height: 36)
                                 .background(range == item ? Color.cyan : Color.white.opacity(0.08), in: Capsule())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(TrackerDepthButtonStyle())
                     }
                 }
             }
@@ -241,7 +273,6 @@ struct PerformanceProgressionTodayView: View {
         let b = bounds(for: range)
         let current = aggregate(records(in: b.currentStart...b.currentEnd))
         let previous = aggregate(previousRecords(bounds: b))
-        let points = comparisonPoints(bounds: b, metric: metric)
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -252,75 +283,96 @@ struct PerformanceProgressionTodayView: View {
                     Text(range.comparisonTitle)
                         .font(.headline.weight(.bold))
                 }
+
                 Spacer()
-                Menu {
-                    ForEach(PerformanceMetricV2.allCases) { option in
-                        Button { metric = option } label: { Label(option.label, systemImage: option.symbol) }
+
+                Label("glisse", systemImage: "arrow.left.and.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+
+            HStack(spacing: 7) {
+                ForEach(PerformanceMetricV2.allCases) { candidate in
+                    Button {
+                        withAnimation(.snappy) {
+                            metric = candidate
+                        }
+                    } label: {
+                        Label(candidate.label, systemImage: candidate.symbol)
+                            .font(.caption2.weight(.bold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.70)
+                            .foregroundStyle(
+                                metric == candidate
+                                    ? Color.black
+                                    : Color.primary
+                            )
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 32)
+                            .background(
+                                metric == candidate
+                                    ? Color.cyan
+                                    : Color.white.opacity(0.07),
+                                in: Capsule()
+                            )
                     }
-                } label: {
-                    Label(metric.label, systemImage: metric.symbol)
-                        .font(.caption.weight(.bold))
-                        .padding(.horizontal, 10)
-                        .frame(height: 32)
-                        .background(.white.opacity(0.08), in: Capsule())
+                    .buttonStyle(TrackerDepthButtonStyle())
                 }
-                .buttonStyle(.plain)
             }
 
             if range == .all {
-                Text("Choisis Aujourd’hui, 7 j, 1 mois, 6 mois ou 1 an pour superposer la période actuelle et la période précédente.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 12)
+                HStack {
+                    legendDot(.cyan, "Historique")
+                    Spacer()
+                    Text(metric.label)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 HStack(spacing: 14) {
                     legendDot(.cyan, "Actuel")
                     legendDot(.secondary, "Avant")
                     Spacer()
-                    comparisonBadge(current: current, previous: previous, metric: metric)
+                    comparisonBadge(
+                        current: current,
+                        previous: previous,
+                        metric: metric
+                    )
                 }
-
-                if points.isEmpty {
-                    ContentUnavailableView("Pas encore de courbe", systemImage: "chart.xyaxis.line")
-                        .frame(height: 190)
-                } else {
-                    Chart(points) { point in
-                        if let old = point.previous {
-                            LineMark(x: .value("Étape", point.index), y: .value("Avant", old))
-                                .foregroundStyle(Color.secondary.opacity(0.72))
-                                .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 4]))
-                                .interpolationMethod(.catmullRom)
-                        }
-                        if let now = point.current {
-                            AreaMark(x: .value("Étape", point.index), y: .value("Actuel", now))
-                                .foregroundStyle(LinearGradient(colors: [.cyan.opacity(0.25), .cyan.opacity(0.01)], startPoint: .top, endPoint: .bottom))
-                                .interpolationMethod(.catmullRom)
-                            LineMark(x: .value("Étape", point.index), y: .value("Actuel", now))
-                                .foregroundStyle(Color.cyan)
-                                .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
-                                .interpolationMethod(.catmullRom)
-                        }
-                    }
-                    .frame(height: 230)
-                    .chartXAxis {
-                        AxisMarks(values: .automatic(desiredCount: 5)) { _ in
-                            AxisGridLine().foregroundStyle(.white.opacity(0.04))
-                            AxisTick().foregroundStyle(.secondary)
-                            AxisValueLabel()
-                        }
-                    }
-                    .chartYAxis {
-                        AxisMarks(position: .leading) { _ in
-                            AxisGridLine().foregroundStyle(.white.opacity(0.08))
-                            AxisValueLabel()
-                        }
-                    }
-                }
-
-                Text("Courbes cumulées au même point de la période : la ligne cyan au-dessus de la ligne grise = avance sur la période précédente.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             }
+
+            TabView(selection: $metric) {
+                ForEach(PerformanceMetricV2.allCases) { candidate in
+                    VStack(spacing: 0) {
+                        if range == .all {
+                            InteractiveAllHistoryChartV3(
+                                points: allHistoryPoints(metric: candidate),
+                                metric: candidate
+                            )
+                        } else {
+                            InteractiveComparisonChartV3(
+                                points: comparisonPoints(
+                                    bounds: b,
+                                    metric: candidate
+                                ),
+                                bounds: b,
+                                metric: candidate
+                            )
+                        }
+                    }
+                    .tag(candidate)
+                }
+            }
+            .frame(height: 205)
+            .tabViewStyle(.page(indexDisplayMode: .never))
+
+            Text(
+                range == .all
+                    ? "Historique mensuel complet. Pose ou glisse le doigt sur la courbe pour lire un point."
+                    : "Valeurs réelles par intervalle, sans cumul et sans lissage. Pose ou glisse le doigt sur le graphe pour comparer Actuel et Avant."
+            )
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
         }
         .performanceCardV2()
     }
@@ -368,7 +420,7 @@ struct PerformanceProgressionTodayView: View {
                         }
                         .padding(.vertical, 5)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TrackerDepthButtonStyle())
                 }
             }
         }
@@ -378,88 +430,223 @@ struct PerformanceProgressionTodayView: View {
     @ViewBuilder
     private var sportComposition: some View {
         let slices = sportSlices
-        if !slices.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("RÉPARTITION DES SPORTS")
-                    .font(.caption.weight(.black))
-                    .foregroundStyle(.secondary)
+        let totalDuration = slices.reduce(0) {
+            $0 + $1.duration
+        }
+        let visible = Array(slices.prefix(6))
 
-                Chart(slices) { slice in
-                    BarMark(
-                        x: .value("Temps", slice.duration / 60),
-                        y: .value("Sport", slice.activity.label)
-                    )
-                    .foregroundStyle(sportAccentV2(slice.activity))
-                    .cornerRadius(5)
+        if !slices.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("RÉPARTITION DES SPORTS")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Text("\(slices.count) sport\(slices.count > 1 ? "s" : "")")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
-                .frame(height: CGFloat(max(110, min(230, slices.count * 36))))
-                .chartXAxisLabel("minutes")
+
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ],
+                    spacing: 7
+                ) {
+                    ForEach(visible) { slice in
+                        VStack(
+                            alignment: .leading,
+                            spacing: 4
+                        ) {
+                            HStack {
+                                Image(
+                                    systemName: slice.activity.symbol
+                                )
+                                .foregroundStyle(
+                                    sportAccentV2(
+                                        slice.activity
+                                    )
+                                )
+
+                                Spacer()
+
+                                if totalDuration > 0 {
+                                    Text(
+                                        String(
+                                            format: "%.0f%%",
+                                            (
+                                                slice.duration
+                                                / totalDuration
+                                            ) * 100
+                                        )
+                                    )
+                                    .font(
+                                        .caption2.weight(.black)
+                                    )
+                                }
+                            }
+
+                            Text(slice.activity.label)
+                                .font(
+                                    .system(
+                                        size: 9,
+                                        weight: .bold
+                                    )
+                                )
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.65)
+
+                            Text(
+                                progressionDurationV2(
+                                    slice.duration
+                                )
+                            )
+                            .font(.caption.weight(.black))
+                            .monospacedDigit()
+                        }
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: 68,
+                            alignment: .leading
+                        )
+                        .padding(8)
+                        .background(
+                            sportAccentV2(
+                                slice.activity
+                            ).opacity(0.08),
+                            in: RoundedRectangle(
+                                cornerRadius: 14,
+                                style: .continuous
+                            )
+                        )
+                    }
+                }
+
+                if slices.count > visible.count {
+                    Text(
+                        "+\(slices.count - visible.count) autre\(slices.count - visible.count > 1 ? "s" : "") sport\(slices.count - visible.count > 1 ? "s" : "")"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                }
             }
             .performanceCardV2()
         }
     }
 
     private var healthSignals: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("FORME & RÉCUPÉRATION")
-                        .font(.caption.weight(.black))
-                        .foregroundStyle(.secondary)
-                    Text("Appuie sur une carte pour le détail")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
+                Text("FORME & RÉCUPÉRATION")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(.secondary)
+
                 Spacer()
-                Image(systemName: "heart.text.square.fill").foregroundStyle(.pink)
+
+                Image(
+                    systemName: "heart.text.square.fill"
+                )
+                .foregroundStyle(.pink)
             }
 
             if loading {
-                HStack(spacing: 8) { ProgressView(); Text("Lecture de Santé…").font(.caption).foregroundStyle(.secondary) }
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Lecture de Santé…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                HStack(spacing: 6) {
                     healthLink(
                         title: "Fréquence au repos",
-                        value: health.restingHeartRate.map { String(format: "%.0f bpm", $0.value) } ?? "—",
-                        shortValue: health.restingHeartRate.map { String(format: "%.0f", $0.value) } ?? "—",
+                        value: health.restingHeartRate.map {
+                            String(
+                                format: "%.0f bpm",
+                                $0.value
+                            )
+                        } ?? "—",
+                        shortValue: health.restingHeartRate.map {
+                            String(
+                                format: "%.0f",
+                                $0.value
+                            )
+                        } ?? "—",
                         unit: "bpm",
-                        subtitle: health.restingHeartRate.map { "Source : \($0.source)" } ?? "Donnée non disponible",
+                        subtitle: health.restingHeartRate.map {
+                            "Source : \($0.source)"
+                        } ?? "Donnée non disponible",
                         symbol: "heart.fill",
                         accent: .red,
-                        points: health.restingHeartRateTrend
+                        points: health.restingHeartRateTrend,
+                        compactLabel: "REPOS"
                     )
+
                     healthLink(
                         title: "Variabilité cardiaque",
-                        value: health.hrvSDNN.map { String(format: "%.0f ms", $0.value) } ?? "—",
-                        shortValue: health.hrvSDNN.map { String(format: "%.0f", $0.value) } ?? "—",
+                        value: health.hrvSDNN.map {
+                            String(
+                                format: "%.0f ms",
+                                $0.value
+                            )
+                        } ?? "—",
+                        shortValue: health.hrvSDNN.map {
+                            String(
+                                format: "%.0f",
+                                $0.value
+                            )
+                        } ?? "—",
                         unit: "ms",
-                        subtitle: health.hrvSDNN.map { "Source : \($0.source)" } ?? "Donnée non disponible",
+                        subtitle: health.hrvSDNN.map {
+                            "Source : \($0.source)"
+                        } ?? "Donnée non disponible",
                         symbol: "waveform.path.ecg",
                         accent: .purple,
-                        points: health.hrvTrend
+                        points: health.hrvTrend,
+                        compactLabel: "VFC"
                     )
-                    healthLink(
-                        title: "Sommeil récent",
-                        value: health.sleepHours.map { String(format: "%.1f h", $0) } ?? "—",
-                        shortValue: health.sleepHours.map { String(format: "%.1f", $0) } ?? "—",
-                        unit: "h",
-                        subtitle: health.sleepSource ?? "Donnée non disponible",
-                        symbol: "moon.stars.fill",
-                        accent: .indigo,
-                        points: []
-                    )
-                    healthLink(
-                        title: "VO₂ max",
-                        value: health.vo2Max.map { String(format: "%.1f", $0.value) } ?? "—",
-                        shortValue: health.vo2Max.map { String(format: "%.1f", $0.value) } ?? "—",
-                        unit: "",
-                        subtitle: health.vo2Max.map { "Source : \($0.source)" } ?? "Donnée non disponible",
-                        symbol: "lungs.fill",
-                        accent: .mint,
-                        points: []
-                    )
+
+                    NavigationLink {
+                        TrackerSleepLabView()
+                    } label: {
+                        HealthDrillTileV2(
+                            label: "SOMMEIL",
+                            value: health.sleepHours.map {
+                                String(
+                                    format: "%.1f",
+                                    $0
+                                )
+                            } ?? "—",
+                            unit: "h",
+                            symbol: "moon.stars.fill",
+                            accent: .indigo
+                        )
+                    }
+
+                    NavigationLink {
+                        TrackerCardioFitnessLabView(
+                            initialSnapshot: nil
+                        )
+                    } label: {
+                        HealthDrillTileV2(
+                            label: "VO₂",
+                            value: health.vo2Max.map {
+                                String(
+                                    format: "%.1f",
+                                    $0.value
+                                )
+                            } ?? "—",
+                            unit: "",
+                            symbol: "lungs.fill",
+                            accent: .mint
+                        )
+                    }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TrackerDepthButtonStyle())
             }
         }
         .performanceCardV2()
@@ -492,12 +679,19 @@ struct PerformanceProgressionTodayView: View {
         subtitle: String,
         symbol: String,
         accent: Color,
-        points: [HealthTrendPoint]
+        points: [HealthTrendPoint],
+        compactLabel: String? = nil
     ) -> some View {
         NavigationLink {
             HealthSignalDetailV2(title: title, value: value, subtitle: subtitle, symbol: symbol, accent: accent, points: points)
         } label: {
-            HealthDrillTileV2(label: title, value: shortValue, unit: unit, symbol: symbol, accent: accent)
+            HealthDrillTileV2(
+                label: compactLabel ?? title,
+                value: shortValue,
+                unit: unit,
+                symbol: symbol,
+                accent: accent
+            )
         }
     }
 
@@ -576,22 +770,53 @@ struct PerformanceProgressionTodayView: View {
         }
     }
 
-    private func comparisonPoints(bounds: WindowBoundsV2, metric: PerformanceMetricV2) -> [ComparisonSeriesPointV2] {
-        guard let previousStart = bounds.previousStart, let previousEnd = bounds.previousEnd else { return [] }
-        let currentBuckets = bucketValues(records: records(in: bounds.currentStart...bounds.currentEnd), start: bounds.currentStart, end: bounds.currentEnd, unit: bounds.bucketUnit, metric: metric)
-        let oldBuckets = bucketValues(records: records(in: previousStart...previousEnd), start: previousStart, end: previousEnd, unit: bounds.bucketUnit, metric: metric)
-        let count = max(currentBuckets.count, oldBuckets.count)
+    private func comparisonPoints(
+        bounds: WindowBoundsV2,
+        metric: PerformanceMetricV2
+    ) -> [ComparisonSeriesPointV2] {
+        guard
+            let previousStart = bounds.previousStart,
+            let previousEnd = bounds.previousEnd
+        else {
+            return []
+        }
+
+        let currentBuckets = bucketValues(
+            records: records(
+                in: bounds.currentStart...bounds.currentEnd
+            ),
+            start: bounds.currentStart,
+            end: bounds.currentEnd,
+            unit: bounds.bucketUnit,
+            metric: metric
+        )
+
+        let previousBuckets = bucketValues(
+            records: records(
+                in: previousStart...previousEnd
+            ),
+            start: previousStart,
+            end: previousEnd,
+            unit: bounds.bucketUnit,
+            metric: metric
+        )
+
+        let count = max(
+            currentBuckets.count,
+            previousBuckets.count
+        )
+
         guard count > 0 else { return [] }
 
-        var currentTotal = 0.0
-        var oldTotal = 0.0
         return (0..<count).map { index in
-            if index < currentBuckets.count { currentTotal += currentBuckets[index] }
-            if index < oldBuckets.count { oldTotal += oldBuckets[index] }
-            return ComparisonSeriesPointV2(
+            ComparisonSeriesPointV2(
                 index: index + 1,
-                current: index < currentBuckets.count ? currentTotal : nil,
-                previous: index < oldBuckets.count ? oldTotal : nil
+                current: index < currentBuckets.count
+                    ? currentBuckets[index]
+                    : nil,
+                previous: index < previousBuckets.count
+                    ? previousBuckets[index]
+                    : nil
             )
         }
     }
@@ -623,6 +848,53 @@ struct PerformanceProgressionTodayView: View {
             if output.count > 400 { break }
         }
         return output
+    }
+
+    private func allHistoryPoints(metric: PerformanceMetricV2) -> [AllHistoryPointV2] {
+        let records = filteredWorkouts.sorted { $0.startedAt < $1.startedAt }
+        guard let firstDate = records.first?.startedAt else { return [] }
+
+        let calendar = Calendar.autoupdatingCurrent
+        var cursor = calendar.dateInterval(of: .month, for: firstDate)?.start ?? firstDate
+        let end = Date()
+        var output: [AllHistoryPointV2] = []
+
+        while cursor <= end {
+            guard let next = calendar.date(byAdding: .month, value: 1, to: cursor) else {
+                break
+            }
+
+            let chunk = records.filter {
+                $0.startedAt >= cursor && $0.startedAt < next
+            }
+
+            let value: Double
+            switch metric {
+            case .duration:
+                value = chunk.reduce(0) { $0 + $1.duration } / 60
+            case .distance:
+                value = chunk.reduce(0) { $0 + $1.distanceMeters } / 1000
+            case .sessions:
+                value = Double(chunk.count)
+            }
+
+            output.append(AllHistoryPointV2(date: cursor, value: max(0, value)))
+            cursor = next
+
+            if output.count >= 240 { break }
+        }
+
+        return output
+    }
+
+    private func comparisonUpperBound(_ points: [ComparisonSeriesPointV2]) -> Double {
+        let current = points.compactMap(\.current).max() ?? 0
+        let previous = points.compactMap(\.previous).max() ?? 0
+        return max(1, max(current, previous) * 1.12)
+    }
+
+    private func allHistoryUpperBound(_ points: [AllHistoryPointV2]) -> Double {
+        max(1, (points.map(\.value).max() ?? 0) * 1.15)
     }
 
     private func comparisonBadge(current: PerformanceAggregateV2, previous: PerformanceAggregateV2, metric: PerformanceMetricV2) -> some View {
@@ -684,6 +956,441 @@ struct PerformanceProgressionTodayView: View {
     }
 }
 
+
+private struct InteractiveComparisonChartV3: View {
+    let points: [ComparisonSeriesPointV2]
+    let bounds: WindowBoundsV2
+    let metric: PerformanceMetricV2
+
+    @State private var selectedIndex: Int?
+
+    private var selectedPoint: ComparisonSeriesPointV2? {
+        guard let selectedIndex else { return nil }
+
+        return points.min {
+            abs($0.index - selectedIndex)
+                < abs($1.index - selectedIndex)
+        }
+    }
+
+    var body: some View {
+        if points.isEmpty {
+            ContentUnavailableView(
+                "Pas encore de courbe",
+                systemImage: "chart.xyaxis.line"
+            )
+            .frame(height: 185)
+        } else {
+            Chart(points) { point in
+                if let old = point.previous {
+                    LineMark(
+                        x: .value("Étape", point.index),
+                        y: .value("Avant", old),
+                        series: .value("Série", "Avant")
+                    )
+                    .foregroundStyle(Color.secondary.opacity(0.75))
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 2,
+                            dash: [5, 4]
+                        )
+                    )
+
+                    PointMark(
+                        x: .value("Étape", point.index),
+                        y: .value("Avant", old)
+                    )
+                    .foregroundStyle(Color.secondary.opacity(0.72))
+                    .symbolSize(
+                        point.index == selectedPoint?.index
+                            ? 60
+                            : 15
+                    )
+                }
+
+                if let now = point.current {
+                    LineMark(
+                        x: .value("Étape", point.index),
+                        y: .value("Actuel", now),
+                        series: .value("Série", "Actuel")
+                    )
+                    .foregroundStyle(.cyan)
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 2.6,
+                            lineCap: .round,
+                            lineJoin: .round
+                        )
+                    )
+
+                    PointMark(
+                        x: .value("Étape", point.index),
+                        y: .value("Actuel", now)
+                    )
+                    .foregroundStyle(.cyan)
+                    .symbolSize(
+                        point.index == selectedPoint?.index
+                            ? 75
+                            : 18
+                    )
+                }
+
+                if point.index == selectedPoint?.index {
+                    RuleMark(
+                        x: .value("Sélection", point.index)
+                    )
+                    .foregroundStyle(.white.opacity(0.42))
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 1,
+                            dash: [3, 3]
+                        )
+                    )
+                    .annotation(
+                        position: .top,
+                        spacing: 5,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
+                    ) {
+                        selectionBadge(point)
+                    }
+                }
+            }
+            .chartYScale(
+                domain: 0...upperBound
+            )
+            .chartXAxis {
+                AxisMarks(
+                    values: .automatic(desiredCount: 5)
+                ) { value in
+                    AxisGridLine()
+                        .foregroundStyle(.white.opacity(0.05))
+                    AxisTick()
+                        .foregroundStyle(.secondary)
+
+                    AxisValueLabel {
+                        if let index = value.as(Int.self) {
+                            Text(axisLabel(index))
+                        }
+                    }
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { _ in
+                    AxisGridLine()
+                        .foregroundStyle(.white.opacity(0.08))
+                    AxisValueLabel()
+                }
+            }
+            .chartXSelection(value: $selectedIndex)
+            .frame(height: 185)
+        }
+    }
+
+    private var upperBound: Double {
+        let current = points.compactMap(\.current).max() ?? 0
+        let previous = points.compactMap(\.previous).max() ?? 0
+        return max(
+            1,
+            max(current, previous) * 1.15
+        )
+    }
+
+    private func selectionBadge(
+        _ point: ComparisonSeriesPointV2
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(selectionLabel(point.index))
+                .font(.caption2.weight(.black))
+
+            HStack(spacing: 8) {
+                Label {
+                    Text(valueText(point.current))
+                } icon: {
+                    Circle()
+                        .fill(.cyan)
+                        .frame(width: 6, height: 6)
+                }
+
+                Label {
+                    Text(valueText(point.previous))
+                } icon: {
+                    Circle()
+                        .fill(.secondary)
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .font(.caption2.weight(.semibold))
+            .monospacedDigit()
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(
+                cornerRadius: 10,
+                style: .continuous
+            )
+        )
+        .allowsHitTesting(false)
+    }
+
+    private func valueText(_ value: Double?) -> String {
+        guard let value else { return "—" }
+
+        switch metric {
+        case .duration:
+            let minutes = max(0, Int(value.rounded()))
+            if minutes >= 60 {
+                return String(
+                    format: "%dh%02d",
+                    minutes / 60,
+                    minutes % 60
+                )
+            }
+            return "\(minutes) min"
+
+        case .distance:
+            return String(format: "%.1f km", value)
+
+        case .sessions:
+            return "\(Int(value.rounded()))"
+        }
+    }
+
+    private func bucketDate(_ index: Int) -> Date {
+        let calendar = Calendar.autoupdatingCurrent
+        let offset = max(0, index - 1)
+
+        switch bounds.bucketUnit {
+        case .hour:
+            return calendar.date(
+                byAdding: .hour,
+                value: offset,
+                to: bounds.currentStart
+            ) ?? bounds.currentStart
+
+        case .day:
+            return calendar.date(
+                byAdding: .day,
+                value: offset,
+                to: bounds.currentStart
+            ) ?? bounds.currentStart
+
+        case .month:
+            return calendar.date(
+                byAdding: .month,
+                value: offset,
+                to: bounds.currentStart
+            ) ?? bounds.currentStart
+        }
+    }
+
+    private func axisLabel(_ index: Int) -> String {
+        let date = bucketDate(index)
+
+        switch bounds.bucketUnit {
+        case .hour:
+            return date.formatted(
+                .dateTime.hour()
+            )
+
+        case .day:
+            return date.formatted(
+                .dateTime.day().month(.abbreviated)
+            )
+
+        case .month:
+            return date.formatted(
+                .dateTime.month(.abbreviated)
+            )
+        }
+    }
+
+    private func selectionLabel(_ index: Int) -> String {
+        let date = bucketDate(index)
+
+        switch bounds.bucketUnit {
+        case .hour:
+            return date.formatted(
+                .dateTime.weekday(.abbreviated).hour()
+            )
+
+        case .day:
+            return date.formatted(
+                .dateTime.weekday(.abbreviated)
+                    .day()
+                    .month(.abbreviated)
+            )
+
+        case .month:
+            return date.formatted(
+                .dateTime.month(.wide).year()
+            )
+        }
+    }
+}
+
+private struct InteractiveAllHistoryChartV3: View {
+    let points: [AllHistoryPointV2]
+    let metric: PerformanceMetricV2
+
+    @State private var selectedDate: Date?
+
+    private var selectedPoint: AllHistoryPointV2? {
+        guard let selectedDate else { return nil }
+
+        return points.min {
+            abs(
+                $0.date.timeIntervalSince(selectedDate)
+            )
+            <
+            abs(
+                $1.date.timeIntervalSince(selectedDate)
+            )
+        }
+    }
+
+    var body: some View {
+        if points.isEmpty {
+            ContentUnavailableView(
+                "Pas encore de courbe",
+                systemImage: "chart.xyaxis.line"
+            )
+            .frame(height: 185)
+        } else {
+            Chart(points) { point in
+                LineMark(
+                    x: .value("Mois", point.date),
+                    y: .value("Valeur", point.value)
+                )
+                .foregroundStyle(.cyan)
+                .lineStyle(
+                    StrokeStyle(
+                        lineWidth: 2.6,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
+
+                PointMark(
+                    x: .value("Mois", point.date),
+                    y: .value("Valeur", point.value)
+                )
+                .foregroundStyle(.cyan)
+                .symbolSize(
+                    point.id == selectedPoint?.id
+                        ? 75
+                        : 18
+                )
+
+                if point.id == selectedPoint?.id {
+                    RuleMark(
+                        x: .value("Sélection", point.date)
+                    )
+                    .foregroundStyle(.white.opacity(0.42))
+                    .lineStyle(
+                        StrokeStyle(
+                            lineWidth: 1,
+                            dash: [3, 3]
+                        )
+                    )
+                    .annotation(
+                        position: .top,
+                        spacing: 5,
+                        overflowResolution: AnnotationOverflowResolution(
+                            x: .fit(to: .chart),
+                            y: .fit(to: .chart)
+                        )
+                    ) {
+                        VStack(
+                            alignment: .leading,
+                            spacing: 2
+                        ) {
+                            Text(
+                                point.date.formatted(
+                                    .dateTime
+                                        .month(.wide)
+                                        .year()
+                                )
+                            )
+                            .font(.caption2.weight(.black))
+
+                            Text(valueText(point.value))
+                                .font(.caption.weight(.bold))
+                                .monospacedDigit()
+                                .foregroundStyle(.cyan)
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(
+                            .ultraThinMaterial,
+                            in: RoundedRectangle(
+                                cornerRadius: 10,
+                                style: .continuous
+                            )
+                        )
+                        .allowsHitTesting(false)
+                    }
+                }
+            }
+            .chartYScale(
+                domain: 0...upperBound
+            )
+            .chartXAxis {
+                AxisMarks(
+                    values: .automatic(desiredCount: 4)
+                ) { _ in
+                    AxisGridLine()
+                        .foregroundStyle(.white.opacity(0.05))
+                    AxisTick()
+                        .foregroundStyle(.secondary)
+                    AxisValueLabel()
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { _ in
+                    AxisGridLine()
+                        .foregroundStyle(.white.opacity(0.08))
+                    AxisValueLabel()
+                }
+            }
+            .chartXSelection(value: $selectedDate)
+            .frame(height: 185)
+        }
+    }
+
+    private var upperBound: Double {
+        max(
+            1,
+            (points.map(\.value).max() ?? 0) * 1.15
+        )
+    }
+
+    private func valueText(_ value: Double) -> String {
+        switch metric {
+        case .duration:
+            let minutes = max(0, Int(value.rounded()))
+            if minutes >= 60 {
+                return String(
+                    format: "%dh%02d",
+                    minutes / 60,
+                    minutes % 60
+                )
+            }
+            return "\(minutes) min"
+
+        case .distance:
+            return String(format: "%.1f km", value)
+
+        case .sessions:
+            return "\(Int(value.rounded()))"
+        }
+    }
+}
+
 private struct ProgressionDrillCardV2: View {
     let value: String
     let label: String
@@ -691,18 +1398,57 @@ private struct ProgressionDrillCardV2: View {
     let accent: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Image(systemName: symbol).foregroundStyle(accent)
-                Spacer()
-                Image(systemName: "arrow.up.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
-            }
-            Text(value).font(.title3.weight(.black)).monospacedDigit().minimumScaleFactor(0.65).lineLimit(1)
-            Text(label).font(.caption2.weight(.black)).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(accent)
+
+            Text(value)
+                .font(
+                    .system(
+                        size: 13,
+                        weight: .black,
+                        design: .rounded
+                    )
+                )
+                .monospacedDigit()
+                .minimumScaleFactor(0.55)
+                .lineLimit(1)
+
+            Text(label)
+                .font(
+                    .system(
+                        size: 7,
+                        weight: .black
+                    )
+                )
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
         }
-        .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
-        .padding(12)
-        .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .frame(
+            maxWidth: .infinity,
+            minHeight: 62,
+            alignment: .leading
+        )
+        .padding(7)
+        .background(
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .fill(accent.opacity(0.09))
+        )
+        .overlay(
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .stroke(
+                .white.opacity(0.07),
+                lineWidth: 1
+            )
+        )
     }
 }
 
@@ -714,21 +1460,68 @@ private struct HealthDrillTileV2: View {
     let accent: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: symbol).foregroundStyle(accent)
-                Spacer()
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(accent)
+
+            HStack(
+                alignment: .firstTextBaseline,
+                spacing: 2
+            ) {
+                Text(value)
+                    .font(
+                        .system(
+                            size: 13,
+                            weight: .black,
+                            design: .rounded
+                        )
+                    )
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.55)
+                    .lineLimit(1)
+
+                if !unit.isEmpty {
+                    Text(unit)
+                        .font(.system(size: 7))
+                        .foregroundStyle(.secondary)
+                }
             }
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(value).font(.title3.weight(.black)).monospacedDigit()
-                if !unit.isEmpty { Text(unit).font(.caption2).foregroundStyle(.secondary) }
-            }
-            Text(label).font(.caption2.weight(.bold)).foregroundStyle(.secondary).lineLimit(1)
+
+            Text(label)
+                .font(
+                    .system(
+                        size: 7,
+                        weight: .black
+                    )
+                )
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.60)
         }
-        .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
-        .padding(12)
-        .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .frame(
+            maxWidth: .infinity,
+            minHeight: 62,
+            alignment: .leading
+        )
+        .padding(7)
+        .background(
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .fill(accent.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .stroke(
+                .white.opacity(0.07),
+                lineWidth: 1
+            )
+        )
     }
 }
 
@@ -796,14 +1589,12 @@ private struct HealthSignalDetailV2: View {
                     Text("Pas encore assez de points historiques lisibles pour tracer une courbe détaillée.")
                         .font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 20)
                 } else {
-                    Chart(points) { point in
-                        AreaMark(x: .value("Jour", point.date), y: .value("Valeur", point.value))
-                            .foregroundStyle(LinearGradient(colors: [accent.opacity(0.25), accent.opacity(0.01)], startPoint: .top, endPoint: .bottom))
-                        LineMark(x: .value("Jour", point.date), y: .value("Valeur", point.value))
-                            .foregroundStyle(accent)
-                            .interpolationMethod(.catmullRom)
-                    }
-                    .frame(height: 240)
+                    TrackerInspectableHealthChart(
+                        title: title,
+                        points: points,
+                        accent: accent,
+                        height: 240
+                    )
                 }
 
                 Text("Source : Apple Health. Une donnée absente peut signifier qu’elle n’est pas produite ou qu’elle n’est pas partagée avec Watch Tracker.")
@@ -862,7 +1653,15 @@ private extension View {
     func performanceCardV2() -> some View {
         frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
-            .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(.white.opacity(0.055))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(.white.opacity(0.075), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.30), radius: 10, x: 0, y: 5)
     }
 }
 

@@ -38,7 +38,8 @@ private struct LiveActivityProductView: View {
     @State private var page: Page = .summary
     @State private var cameraPosition: MapCameraPosition = .automatic
     @State private var followUser = true
-    @State private var confirmStop = false
+    @State private var showFinishReview = false
+    @State private var finishActivity: ActivityKind = .walking
 
     private var selectedMapStyle: TrackerMapStyleChoice { TrackerMapStyleChoice(rawValue: mapStyleRaw) ?? .standard }
 
@@ -69,14 +70,6 @@ private struct LiveActivityProductView: View {
                     .padding(.top, 9)
                     .padding(.bottom, 7)
                     .background(.ultraThinMaterial)
-            }
-            .confirmationDialog(
-                "Terminer la séance ?",
-                isPresented: $confirmStop,
-                titleVisibility: .visible
-            ) {
-                Button("Terminer", role: .destructive) { tracker.stopFromPhone() }
-                Button("Annuler", role: .cancel) { }
             }
             .onAppear {
                 tracker.requestLocationPermission()
@@ -391,6 +384,22 @@ private struct LiveActivityProductView: View {
                 )
             }
 
+            Toggle(
+                isOn: Binding(
+                    get: { tracker.autoPauseEnabled },
+                    set: { tracker.workflowSetAutoPauseEnabled($0) }
+                )
+            ) {
+                Label("Pause automatique", systemImage: "pause.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .tint(.mint)
+            .padding(12)
+            .background(
+                .white.opacity(0.055),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("ÉTAT")
                     .font(.caption2.weight(.black))
@@ -408,7 +417,7 @@ private struct LiveActivityProductView: View {
     private var controls: some View {
         HStack(spacing: 9) {
             Button {
-                tracker.isPaused ? tracker.resumeFromPhone() : tracker.pauseFromPhone()
+                tracker.isPaused ? tracker.workflowResume() : tracker.workflowPause()
             } label: {
                 Label(tracker.isPaused ? "Reprendre" : "Pause", systemImage: tracker.isPaused ? "play.fill" : "pause.fill")
                     .font(.headline)
@@ -419,14 +428,58 @@ private struct LiveActivityProductView: View {
             .tint(tracker.isPaused ? .green : .orange)
             .disabled(tracker.pendingCommand != nil)
 
-            Button(role: .destructive) { confirmStop = true } label: {
-                Label("Terminer", systemImage: "stop.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
+            Button(role: .destructive) {
+                if tracker.workflowFinishReview.required {
+                    finishActivity =
+                        tracker.workflowFinishReview
+                            .suggestedActivity
+
+                    showFinishReview = true
+                } else {
+                    tracker.workflowFinish(
+                        disposition:
+                            .preserveDetectedSegments,
+                        finalActivity: nil
+                    )
+                }
+            } label: {
+                Label(
+                    "Terminer",
+                    systemImage: "stop.fill"
+                )
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
             }
             .buttonStyle(.borderedProminent)
             .disabled(tracker.pendingCommand != nil)
+            .sheet(isPresented: $showFinishReview) {
+                PhoneFinishActivityReview(
+                    selection: $finishActivity,
+                    suggested:
+                        tracker.workflowFinishReview
+                            .suggestedActivity,
+                    preserveAuto: {
+                        tracker.workflowFinish(
+                            disposition:
+                                .preserveDetectedSegments,
+                            finalActivity: nil
+                        )
+
+                        showFinishReview = false
+                    },
+                    confirmSingle: {
+                        tracker.workflowFinish(
+                            disposition:
+                                .forceSingleActivity,
+                            finalActivity:
+                                finishActivity
+                        )
+
+                        showFinishReview = false
+                    }
+                )
+            }
         }
     }
 

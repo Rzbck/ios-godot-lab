@@ -7,7 +7,12 @@ import WatchConnectivity
 /// from the combined main + reliable journals.
 extension TrackerModel {
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        // 1. Persistance durable pour récupération/diagnostic.
         WatchReliableRecovery.ingest(userInfo)
+
+        // 2. Le même paquet alimente immédiatement la machine
+        //    produit (correction/restauration comprise).
+        receiveWC(userInfo)
     }
 }
 

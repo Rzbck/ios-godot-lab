@@ -1,5 +1,28 @@
 import Foundation
+import HealthKit
 import SwiftUI
+
+enum SessionHeartRateReferenceSource: String, Equatable {
+    case personal
+    case ageEstimate
+    case sessionPeak
+
+    var label: String {
+        switch self {
+        case .personal: return "FC max personnelle"
+        case .ageEstimate: return "Estimation adulte par âge"
+        case .sessionPeak: return "Pic de la séance"
+        }
+    }
+
+    var confidenceLabel: String {
+        switch self {
+        case .personal: return "prioritaire"
+        case .ageEstimate: return "estimation · faible confiance individuelle"
+        case .sessionPeak: return "fallback · pas une FC max physiologique"
+        }
+    }
+}
 
 struct SessionHeartRateZone: Identifiable, Equatable {
     let id: Int
@@ -11,10 +34,12 @@ struct SessionHeartRateZone: Identifiable, Equatable {
 
 struct SessionHeartRateZoneReport: Equatable {
     let referenceMaxBPM: Double
-    let usesConfiguredMax: Bool
+    let referenceSource: SessionHeartRateReferenceSource
     let coveredSeconds: TimeInterval
     let activeSeconds: TimeInterval
     let zones: [SessionHeartRateZone]
+
+    var usesConfiguredMax: Bool { referenceSource == .personal }
 
     var coverageFraction: Double {
         guard activeSeconds > 0 else { return 0 }
@@ -34,7 +59,20 @@ struct SessionHeartRateZoneAnalyzer {
 
         let observedMax = max(samples.map(\.bpm).max() ?? 0, summary.maxHeartRate ?? 0)
         let configured = configuredMaxBPM ?? 0
-        let reference = configured >= 100 ? configured : observedMax
+        let ageEstimate = ageEstimatedMaxHeartRate(at: summary.startedAt)
+
+        let reference: Double
+        let source: SessionHeartRateReferenceSource
+        if configured >= 100 {
+            reference = configured
+            source = .personal
+        } else if let ageEstimate, ageEstimate >= 100 {
+            reference = ageEstimate
+            source = .ageEstimate
+        } else {
+            reference = observedMax
+            source = .sessionPeak
+        }
         guard reference >= 80 else { return nil }
 
         var seconds = Array(repeating: 0.0, count: 5)
@@ -81,11 +119,24 @@ struct SessionHeartRateZoneAnalyzer {
 
         return SessionHeartRateZoneReport(
             referenceMaxBPM: reference,
-            usesConfiguredMax: configured >= 100,
+            referenceSource: source,
             coveredSeconds: covered,
             activeSeconds: summary.duration,
             zones: zones
         )
+    }
+
+    private func ageEstimatedMaxHeartRate(at date: Date) -> Double? {
+        let store = HKHealthStore()
+        guard let components = try? store.dateOfBirthComponents(),
+              let birthDate = Calendar.autoupdatingCurrent.date(from: components),
+              let age = Calendar.autoupdatingCurrent.dateComponents([.year], from: birthDate, to: date).year,
+              age >= 18,
+              age <= 100 else { return nil }
+
+        // Tanaka-style adult population estimate. Useful only as a fallback; individual
+        // HRmax can differ substantially, so a personal measured/configured value wins.
+        return 208.0 - (0.7 * Double(age))
     }
 
     private func loadSamples(sessionID: String) -> [Sample] {
@@ -180,17 +231,27 @@ struct SessionHeartRateZonesView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(report.referenceSource.label)
+                        .font(.caption2.weight(.semibold))
+                    Text(report.referenceSource.confidenceLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
                 if report.usesConfiguredMax {
                     Stepper(value: configuredBinding, in: 100...240, step: 1) {
                         Text("FC max personnelle : \(Int(configuredMaxBPM.rounded())) bpm")
                             .font(.caption2)
                     }
-                    Button("Revenir au pic de la séance") {
+                    Button("Utiliser le profil Santé") {
                         configuredMaxBPM = 0
                     }
                     .font(.caption2)
                 } else {
-                    Text("Référence relative : pic FC observé pendant cette séance. Ce n’est pas une FC max physiologique estimée.")
+                    Text(report.referenceSource == .ageEstimate
+                         ? "La formule d’âge sert de repère adulte quand aucune FC max personnelle n’est définie. Elle ne remplace pas une vraie mesure individuelle."
+                         : "Le pic de cette séance est utilisé faute de meilleur repère. Il peut sous-estimer ta FC max réelle si la séance n’était pas maximale.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                     Button("Définir une FC max personnelle") {

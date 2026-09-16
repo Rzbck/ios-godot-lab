@@ -35,12 +35,33 @@ struct WatchHistoryDayBucket: Codable, Equatable, Identifiable {
     var date: Date { Date(timeIntervalSince1970: dayStart) }
 }
 
+struct WatchWellnessDigest: Codable, Equatable {
+    let generatedAt: TimeInterval
+    let recoveryScore: Double?
+    let recoveryConfidence: Double
+    let recoveryLabel: String
+    let sleepSeconds: TimeInterval?
+    let sleepEfficiency: Double?
+    let sleepDeficit7DaysHours: Double?
+    let workloadRatio: Double?
+    let nightHeartRateBPM: Double?
+    let nightHRVMilliseconds: Double?
+    let nightRespiratoryRate: Double?
+    let wristTemperatureCelsius: Double?
+    let oxygenSaturationPercent: Double?
+    let vo2Max: Double?
+    let heartRateRecoveryOneMinuteBPM: Double?
+
+    var generatedDate: Date { Date(timeIntervalSince1970: generatedAt) }
+}
+
 private struct WatchRecentHistoryEnvelopeV6: Codable {
     let activities: [WatchRecentActivityDigest]
     let today: WatchHistoryWindowStats
     let sevenDays: WatchHistoryWindowStats
     let twentyEightDays: WatchHistoryWindowStats
     let daily28: [WatchHistoryDayBucket]
+    let wellness: WatchWellnessDigest?
 }
 
 private struct WatchRecentHistoryEnvelopeV5: Codable {
@@ -57,6 +78,7 @@ final class WatchRecentHistoryStore: ObservableObject {
     @Published private(set) var sevenDays: WatchHistoryWindowStats = .zero
     @Published private(set) var twentyEightDays: WatchHistoryWindowStats = .zero
     @Published private(set) var daily28: [WatchHistoryDayBucket] = []
+    @Published private(set) var wellness: WatchWellnessDigest?
 
     private let defaultsKey = "tracker.recentHistoryV6"
     private let v5DefaultsKey = "tracker.recentHistoryV5"
@@ -70,6 +92,7 @@ final class WatchRecentHistoryStore: ObservableObject {
             sevenDays = decoded.sevenDays
             twentyEightDays = decoded.twentyEightDays
             daily28 = decoded.daily28
+            wellness = decoded.wellness
             return
         }
 
@@ -87,6 +110,45 @@ final class WatchRecentHistoryStore: ObservableObject {
         }
     }
 
+    /// Local presentation update only. Historical HealthKit mutation is not
+    /// performed from the Watch anymore.
+    func applyConfirmedActivity(
+        sessionID: String,
+        activity: ActivityKind
+    ) {
+        guard !sessionID.isEmpty, !activity.isAutomatic else { return }
+
+        DispatchQueue.main.async {
+            guard let index = self.activities.firstIndex(where: { $0.sessionID == sessionID }) else {
+                return
+            }
+
+            let current = self.activities[index]
+            self.activities[index] = WatchRecentActivityDigest(
+                sessionID: current.sessionID,
+                activity: activity.rawValue,
+                startedAt: current.startedAt,
+                duration: current.duration,
+                distanceMeters: current.distanceMeters,
+                activeEnergyKcal: current.activeEnergyKcal,
+                elevationGainMeters: current.elevationGainMeters
+            )
+
+            let persisted = WatchRecentHistoryEnvelopeV6(
+                activities: self.activities,
+                today: self.today,
+                sevenDays: self.sevenDays,
+                twentyEightDays: self.twentyEightDays,
+                daily28: self.daily28,
+                wellness: self.wellness
+            )
+
+            if let encoded = try? JSONEncoder().encode(persisted) {
+                UserDefaults.standard.set(encoded, forKey: self.defaultsKey)
+            }
+        }
+    }
+
     @discardableResult
     func ingest(_ userInfo: [String: Any]) -> Bool {
         guard let type = userInfo["type"] as? String,
@@ -100,12 +162,14 @@ final class WatchRecentHistoryStore: ObservableObject {
                 self.sevenDays = decoded.sevenDays
                 self.twentyEightDays = decoded.twentyEightDays
                 self.daily28 = Array(decoded.daily28.suffix(28))
+                self.wellness = decoded.wellness
                 let persisted = WatchRecentHistoryEnvelopeV6(
                     activities: self.activities,
                     today: self.today,
                     sevenDays: self.sevenDays,
                     twentyEightDays: self.twentyEightDays,
-                    daily28: self.daily28
+                    daily28: self.daily28,
+                    wellness: self.wellness
                 )
                 if let encoded = try? JSONEncoder().encode(persisted) {
                     UserDefaults.standard.set(encoded, forKey: self.defaultsKey)
@@ -220,6 +284,12 @@ private struct WatchHistoryActivityPage: View {
                     "D+"
                 )
             }
+
+            Text("Correction historique : iPhone → Récupération")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 4)
     }

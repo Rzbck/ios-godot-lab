@@ -12,12 +12,28 @@ targets:
     sources:
       - path: Sources
       - path: ../Shared/TrackerShared.swift
+      - path: ../Shared/TrackerSessionControl.swift
+      - path: ../Shared/TrackerAutoPolicy.swift
+      - path: ../Shared/TrackerAutoResumeProbe.swift
+      - path: ../Shared/TelemetryShared.swift
       - path: Assets.xcassets
     dependencies:
       - target: WatchTrackerLiveActivity
         embed: true
         codeSign: false
     preBuildScripts:
+      - name: Apply Auto Pause Safety Patch
+        shell: /bin/bash
+        script: |
+          set -euo pipefail
+          python3 "$SRCROOT/../APPLY_AUTO_PAUSE_SAFETY_PATCH.py"
+        basedOnDependencyAnalysis: false
+      - name: Apply Historical Correction Distance Patch
+        shell: /bin/bash
+        script: |
+          set -euo pipefail
+          python3 "$SRCROOT/../RUN_HISTORICAL_CORRECTION_DISTANCE_PATCH.py"
+        basedOnDependencyAnalysis: false
       - name: Generate App Icon
         shell: /bin/bash
         script: |
@@ -29,7 +45,7 @@ targets:
       properties:
         CFBundleDisplayName: Watch Tracker
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "5"
+        CFBundleVersion: "10"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -37,7 +53,7 @@ targets:
         NSLocationWhenInUseUsageDescription: Watch Tracker utilise votre position pendant une session pour tracer le parcours, calculer la distance, la vitesse, l'altitude, le dénivelé et associer le contexte météo extérieur.
         NSMotionUsageDescription: Watch Tracker utilise les données de mouvement et de pas de l’iPhone pour la cadence, l’allure et l’analyse de qualité de l’activité lorsqu’elles sont disponibles.
         NSHealthShareUsageDescription: Watch Tracker lit vos entraînements et les données Santé utiles au suivi sportif, notamment activité, fréquence cardiaque, HRV, sommeil, cardio et mobilité, afin d’afficher votre historique et vos tendances personnelles.
-        NSHealthUpdateUsageDescription: Watch Tracker coordonne l'entraînement avec l'Apple Watch afin d'enregistrer la séance et son parcours dans Santé.
+        NSHealthUpdateUsageDescription: Watch Tracker coordonne l'entraînement avec l’Apple Watch afin d'enregistrer la séance et son parcours dans Santé.
         UIBackgroundModes:
           - location
     settings:
@@ -49,7 +65,72 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_ENTITLEMENTS: Sources/WatchSensorLab.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    scheme: {}
+    scheme:
+      testTargets:
+        - WatchSensorLabTests
+
+  WatchSensorLabTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ../Shared/TrackerShared.swift
+      - path: ../Shared/TrackerSessionControl.swift
+      - path: ../Shared/TrackerAutoPolicy.swift
+      - path: ../Shared/TrackerAutoResumeProbe.swift
+      - path: ../Tests/Support/TrackerAutomationScenario.swift
+      - path: ../Tests/TrackerWorkflowContractTests.swift
+      - path: ../Tests/TrackerSessionControlTests.swift
+      - path: ../Tests/TrackerAutoPolicyTests.swift
+      - path: ../Tests/TrackerAutomationScenarioTests.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.tests
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+
+  WatchSensorLabFinishUIHarness:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources/ActivityExperienceView.swift
+      - path: ../Shared/TrackerShared.swift
+      - path: ../UITestHarness/iPhone/FakeTrackerModel.swift
+      - path: ../UITestHarness/iPhone/FinishHarnessApp.swift
+    info:
+      path: ../UITestHarness/iPhone/Info.plist
+      properties:
+        CFBundleDisplayName: Tracker Finish Harness
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.finish-ui-harness
+        PRODUCT_NAME: WatchSensorLabFinishUIHarness
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        TARGETED_DEVICE_FAMILY: "1"
+    scheme:
+      testTargets:
+        - WatchSensorLabFinishUITests
+
+  WatchSensorLabFinishUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ../UITests/iPhoneFinishFlowUITests.swift
+    dependencies:
+      - target: WatchSensorLabFinishUIHarness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.watchsensorlab.finish-ui-tests
+        TEST_TARGET_NAME: WatchSensorLabFinishUIHarness
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        TARGETED_DEVICE_FAMILY: "1"
 
   WatchTrackerLiveActivity:
     type: app-extension
@@ -63,7 +144,7 @@ targets:
       properties:
         CFBundleDisplayName: Watch Tracker Live
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "5"
+        CFBundleVersion: "10"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

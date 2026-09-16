@@ -18,17 +18,14 @@ enum WatchAutoPauseSettings {
     static let cycleResumeDwellKey = "tracker.autoPause.cycle.resumeDwell"
 
     static func isEnabled(for activity: ActivityKind, defaults: UserDefaults = .standard) -> Bool {
-        if let remote = remoteBool("auto_pause_\(profileID(for: activity))_enabled") { return remote }
         return bool(defaults, key: enabledKey(for: activity), fallback: true)
     }
 
     static func pauseDwell(for activity: ActivityKind, defaults: UserDefaults = .standard) -> TimeInterval {
-        if let remote = remoteDouble("auto_pause_\(profileID(for: activity))_pause_dwell") { return max(1, remote) }
         return value(defaults, key: pauseKey(for: activity), fallback: defaultPauseDwell(for: activity))
     }
 
     static func resumeDwell(for activity: ActivityKind, defaults: UserDefaults = .standard) -> TimeInterval {
-        if let remote = remoteDouble("auto_pause_\(profileID(for: activity))_resume_dwell") { return max(1, remote) }
         return value(defaults, key: resumeKey(for: activity), fallback: defaultResumeDwell(for: activity))
     }
 

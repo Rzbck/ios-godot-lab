@@ -123,7 +123,7 @@ final class HealthProgressionReader {
 
         if let type = HKQuantityType.quantityType(forIdentifier: .vo2Max) {
             group.enter()
-            latestQuantity(type: type, unit: HKUnit(from: "ml/kg*min"), since: calendar.date(byAdding: .month, value: -6, to: now) ?? .distantPast) { reading in
+            latestQuantity(type: type, unit: TrackerHealthUnits.vo2Max, since: calendar.date(byAdding: .month, value: -6, to: now) ?? .distantPast) { reading in
                 lock.lock(); data.vo2Max = reading; lock.unlock(); group.leave()
             }
         }
@@ -189,8 +189,7 @@ final class HealthProgressionReader {
                 completion(nil)
                 return
             }
-            let value = sample.quantity.doubleValue(for: unit)
-            guard value.isFinite else {
+            guard let value = sample.quantity.trackerDoubleValue(for: unit) else {
                 completion(nil)
                 return
             }
@@ -207,8 +206,8 @@ final class HealthProgressionReader {
     ) {
         let predicate = HKQuery.predicateForSamples(withStart: start, end: Date(), options: [])
         let query = HKStatisticsQuery(quantityType: type, quantitySamplePredicate: predicate, options: .discreteAverage) { _, statistics, _ in
-            let value = statistics?.averageQuantity()?.doubleValue(for: unit)
-            completion(value?.isFinite == true ? value : nil)
+            let value = statistics?.averageQuantity()?.trackerDoubleValue(for: unit)
+            completion(value)
         }
         store.execute(query)
     }
@@ -222,8 +221,8 @@ final class HealthProgressionReader {
     ) {
         let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
         let query = HKStatisticsQuery(quantityType: type, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, statistics, _ in
-            let value = statistics?.sumQuantity()?.doubleValue(for: unit)
-            completion(value?.isFinite == true ? value : nil)
+            let value = statistics?.sumQuantity()?.trackerDoubleValue(for: unit)
+            completion(value)
         }
         store.execute(query)
     }
@@ -239,8 +238,9 @@ final class HealthProgressionReader {
             let calendar = Calendar.autoupdatingCurrent
             var buckets: [Date: (sum: Double, count: Int)] = [:]
             for sample in samples as? [HKQuantitySample] ?? [] {
-                let value = sample.quantity.doubleValue(for: unit)
-                guard value.isFinite else { continue }
+                guard let value = sample.quantity.trackerDoubleValue(for: unit) else {
+                    continue
+                }
                 let day = calendar.startOfDay(for: sample.endDate)
                 let existing = buckets[day] ?? (0, 0)
                 buckets[day] = (existing.sum + value, existing.count + 1)

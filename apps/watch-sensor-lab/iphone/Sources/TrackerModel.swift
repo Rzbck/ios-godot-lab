@@ -38,11 +38,28 @@ final class TrackerModel: NSObject, ObservableObject {
     @Published private(set) var currentWeather: SessionWeatherSnapshot?
     @Published private(set) var autoPauseEnabled = false
     @Published private(set) var autoPauseProfiles: [AutoPauseProfileKind: AutoPauseProfilePreference] = PhoneAutoPausePreferences.load()
+    @Published private(set) var finishReviewRequired = false
+    @Published private(set) var suggestedFinalActivity: ActivityKind = .walking
+    @Published private(set) var historicalRepairSessionID = ""
+    @Published private(set) var historicalRepairStatus = ""
 
     var isActive: Bool { phase == .active || phase == .paused }
     var isPaused: Bool { phase == .paused }
     var displayActivity: ActivityKind { selectedActivity.isAutomatic ? effectiveActivity : selectedActivity }
     var gpsSettled: Bool { horizontalAccuracy > 0 && horizontalAccuracy <= 20 && elapsedSeconds >= 5 }
+
+    var finishReview: TrackerFinishReviewState {
+        let shared = TrackerWorkflowPolicy.finishReview(
+            selectedActivity: selectedActivity,
+            effectiveActivity: effectiveActivity,
+            suggestedActivity: suggestedFinalActivity
+        )
+
+        return TrackerFinishReviewState(
+            required: finishReviewRequired && shared.required,
+            suggestedActivity: shared.suggestedActivity
+        )
+    }
 
     private let locationManager = CLLocationManager()
     private let healthStore = HKHealthStore()
@@ -50,6 +67,10 @@ final class TrackerModel: NSObject, ObservableObject {
     private let defaults = UserDefaults.standard
     private let pedometer = CMPedometer()
     private let weatherRecorder = WorkoutWeatherRecorder()
+    private let reviewStore = ActivityReviewStore()
+    private let recentHistoryBridge = PhoneRecentHistoryBridge()
+    private let healthRestorePacketBuilder =
+        TrackerHealthRestorePacketBuilder()
 
     private var mirroredWorkoutSession: HKWorkoutSession?
     private var startedAt: Date?
@@ -112,7 +133,6 @@ final class TrackerModel: NSObject, ObservableObject {
     }
 
     func setAutoPauseEnabled(_ enabled: Bool) {
-        guard !isActive else { return }
         autoPauseEnabled = enabled
         defaults.set(enabled, forKey: "tracker.autoPauseEnabled")
         sendPreferences()
@@ -124,7 +144,6 @@ final class TrackerModel: NSObject, ObservableObject {
         pauseDwell: Double? = nil,
         resumeDwell: Double? = nil
     ) {
-        guard !isActive else { return }
         var value = autoPauseProfiles[profile] ?? profile.defaultPreference
         if let enabled { value.enabled = enabled }
         if let pauseDwell {
@@ -169,11 +188,118 @@ final class TrackerModel: NSObject, ObservableObject {
 
     func pauseFromPhone() { requestControl("pause", allowed: phase == .active) }
     func resumeFromPhone() { requestControl("resume", allowed: phase == .paused) }
-    func stopFromPhone() {
+    func stopFromPhone(
+        disposition: TrackerFinishDisposition = .preserveDetectedSegments,
+        finalActivity: ActivityKind? = nil
+    ) {
         if let location = previousLocation {
             captureWeather(at: location, force: true)
         }
-        requestControl("stop", allowed: isActive)
+
+        requestControl(
+            "stop",
+            allowed: isActive,
+            finishDisposition: disposition,
+            finalActivity: finalActivity
+        )
+    }
+
+    func correctHistoricalActivity(
+        sessionID targetSessionID: String,
+        activity: ActivityKind
+    ) {
+        guard !isActive else {
+            historicalRepairStatus = "Termine la séance active avant une correction Santé."
+            return
+        }
+
+        guard !targetSessionID.isEmpty, !activity.isAutomatic else {
+            historicalRepairStatus = "Correction historique invalide."
+            return
+        }
+
+        historicalRepairSessionID = targetSessionID
+        historicalRepairStatus =
+            "Correction Santé demandée · \(activity.label)"
+
+        var request = makeMessage(kind: .request)
+        request.command = "correct_historical_activity"
+        request.sessionID = targetSessionID
+        request.finalActivityOverride = activity.rawValue
+
+        sendToWatch(request)
+    }
+
+    func restoreHistoricalActivityFromRaw(
+        sessionID targetSessionID: String,
+        activity: ActivityKind
+    ) {
+        guard !isActive else {
+            historicalRepairStatus =
+                "Termine la séance active avant une restauration Santé."
+            return
+        }
+
+        guard
+            !targetSessionID.isEmpty,
+            !activity.isAutomatic
+        else {
+            historicalRepairStatus =
+                "Restauration historique invalide."
+            return
+        }
+
+        historicalRepairSessionID =
+            targetSessionID
+
+        historicalRepairStatus =
+            "Préparation des données brutes · \(activity.label)…"
+
+        do {
+            let fileURL =
+                try healthRestorePacketBuilder
+                    .makeTransferFile(
+                        sessionID:
+                            targetSessionID,
+                        targetActivity:
+                            activity
+                    )
+
+            let session =
+                WCSession.default
+
+            guard
+                session.activationState
+                    == .activated,
+                session.isPaired,
+                session.isWatchAppInstalled
+            else {
+                try? FileManager.default
+                    .removeItem(at: fileURL)
+
+                historicalRepairStatus =
+                    "Apple Watch indisponible pour la restauration."
+                return
+            }
+
+            session.transferFile(
+                fileURL,
+                metadata: [
+                    "type":
+                        "tracker_health_restore_v1",
+                    "session_id":
+                        targetSessionID,
+                    "target_activity":
+                        activity.rawValue,
+                ]
+            )
+
+            historicalRepairStatus =
+                "Données brutes envoyées à la Watch…"
+        } catch {
+            historicalRepairStatus =
+                "Restauration impossible · \(error.localizedDescription)"
+        }
     }
 
     func deleteAllTestData() {
@@ -188,17 +314,31 @@ final class TrackerModel: NSObject, ObservableObject {
         sendWC(message)
     }
 
-    private func requestControl(_ command: String, allowed: Bool) {
+    private func requestControl(
+        _ command: String,
+        allowed: Bool,
+        finishDisposition: TrackerFinishDisposition? = nil,
+        finalActivity: ActivityKind? = nil
+    ) {
         guard allowed, pendingCommand == nil else { return }
+
         pendingCommand = command
         pendingCommandAtRevision = lastAuthorityRevision
+
         store.appendEvent("control_requested", source: "iphone", payload: [
             "command": command,
             "authority_revision": lastAuthorityRevision,
+            "finish_disposition": finishDisposition?.rawValue ?? "none",
+            "final_activity": finalActivity?.rawValue ?? "none",
         ])
+
         statusMessage = "Commande \(command) envoyée à la Watch…"
+
         var request = makeMessage(kind: .request)
         request.command = command
+        request.finishDisposition = finishDisposition?.rawValue
+        request.finalActivityOverride = finalActivity?.rawValue
+
         sendToWatch(request)
     }
 
@@ -344,6 +484,16 @@ final class TrackerModel: NSObject, ObservableObject {
             }
             effectiveActivity = effective
             lastEffectiveActivity = effective
+        }
+
+        if let required = message.finishReviewRequired {
+            finishReviewRequired = required
+        }
+
+        if let raw = message.suggestedFinalActivity,
+           let suggested = ActivityKind(rawValue: raw),
+           !suggested.isAutomatic {
+            suggestedFinalActivity = suggested
         }
 
         let remotePhase = Phase(rawValue: message.phase ?? "")
@@ -768,7 +918,21 @@ final class TrackerModel: NSObject, ObservableObject {
         case .purge:
             applyPurgeIfNeeded(message.purgeID)
         case .request:
-            break
+            if message.command
+                == "restore_historical_activity",
+               let raw =
+                    message.finalActivityOverride,
+               let target =
+                    ActivityKind(rawValue: raw),
+               !target.isAutomatic {
+
+                restoreHistoricalActivityFromRaw(
+                    sessionID:
+                        message.sessionID,
+                    activity:
+                        target
+                )
+            }
         }
     }
 
@@ -858,6 +1022,59 @@ final class TrackerModel: NSObject, ObservableObject {
 
     private static func makeSessionID() -> String { String(Int(Date().timeIntervalSince1970 * 1000)) }
     private static func revisionNow() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
+}
+
+
+extension TrackerModel: TrackerSharedWorkflowSurface {
+    var workflowIsRunning: Bool { isActive }
+    var workflowIsPaused: Bool { isPaused }
+    var workflowSelectedActivity: ActivityKind { selectedActivity }
+    var workflowEffectiveActivity: ActivityKind { effectiveActivity }
+    var workflowFinishReview: TrackerFinishReviewState { finishReview }
+
+    func workflowSelectActivity(_ activity: ActivityKind) {
+        selectActivity(activity)
+    }
+
+    func workflowSetAutoPauseEnabled(_ enabled: Bool) {
+        setAutoPauseEnabled(enabled)
+    }
+
+    func workflowStart() {
+        startFromPhone()
+    }
+
+    func workflowPause() {
+        pauseFromPhone()
+    }
+
+    func workflowResume() {
+        resumeFromPhone()
+    }
+
+    func workflowFinish(
+        disposition: TrackerFinishDisposition,
+        finalActivity: ActivityKind?
+    ) {
+        stopFromPhone(
+            disposition: disposition,
+            finalActivity: finalActivity
+        )
+    }
+
+    func workflowDeleteAllTestData() {
+        deleteAllTestData()
+    }
+
+    func workflowCorrectHistoricalActivity(
+        sessionID: String,
+        activity: ActivityKind
+    ) {
+        correctHistoricalActivity(
+            sessionID: sessionID,
+            activity: activity
+        )
+    }
 }
 
 extension TrackerModel: CLLocationManagerDelegate {
@@ -955,21 +1172,272 @@ extension TrackerModel: WCSessionDelegate {
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }
 
-    private func receiveWC(_ payload: [String: Any]) {
+     func session(
+        _ session: WCSession,
+        didFinish fileTransfer: WCSessionFileTransfer,
+        error: Error?
+    ) {
+        try? FileManager.default
+            .removeItem(
+                at: fileTransfer.file.fileURL
+            )
+
+        guard let error else {
+            return
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.historicalRepairStatus =
+                "Transfert restauration échoué · \(error.localizedDescription)"
+        }
+    }
+
+    func receiveWC(_ payload: [String: Any]) {
         if payload["type"] as? String == "sensor_sample",
            let source = payload["source"] as? String,
            let kind = payload["kind"] as? String,
            let sample = payload["payload"] as? [String: Any] {
+
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.isActive else { return }
-                if kind == "event", let name = sample["name"] as? String {
+                guard let self else { return }
+
+                if kind == "event",
+                   let name = sample["name"] as? String,
+                   (
+                        name.hasPrefix(
+                            "health_manual_correction_"
+                        )
+                        || name.hasPrefix(
+                            "health_raw_restore_"
+                        )
+                   ) {
+
+                    let repairedSession =
+                        sample["session_id"] as? String ?? ""
+
+                    let targetRaw =
+                        sample["target_activity"] as? String ?? ""
+
+                    self.historicalRepairSessionID = repairedSession
+
+                    switch name {
+                    case "health_manual_correction_started":
+                        self.historicalRepairStatus =
+                            "Reconstruction Santé en cours…"
+
+                    case "health_manual_correction_completed":
+                        let alreadyCorrect =
+                            sample["already_correct"] as? Bool ?? false
+
+                        self.historicalRepairStatus =
+                            alreadyCorrect
+                                ? "Santé déjà correcte."
+                                : "Correction Santé vérifiée."
+
+                        if !repairedSession.isEmpty,
+                           !targetRaw.isEmpty {
+
+                            let existing =
+                                self.reviewStore.load(
+                                    sessionID: repairedSession
+                                )
+
+                            let detected =
+                                existing?.detectedActivity
+                                ?? self.store.listSummaries()
+                                    .first(
+                                        where: {
+                                            $0.sessionID
+                                                == repairedSession
+                                        }
+                                    )?.activity
+                                ?? targetRaw
+
+                            let updated = ActivityReviewRecord(
+                                sessionID: repairedSession,
+                                detectedActivity: detected,
+                                confirmedActivity: targetRaw,
+                                healthKitSyncState:
+                                    "replacement_verified"
+                            )
+
+                            try? self.reviewStore.save(updated)
+
+                            // Republie immédiatement le nouvel état
+                            // vers l'historique Watch.
+                            self.recentHistoryBridge.publish(
+                                summaries:
+                                    self.store.listSummaries()
+                            )
+                        }
+
+                    case "health_manual_correction_failed":
+                        let message =
+                            sample["message"] as? String
+                                ?? "échec inconnu"
+
+                        let originalPreserved =
+                            sample["original_preserved"] as? Bool
+                                ?? false
+
+                        self.historicalRepairStatus =
+                            originalPreserved
+                                ? "Correction annulée · \(message)"
+                                : "Correction échouée · \(message)"
+
+                        if !repairedSession.isEmpty,
+                           let existing = self.reviewStore
+                               .load(sessionID: repairedSession) {
+
+                            let updated = ActivityReviewRecord(
+                                sessionID: repairedSession,
+                                detectedActivity:
+                                    existing.detectedActivity,
+                                confirmedActivity:
+                                    existing.confirmedActivity,
+                                healthKitSyncState:
+                                    originalPreserved
+                                        ? "replacement_failed_original_preserved"
+                                        : "replacement_failed_source_missing"
+                            )
+
+                            try? self.reviewStore.save(updated)
+
+                            // Un échec doit également faire reconverger
+                            // l'historique Watch vers la vérité HealthKit/raw.
+                            self.recentHistoryBridge.publish(
+                                summaries:
+                                    self.store.listSummaries()
+                            )
+                        }
+
+
+                    case "health_raw_restore_started":
+                        self.historicalRepairStatus =
+                            "Restauration Santé en cours…"
+
+                    case "health_raw_restore_completed":
+                        let alreadyRestored =
+                            sample["already_restored"]
+                                as? Bool ?? false
+
+                        self.historicalRepairStatus =
+                            alreadyRestored
+                                ? "Santé déjà restaurée."
+                                : "Restauration Santé vérifiée."
+
+                        if !repairedSession.isEmpty,
+                           !targetRaw.isEmpty {
+
+                            let existing =
+                                self.reviewStore.load(
+                                    sessionID:
+                                        repairedSession
+                                )
+
+                            let detected =
+                                existing?.detectedActivity
+                                ?? self.store
+                                    .listSummaries()
+                                    .first(
+                                        where: {
+                                            $0.sessionID
+                                                == repairedSession
+                                        }
+                                    )?.activity
+                                ?? targetRaw
+
+                            let updated =
+                                ActivityReviewRecord(
+                                    sessionID:
+                                        repairedSession,
+                                    detectedActivity:
+                                        detected,
+                                    confirmedActivity:
+                                        targetRaw,
+                                    healthKitSyncState:
+                                        "replacement_verified"
+                                )
+
+                            try? self.reviewStore
+                                .save(updated)
+
+                            self.recentHistoryBridge
+                                .publish(
+                                    summaries:
+                                        self.store
+                                            .listSummaries()
+                                )
+                        }
+
+                    case "health_raw_restore_failed":
+                        let message =
+                            sample["message"]
+                                as? String
+                                ?? "échec inconnu"
+
+                        self.historicalRepairStatus =
+                            "Restauration échouée · \(message)"
+
+                        if !repairedSession.isEmpty,
+                           let existing =
+                                self.reviewStore.load(
+                                    sessionID:
+                                        repairedSession
+                                ) {
+
+                            let updated =
+                                ActivityReviewRecord(
+                                    sessionID:
+                                        repairedSession,
+                                    detectedActivity:
+                                        existing.detectedActivity,
+                                    confirmedActivity:
+                                        existing.confirmedActivity,
+                                    healthKitSyncState:
+                                        "restoration_failed"
+                                )
+
+                            try? self.reviewStore
+                                .save(updated)
+                        }
+
+                        self.recentHistoryBridge
+                            .publish(
+                                summaries:
+                                    self.store
+                                        .listSummaries()
+                            )
+
+                    default:
+                        break
+                    }
+
+                    return
+                }
+
+                guard self.isActive else { return }
+
+                if kind == "event",
+                   let name = sample["name"] as? String {
+
                     var eventPayload = sample
                     eventPayload.removeValue(forKey: "name")
-                    self.store.appendEvent(name, source: source, payload: eventPayload)
+
+                    self.store.appendEvent(
+                        name,
+                        source: source,
+                        payload: eventPayload
+                    )
                 } else {
-                    self.store.appendSample(source: source, kind: kind, payload: sample)
+                    self.store.appendSample(
+                        source: source,
+                        kind: kind,
+                        payload: sample
+                    )
                 }
             }
+
             return
         }
 

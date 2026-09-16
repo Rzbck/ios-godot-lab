@@ -16,36 +16,29 @@ enum WatchAutoPolicy {
         elevationGainMeters: Double,
         elevationLossMeters: Double
     ) -> WatchAutoDecision? {
+        // Keep reconciliation lifecycle binding at the platform boundary.
+        // Classification itself is delegated to the pure shared policy so CI
+        // can replay the exact same rules without physical motion.
         WatchAutoHealthReconciler.shared.bind(to: SensorModel.shared)
-        guard motion.confidence != .low else { return nil }
 
-        let confidence = confidenceLabel(motion.confidence)
-        if motion.running {
-            return WatchAutoDecision(activity: .running, confidence: confidence, provenance: "Core Motion · course", dwellSeconds: 7)
-        }
-        if motion.cycling {
-            return WatchAutoDecision(activity: .cycling, confidence: confidence, provenance: "Core Motion · vélo", dwellSeconds: 9)
-        }
-        if motion.walking {
-            let verticalTravel = elevationGainMeters + elevationLossMeters
-            let terrainRatio = distanceMeters > 300 ? verticalTravel / distanceMeters : 0
-            let hikingEvidence = elapsedSeconds >= 10 * 60
-                && distanceMeters >= 700
-                && verticalTravel >= 45
-                && terrainRatio >= 0.035
+        let evidence = TrackerMotionEvidence(
+            walking: motion.walking,
+            running: motion.running,
+            cycling: motion.cycling,
+            stationary: motion.stationary,
+            confidence: motionConfidence(motion.confidence)
+        )
 
-            if hikingEvidence {
-                let inferredConfidence = motion.confidence == .high && terrainRatio >= 0.05 ? "élevée" : "moyenne"
-                return WatchAutoDecision(
-                    activity: .hiking,
-                    confidence: inferredConfidence,
-                    provenance: "Inférence Watch Tracker · marche + terrain/dénivelé",
-                    dwellSeconds: 30
-                )
-            }
-            return WatchAutoDecision(activity: .walking, confidence: confidence, provenance: "Core Motion · marche", dwellSeconds: 8)
+        guard let decision = TrackerAutoPolicy.decision(from: evidence) else {
+            return nil
         }
-        return nil
+
+        return WatchAutoDecision(
+            activity: decision.activity,
+            confidence: decision.confidence,
+            provenance: decision.provenance,
+            dwellSeconds: decision.dwellSeconds
+        )
     }
 
     static func shouldStagePause(
@@ -54,17 +47,13 @@ enum WatchAutoPolicy {
         speedMps: Double,
         cadenceSPM: Double
     ) -> Bool {
-        guard WatchAutoPauseSettings.isEnabled(for: activity), stationary else { return false }
-        switch activity {
-        case .walking, .hiking:
-            return speedMps <= 1.2 && cadenceSPM < 30
-        case .running, .trackAndField:
-            return speedMps <= 1.5 && cadenceSPM < 55
-        case .cycling, .handCycling:
-            return speedMps <= 2.0
-        default:
-            return speedMps <= 1.0
-        }
+        TrackerAutoPolicy.shouldStagePause(
+            activity: activity,
+            enabled: WatchAutoPauseSettings.isEnabled(for: activity),
+            stationary: stationary,
+            speedMps: speedMps,
+            cadenceSPM: cadenceSPM
+        )
     }
 
     static func pauseDwell(for activity: ActivityKind) -> TimeInterval {
@@ -78,17 +67,14 @@ enum WatchAutoPolicy {
         cadenceSPM: Double,
         motionCandidate: ActivityKind?
     ) -> Bool {
-        guard WatchAutoPauseSettings.isEnabled(for: activity), !stationary else { return false }
-        switch activity {
-        case .walking, .hiking:
-            return speedMps >= 0.7 || cadenceSPM >= 35 || motionCandidate == .walking || motionCandidate == .hiking
-        case .running, .trackAndField:
-            return speedMps >= 1.2 || cadenceSPM >= 65 || motionCandidate == .running
-        case .cycling, .handCycling:
-            return speedMps >= 1.4 || motionCandidate == .cycling
-        default:
-            return speedMps >= 0.7 || motionCandidate != nil
-        }
+        TrackerAutoPolicy.shouldStageResume(
+            activity: activity,
+            enabled: WatchAutoPauseSettings.isEnabled(for: activity),
+            stationary: stationary,
+            speedMps: speedMps,
+            cadenceSPM: cadenceSPM,
+            motionCandidate: motionCandidate
+        )
     }
 
     static func resumeDwell(for activity: ActivityKind) -> TimeInterval {
@@ -96,11 +82,17 @@ enum WatchAutoPolicy {
     }
 
     static func confidenceLabel(_ confidence: CMMotionActivityConfidence) -> String {
+        motionConfidence(confidence).label
+    }
+
+    private static func motionConfidence(
+        _ confidence: CMMotionActivityConfidence
+    ) -> TrackerMotionConfidence {
         switch confidence {
-        case .high: return "élevée"
-        case .medium: return "moyenne"
-        case .low: return "faible"
-        @unknown default: return "inconnue"
+        case .high: return .high
+        case .medium: return .medium
+        case .low: return .low
+        @unknown default: return .low
         }
     }
 }

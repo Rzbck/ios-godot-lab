@@ -24,10 +24,11 @@ def apply(script: str) -> None:
 # SESSION_SYNC_PATCH owns the established dependency order for auto-pause,
 # terminal/runtime integrity, and historical correction. Reactive Auto behavior
 # comes next, then sensor fusion, runtime wake-up/anti-oscillation, evidence
-# freshness, raw Watch inertial stillness + HealthKit Auto typing, and finally
-# the field-proven single-owner pause decision + durable diagnostics repair.
-# The field repair preserves the earlier freshness integration markers so the
-# complete chain remains safe to execute repeatedly in CI and Xcode builds.
+# freshness, raw Watch inertial stillness + HealthKit Auto typing, the
+# field-proven single-owner pause decision + durable diagnostics repair, and
+# finally the neutral-Auto startup pause profile proven by session 1789535250518.
+# The final repairs preserve earlier integration markers so the complete chain
+# remains safe to execute repeatedly in CI and Xcode builds.
 apply("SESSION_SYNC_PATCH.py")
 apply("APPLY_AUTO_BEHAVIOR_PATCH.py")
 apply("APPLY_AUTO_PAUSE_FUSION_PATCH.py")
@@ -50,5 +51,6 @@ if field_fix_applied:
 else:
     apply("APPLY_AUTO_PAUSE_INERTIAL_HEALTHKIT_PATCH.py")
 apply("RUN_AUTO_PAUSE_FIELD_FIX_PATCH.py")
+apply("APPLY_AUTO_PAUSE_NEUTRAL_START_PATCH.py")
 
 print("WATCH SENSOR LAB GENERATED SOURCE CHAIN: OK")

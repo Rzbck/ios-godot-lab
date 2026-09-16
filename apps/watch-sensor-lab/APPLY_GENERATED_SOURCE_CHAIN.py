@@ -27,8 +27,10 @@ def apply(script: str) -> None:
 # freshness, raw Watch inertial stillness + HealthKit Auto typing, the
 # field-proven single-owner pause decision + durable diagnostics repair,
 # neutral-Auto startup support, then the physical-run reactivity/haptics repair
-# and complete forensic export added from session 1789537681642.
-# The final repairs preserve earlier integration markers so the complete chain
+# and complete forensic export added from session 1789537681642. The final
+# follow-up patch applies field findings from combined session 1789561072024:
+# brisk-walk classification, paused finish timing, and OSM product integration.
+# Every repair preserves earlier integration markers so the complete chain
 # remains safe to execute repeatedly in CI and Xcode builds.
 apply("SESSION_SYNC_PATCH.py")
 apply("APPLY_AUTO_BEHAVIOR_PATCH.py")
@@ -55,8 +57,7 @@ apply("RUN_AUTO_PAUSE_FIELD_FIX_PATCH.py")
 apply("APPLY_AUTO_PAUSE_NEUTRAL_START_PATCH.py")
 apply("RUN_AUTO_PAUSE_REACTIVITY_HAPTICS_PATCH.py")
 apply("APPLY_DIAGNOSTIC_COMPLETE_EXPORT_PATCH.py")
+apply("APPLY_FIELD_FOLLOWUP_20260916_PATCH.py")
 
-# REACTIVITY_HAPTICS_IDEMPOTENCE_TRIGGER_20260916: runtime-neutral CI trigger.
-# NEUTRAL_AUTO_DWELL_TEST_TRIGGER_20260916: runtime-neutral CI trigger.
-# DEVICE_CANDIDATE_REACTIVITY_HAPTICS_20260916: runtime-neutral artifact trigger.
+# FIELD_FOLLOWUP_1789561072024: generated runtime + UI regression gate.
 print("WATCH SENSOR LAB GENERATED SOURCE CHAIN: OK")

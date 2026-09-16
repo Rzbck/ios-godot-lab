@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent
 POLICY = ROOT / "Shared/TrackerAutoPolicy.swift"
 FINISH_POLICY = ROOT / "Shared/TrackerFinishPersistencePolicy.swift"
 WATCH = ROOT / "watch/Sources/SensorModel.swift"
+WATCH_HISTORY = ROOT / "watch/Sources/WatchRecentHistory.swift"
 WATCH_VIEW = ROOT / "watch/Sources/WatchActiveWorkoutView.swift"
 TRACKER_APP = ROOT / "iphone/Sources/TrackerApp.swift"
 PRODUCT = ROOT / "iphone/Sources/ActivityProductContainerView.swift"
@@ -42,6 +43,7 @@ def replace_once_or_present(text: str, old: str, new: str, marker: str, label: s
 policy = POLICY.read_text(encoding="utf-8")
 finish_policy = FINISH_POLICY.read_text(encoding="utf-8")
 watch = WATCH.read_text(encoding="utf-8")
+watch_history = WATCH_HISTORY.read_text(encoding="utf-8")
 watch_view = WATCH_VIEW.read_text(encoding="utf-8")
 tracker_app = TRACKER_APP.read_text(encoding="utf-8")
 product = PRODUCT.read_text(encoding="utf-8")
@@ -301,13 +303,59 @@ watch = replace_once_or_present(
     "Watch OSM reset",
 )
 
-watch = replace_once_or_present(
-    watch,
-    '''    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }\n    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }\n''',
-    '''    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }\n    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }\n    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) { receiveWC(userInfo) } // FIELD_1789561072024_WATCH_OSM_USERINFO\n''',
-    "// FIELD_1789561072024_WATCH_OSM_USERINFO",
-    "Watch OSM queued user info",
-)
+# ---------------------------------------------------------------------------
+# Watch queued WC payloads: SensorModel is the WCSession delegate, therefore
+# didReceiveUserInfo must exist exactly once. Merge recent-history ingestion
+# and OSM reception into that single callback.
+# ---------------------------------------------------------------------------
+watch_userinfo_base = '''    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }\n    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }\n'''
+
+watch_userinfo_legacy_osm = '''    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }\n    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }\n    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) { receiveWC(userInfo) } // FIELD_1789561072024_WATCH_OSM_USERINFO\n'''
+
+watch_userinfo_merged = '''    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) { receiveWC(message) }\n    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) { receiveWC(applicationContext) }\n    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) { // FIELD_1789561072024_WATCH_USERINFO_MERGED\n        _ = WatchRecentHistoryStore.shared.ingest(userInfo)\n        receiveWC(userInfo)\n    }\n'''
+
+if "// FIELD_1789561072024_WATCH_USERINFO_MERGED" not in watch:
+    if "// FIELD_1789561072024_WATCH_OSM_USERINFO" in watch:
+        count = watch.count(watch_userinfo_legacy_osm)
+        if count != 1:
+            raise SystemExit(
+                f"legacy OSM userInfo migration: expected one match, got {count}"
+            )
+        watch = watch.replace(
+            watch_userinfo_legacy_osm,
+            watch_userinfo_merged,
+            1,
+        )
+    else:
+        count = watch.count(watch_userinfo_base)
+        if count != 1:
+            raise SystemExit(
+                f"merged userInfo insertion: expected one match, got {count}"
+            )
+        watch = watch.replace(
+            watch_userinfo_base,
+            watch_userinfo_merged,
+            1,
+        )
+
+legacy_history_delegate = '''extension SensorModel {\n    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {\n        _ = WatchRecentHistoryStore.shared.ingest(userInfo)\n    }\n}\n\n'''
+
+if legacy_history_delegate in watch_history:
+    count = watch_history.count(legacy_history_delegate)
+    if count != 1:
+        raise SystemExit(
+            f"recent-history delegate migration: expected one match, got {count}"
+        )
+    watch_history = watch_history.replace(
+        legacy_history_delegate,
+        "",
+        1,
+    )
+elif "didReceiveUserInfo userInfo" in watch_history:
+    raise SystemExit(
+        "WatchRecentHistory.swift contains an unknown didReceiveUserInfo implementation"
+    )
+
 
 watch = replace_once_or_present(
     watch,
@@ -328,6 +376,15 @@ watch_view = replace_once_or_present(
 # ---------------------------------------------------------------------------
 # Fail closed if any key product/field marker is missing after transformation.
 # ---------------------------------------------------------------------------
+watch_userinfo_delegate_count = (
+    watch.count("didReceiveUserInfo userInfo: [String: Any]")
+    + watch_history.count("didReceiveUserInfo userInfo: [String: Any]")
+)
+if watch_userinfo_delegate_count != 1:
+    raise SystemExit(
+        f"Watch didReceiveUserInfo invariant failed: {watch_userinfo_delegate_count} implementations"
+    )
+
 required = {
     "policy": ["FIELD_1789561072024_BRISK_WALK_GUARD"],
     "finish_policy": ["FIELD_1789561072024_FINISH_DURATION_POLICY"],
@@ -335,6 +392,7 @@ required = {
         "FIELD_1789561072024_STOP_WHILE_PAUSED_DURATION",
         "FIELD_1789561072024_WATCH_OSM_STATE",
         "FIELD_1789561072024_WATCH_OSM_HANDLER",
+        "FIELD_1789561072024_WATCH_USERINFO_MERGED",
     ],
     "watch_view": ["FIELD_1789561072024_WATCH_OSM_TERRAIN_UI"],
     "tracker_app": ["FIELD_1789561072024_OSM_USE_EXISTING_PRODUCT_SLOTS"],
@@ -379,6 +437,7 @@ for name, markers in required.items():
 POLICY.write_text(policy, encoding="utf-8")
 FINISH_POLICY.write_text(finish_policy, encoding="utf-8")
 WATCH.write_text(watch, encoding="utf-8")
+WATCH_HISTORY.write_text(watch_history, encoding="utf-8")
 WATCH_VIEW.write_text(watch_view, encoding="utf-8")
 TRACKER_APP.write_text(tracker_app, encoding="utf-8")
 PRODUCT.write_text(product, encoding="utf-8")

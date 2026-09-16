@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 @main
@@ -82,6 +83,8 @@ private struct TrackerRootView: View {
     @ObservedObject var tracker: TrackerModel
     @ObservedObject var startupPermissions: StartupPermissionCoordinator
     @ObservedObject var telemetry: TrackerTelemetryCoordinator
+    @ObservedObject private var osmContext = OSMRouteContextService.shared
+    @AppStorage("tracker.osmSurface.enabled") private var osmSurfaceEnabled = true
     @State private var completedSummary: TrackerSummary?
     @State private var selection: TrackerAppSection = .today
 
@@ -90,6 +93,11 @@ private struct TrackerRootView: View {
 
     var body: some View {
         rootTabs
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if tracker.isActive, selection == .activity, osmSurfaceEnabled {
+                    OSMLiveSurfaceBar()
+                }
+            }
             .simultaneousGesture(
                 SpatialTapGesture().onEnded { value in
                     telemetry.recordTap(
@@ -135,13 +143,34 @@ private struct TrackerRootView: View {
             .onReceive(tracker.$phase.removeDuplicates()) { phase in
                 if phase == .active || phase == .paused {
                     selection = .activity
+                    if osmSurfaceEnabled {
+                        osmContext.begin(
+                            sessionID: tracker.sessionID,
+                            activity: tracker.displayActivity.rawValue
+                        )
+                    }
                 }
             }
+            .onReceive(tracker.$currentCoordinate.compactMap { $0 }) { coordinate in
+                guard tracker.isActive, osmSurfaceEnabled else { return }
+                osmContext.begin(
+                    sessionID: tracker.sessionID,
+                    activity: tracker.displayActivity.rawValue
+                )
+                osmContext.ingest(
+                    coordinate: coordinate,
+                    horizontalAccuracy: tracker.horizontalAccuracy,
+                    activity: tracker.displayActivity.rawValue
+                )
+            }
             .onReceive(tracker.$lastSummary.compactMap { $0 }) { summary in
+                if osmSurfaceEnabled {
+                    osmContext.finish(sessionID: summary.sessionID, endedAt: summary.endedAt)
+                }
                 handleCompletedSummary(summary)
             }
             .sheet(item: $completedSummary) { summary in
-                PostActivitySummaryView(summary: summary)
+                OSMPostActivitySummaryContainer(summary: summary)
                     .onAppear {
                         AppTelemetry.shared.event(
                             "screen_appeared",

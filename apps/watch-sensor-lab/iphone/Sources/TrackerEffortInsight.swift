@@ -8,6 +8,8 @@ struct TrackerEffortEstimate: Equatable {
     let durationContribution: Double
     let terrainContribution: Double
     let environmentContribution: Double
+    let surfaceContribution: Double
+    let surfaceCoverage: Double
     let continuityFactor: Double
     let explanation: String
 }
@@ -21,6 +23,7 @@ struct TrackerEffortEstimator {
         )
         let pauseReport = SessionPauseAnalyzer().analyze(summary: summary)
         let environment = SessionEffortAnalyzer().analyze(summary: summary)
+        let surface = OSMSurfaceEffortAnalyzer().analyze(summary: summary)
 
         let cardio: Double?
         if let zoneReport {
@@ -55,7 +58,7 @@ struct TrackerEffortEstimator {
         let activeFraction = wallDuration > 0 ? min(1, summary.duration / wallDuration) : 1
         let continuity = 0.90 + (activeFraction * 0.10)
 
-        var raw = (cardio ?? 2.2) + duration + terrain + environmentScore
+        var raw = (cardio ?? 2.2) + duration + terrain + environmentScore + surface.contribution
         raw *= continuity
         let score = min(10, max(1, raw))
 
@@ -74,6 +77,7 @@ struct TrackerEffortEstimator {
         if terrain > 0.05 { details.append("dénivelé") }
         if pauseReport.totalPaused > 1 { details.append("continuité et pauses") }
         if environmentScore > 0.05 { details.append("météo") }
+        if surface.knownCoverage > 0.05 { details.append("revêtement OSM") }
 
         return TrackerEffortEstimate(
             score: score,
@@ -82,6 +86,8 @@ struct TrackerEffortEstimator {
             durationContribution: duration,
             terrainContribution: terrain,
             environmentContribution: environmentScore,
+            surfaceContribution: surface.contribution,
+            surfaceCoverage: surface.knownCoverage,
             continuityFactor: continuity,
             explanation: "Estimation Watch Tracker basée sur \(details.joined(separator: ", ")). Elle sert de repère sportif et ne constitue pas une mesure médicale."
         )
@@ -181,25 +187,42 @@ struct TrackerEffortInsightView: View {
     @ViewBuilder
     private var trackerExplanation: some View {
         if let estimate {
-            HStack(alignment: .top, spacing: 10) {
-                ZStack {
-                    Circle().stroke(.white.opacity(0.08), lineWidth: 7)
-                    Circle()
-                        .trim(from: 0, to: estimate.score / 10)
-                        .stroke(.orange, style: StrokeStyle(lineWidth: 7, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    Text(String(format: "%.1f", estimate.score))
-                        .font(.headline.weight(.black))
-                        .monospacedDigit()
-                }
-                .frame(width: 58, height: 58)
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(alignment: .top, spacing: 10) {
+                    ZStack {
+                        Circle().stroke(.white.opacity(0.08), lineWidth: 7)
+                        Circle()
+                            .trim(from: 0, to: estimate.score / 10)
+                            .stroke(.orange, style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Text(String(format: "%.1f", estimate.score))
+                            .font(.headline.weight(.black))
+                            .monospacedDigit()
+                    }
+                    .frame(width: 58, height: 58)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Pourquoi Tracker dit \(estimate.label.lowercased())")
-                        .font(.subheadline.weight(.bold))
-                    Text(estimate.explanation)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Pourquoi Tracker dit \(estimate.label.lowercased())")
+                            .font(.subheadline.weight(.bold))
+                        Text(estimate.explanation)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if estimate.surfaceCoverage > 0.05 {
+                    HStack {
+                        Label("Revêtement OSM", systemImage: "road.lanes")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(Int((estimate.surfaceCoverage * 100).rounded())) % couvert · +\(String(format: "%.2f", estimate.surfaceContribution))")
+                            .font(.caption.monospacedDigit().weight(.bold))
+                            .foregroundStyle(.orange)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 34)
+                    .background(.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             }
         }

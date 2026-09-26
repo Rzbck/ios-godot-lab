@@ -156,7 +156,7 @@ try {
 
     if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $Temp '*') -Destination $Destination -Recurse -Force
+    Copy-Item -Path (Join-Path $Temp '*') -Destination $Destination -Recurse -Force
 
     Write-Host "RUN         = $($Run.databaseId)" -ForegroundColor Green
     Write-Host "ARTIFACT    = $ArtifactName" -ForegroundColor Green

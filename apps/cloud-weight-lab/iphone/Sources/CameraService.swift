@@ -1,4 +1,5 @@
 import AVFoundation
+import QuartzCore
 import SwiftUI
 import UIKit
 
@@ -137,7 +138,7 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 }
 
-private final class CameraPreviewView: UIView {
+final class CameraPreviewView: UIView {
     override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
 
     var previewLayer: AVCaptureVideoPreviewLayer {

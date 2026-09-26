@@ -1,0 +1,5 @@
+.DS_Store
+iphone/*.xcodeproj
+iphone/build/
+.build/
+artifacts/

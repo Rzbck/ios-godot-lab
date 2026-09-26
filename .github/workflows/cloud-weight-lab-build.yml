@@ -1,0 +1,176 @@
+name: Cloud Weight Lab build
+run-name: Cloud Weight Lab · ${{ github.ref_name }} · ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'apps/cloud-weight-lab/**'
+      - '.github/workflows/cloud-weight-lab-build.yml'
+  push:
+    branches:
+      - 'feat/cloud-weight-lab-*'
+      - 'fix/cloud-weight-lab-*'
+    paths:
+      - 'apps/cloud-weight-lab/**'
+      - '.github/workflows/cloud-weight-lab-build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-weight-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: apps/cloud-weight-lab
+  XCODEGEN_VERSION: '2.46.0'
+  XCODEGEN_SHA256: '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806'
+
+jobs:
+  build:
+    name: Compile, test-build and package unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Toolchain identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install pinned XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/xcodegen.zip"
+          DEST="$RUNNER_TEMP/xcodegen"
+          URL="https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          mkdir -p "$DEST"
+          curl --fail --location --retry 3 --retry-delay 2 "$URL" --output "$ARCHIVE"
+          echo "${XCODEGEN_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+          unzip -q "$ARCHIVE" -d "$DEST"
+          XCODEGEN_BIN="$(find "$DEST" -type f -name xcodegen | head -n 1)"
+          test -n "$XCODEGEN_BIN"
+          chmod +x "$XCODEGEN_BIN"
+          echo "XCODEGEN_BIN=$XCODEGEN_BIN" >> "$GITHUB_ENV"
+          "$XCODEGEN_BIN" --version
+
+      - name: Stamp exact build identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:12}"
+          cat > "$APP_DIR/iphone/Sources/BuildInfo.swift" <<EOF
+          enum BuildInfo {
+              static let version = "0.1.0"
+              static let gitSHA = "$SHORT_SHA"
+          }
+          EOF
+
+      - name: Generate Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPHONE_DIR="$GITHUB_WORKSPACE/$APP_DIR/iphone"
+          "$XCODEGEN_BIN" generate --spec "$IPHONE_DIR/project.yml" --project "$IPHONE_DIR"
+          XCODEPROJ="$IPHONE_DIR/CloudWeightLab.xcodeproj"
+          test -d "$XCODEPROJ"
+          echo "XCODEPROJ=$XCODEPROJ" >> "$GITHUB_ENV"
+          xcodebuild -project "$XCODEPROJ" -list
+
+      - name: Compile app and unit tests for simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project "$XCODEPROJ" \
+            -scheme CloudWeightLab \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData-sim" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build-for-testing
+
+      - name: Build unsigned device app
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEVICE_DERIVED="$RUNNER_TEMP/DerivedData-device"
+          xcodebuild \
+            -project "$XCODEPROJ" \
+            -scheme CloudWeightLab \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DEVICE_DERIVED" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+          APP_PATH="$(find "$DEVICE_DERIVED/Build/Products" -type d -path '*Release-iphoneos/CloudWeightLab.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo 'CloudWeightLab.app was not produced.' >&2
+            exit 1
+          fi
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
+
+      - name: Verify packaged app contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
+          test "$BUNDLE_ID" = 'com.rzbck.cloudweightlab'
+          /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$APP_PATH/Info.plist" >/dev/null
+          grep -Fq "${GITHUB_SHA:0:12}" "$APP_DIR/iphone/Sources/BuildInfo.swift"
+
+      - name: Package exact-SHA IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$GITHUB_WORKSPACE/build/cloud-weight-lab"
+          rm -rf "$OUT"
+          mkdir -p "$OUT/Payload"
+          ditto "$APP_PATH" "$OUT/Payload/CloudWeightLab.app"
+          IPA="CloudWeightLab-${GITHUB_SHA}.ipa"
+          (
+            cd "$OUT"
+            /usr/bin/zip -qry "$IPA" Payload
+          )
+          shasum -a 256 "$OUT/$IPA" > "$OUT/$IPA.sha256"
+          cat > "$OUT/BUILD-METADATA.json" <<EOF
+          {
+            "app": "Cloud Weight Lab",
+            "version": "0.1.0",
+            "sha": "$GITHUB_SHA",
+            "bundle_id": "com.rzbck.cloudweightlab",
+            "artifact": "$IPA",
+            "segmentation_engine": "local-heuristic-v1",
+            "device_validation": false
+          }
+          EOF
+          rm -rf "$OUT/Payload"
+
+      - name: Upload exact-SHA IPA
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cloud-weight-lab-${{ github.sha }}
+          path: build/cloud-weight-lab/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

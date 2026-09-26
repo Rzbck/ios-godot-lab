@@ -1,0 +1,47 @@
+name: CloudWeightLab
+options:
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+targets:
+  CloudWeightLab:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Cloud Weight
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSCameraUsageDescription: Cloud Weight utilise la caméra uniquement sur cet iPhone pour détecter les nuages et estimer leur masse. Les images ne sont pas envoyées sur un serveur.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.cloudweightlab
+        PRODUCT_NAME: CloudWeightLab
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        TARGETED_DEVICE_FAMILY: "1"
+    scheme:
+      testTargets:
+        - CloudWeightLabTests
+
+  CloudWeightLabTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ../Tests
+    dependencies:
+      - target: CloudWeightLab
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rzbck.cloudweightlab.tests
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO

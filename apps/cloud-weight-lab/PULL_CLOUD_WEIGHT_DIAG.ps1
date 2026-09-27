@@ -168,7 +168,12 @@ $BaseUrl = [string]$Session.base_url
 $Token = [string]$Session.token
 $Status = Invoke-ApiJson -Uri "$BaseUrl/api/v1/status" -Token $Token
 $Telemetry = Invoke-ApiJson -Uri "$BaseUrl/api/v1/telemetry?limit=180" -Token $Token
-$Snapshots = @(Invoke-ApiJson -Uri "$BaseUrl/api/v1/snapshots" -Token $Token)
+$SnapshotResponse = Invoke-ApiJson -Uri "$BaseUrl/api/v1/snapshots" -Token $Token
+if ($null -eq $SnapshotResponse) {
+    $Snapshots = @()
+} else {
+    $Snapshots = @($SnapshotResponse)
+}
 
 $Container = Get-ContainerRoot
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -178,11 +183,14 @@ New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
 $Status | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $OutDir 'status.json') -Encoding UTF8
 $Telemetry | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $OutDir 'telemetry.json') -Encoding UTF8
-$Snapshots | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $OutDir 'snapshots.json') -Encoding UTF8
+ConvertTo-Json -InputObject $Snapshots -Depth 10 | Set-Content -LiteralPath (Join-Path $OutDir 'snapshots.json') -Encoding UTF8
 
 $Headers = @{ Authorization = "Bearer $Token" }
 foreach ($Snapshot in $Snapshots) {
-    $Id = [string]$Snapshot.id
+    if ($null -eq $Snapshot) { continue }
+    $IdProperty = $Snapshot.PSObject.Properties['id']
+    if ($null -eq $IdProperty) { continue }
+    $Id = [string]$IdProperty.Value
     if ([string]::IsNullOrWhiteSpace($Id)) { continue }
     $Destination = Join-Path $OutDir ("snapshot-$Id.jpg")
     Invoke-WebRequest -Uri "$BaseUrl/api/v1/snapshots/$Id.jpg" -Headers $Headers -OutFile $Destination -TimeoutSec 5

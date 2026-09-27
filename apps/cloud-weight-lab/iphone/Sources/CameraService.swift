@@ -19,12 +19,23 @@ final class CameraService: NSObject, ObservableObject {
     @Published private(set) var detections: [CloudDetection] = []
     @Published private(set) var telemetry: CloudTelemetrySnapshot?
     @Published private(set) var diagnosticReport = ""
+    @Published private(set) var activeCamera: AVCaptureDevice?
+    @Published private(set) var apiState: CloudDiagnosticsAPI.State = .stopped
 
     private let analyzer = CloudAnalyzer()
     private let estimator = CloudMassEstimator()
     private let stabilizer = CloudTemporalStabilizer()
     private let overlayStabilizer = CloudOverlayStabilizer()
     private let telemetryMonitor = CloudTelemetryMonitor()
+    private let diagnosticsStore = CloudDiagnosticsStore()
+    private lazy var diagnosticsAPI: CloudDiagnosticsAPI = {
+        let api = CloudDiagnosticsAPI(store: diagnosticsStore)
+        api.stateDidChange = { [weak self] next in
+            self?.apiState = next
+        }
+        return api
+    }()
+
     private let captureQueue = DispatchQueue(label: "cloudweight.capture", qos: .userInitiated)
     private let analysisQueue = DispatchQueue(label: "cloudweight.analysis", qos: .userInitiated)
     private let minimumAnalysisInterval = 0.10
@@ -34,10 +45,14 @@ final class CameraService: NSObject, ObservableObject {
     private var analysisInFlight = false
     private var droppedFrames = 0
     private var throttledFrames = 0
+    private var videoOutput: AVCaptureVideoDataOutput?
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var rotationObservation: NSKeyValueObservation?
 
     func requestAndStart() {
         telemetryMonitor.reset()
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        diagnosticsAPI.start()
 
         guard analyzer.isReady else {
             status = .failed(analyzer.loadError ?? "Modèle de segmentation indisponible")
@@ -66,8 +81,18 @@ final class CameraService: NSObject, ObservableObject {
         }
     }
 
+    func armDiagnosticsAPI() {
+        diagnosticsAPI.armPairing(seconds: 45)
+    }
+
+    func unpairDiagnosticsAPI() {
+        diagnosticsAPI.unpair()
+    }
+
     func stop() {
         UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        diagnosticsAPI.stop()
+        rotationObservation = nil
         captureQueue.async { [weak self] in
             guard let self, self.session.isRunning else { return }
             self.session.stopRunning()
@@ -117,8 +142,28 @@ final class CameraService: NSObject, ObservableObject {
                     return
                 }
                 self.session.addOutput(output)
+                self.videoOutput = output
+
+                let coordinator = AVCaptureDevice.RotationCoordinator(
+                    device: camera,
+                    previewLayer: nil
+                )
+                self.rotationCoordinator = coordinator
+                self.rotationObservation = coordinator.observe(
+                    \.videoRotationAngleForHorizonLevelCapture,
+                    options: [.initial, .new]
+                ) { [weak self] coordinator, _ in
+                    let angle = coordinator.videoRotationAngleForHorizonLevelCapture
+                    self?.captureQueue.async { [weak self] in
+                        self?.applyCaptureRotation(angle)
+                    }
+                }
+
                 self.session.commitConfiguration()
                 self.configured = true
+                DispatchQueue.main.async {
+                    self.activeCamera = camera
+                }
             }
 
             if !self.session.isRunning {
@@ -128,6 +173,14 @@ final class CameraService: NSObject, ObservableObject {
                 self.status = .running
             }
         }
+    }
+
+    private func applyCaptureRotation(_ angle: CGFloat) {
+        guard let connection = videoOutput?.connection(with: .video),
+              connection.isVideoRotationAngleSupported(angle) else {
+            return
+        }
+        connection.videoRotationAngle = angle
     }
 
     private func finishConfigurationFailure(_ message: String) {
@@ -208,6 +261,17 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         )
         let nextReport = telemetryMonitor.makeReport(buildSHA: BuildInfo.gitSHA)
 
+        diagnosticsStore.record(
+            telemetry: nextTelemetry,
+            detections: stabilizedDetections
+        )
+        diagnosticsStore.maybeCapture(
+            sampleBuffer: sampleBuffer,
+            overlayImage: stabilizedOverlay,
+            telemetry: nextTelemetry,
+            detections: stabilizedDetections
+        )
+
         analysisInFlight = false
 
         DispatchQueue.main.async { [weak self] in
@@ -233,24 +297,53 @@ final class CameraPreviewView: UIView {
     var previewLayer: AVCaptureVideoPreviewLayer {
         layer as! AVCaptureVideoPreviewLayer
     }
+
+    private weak var configuredDevice: AVCaptureDevice?
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var rotationObservation: NSKeyValueObservation?
+
+    func configure(session: AVCaptureSession, device: AVCaptureDevice?) {
+        previewLayer.session = session
+        previewLayer.videoGravity = .resizeAspectFill
+
+        guard let device else { return }
+        guard configuredDevice !== device else { return }
+
+        configuredDevice = device
+        rotationObservation = nil
+        let coordinator = AVCaptureDevice.RotationCoordinator(
+            device: device,
+            previewLayer: previewLayer
+        )
+        rotationCoordinator = coordinator
+        rotationObservation = coordinator.observe(
+            \.videoRotationAngleForHorizonLevelPreview,
+            options: [.initial, .new]
+        ) { [weak self] coordinator, _ in
+            guard let self,
+                  let connection = self.previewLayer.connection else {
+                return
+            }
+            let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+            if connection.isVideoRotationAngleSupported(angle) {
+                connection.videoRotationAngle = angle
+            }
+        }
+    }
 }
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    let device: AVCaptureDevice?
 
     func makeUIView(context: Context) -> CameraPreviewView {
         let view = CameraPreviewView()
         view.backgroundColor = .black
-        view.previewLayer.session = session
-        view.previewLayer.videoGravity = .resizeAspectFill
-        if let connection = view.previewLayer.connection,
-           connection.isVideoOrientationSupported {
-            connection.videoOrientation = .portrait
-        }
+        view.configure(session: session, device: device)
         return view
     }
 
     func updateUIView(_ uiView: CameraPreviewView, context: Context) {
-        uiView.previewLayer.session = session
+        uiView.configure(session: session, device: device)
     }
 }

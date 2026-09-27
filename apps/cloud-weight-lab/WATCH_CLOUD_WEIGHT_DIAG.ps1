@@ -6,7 +6,8 @@ param(
     [ValidateRange(0, 86400)][int]$DurationSeconds = 0,
     [switch]$OpenFolder,
     [switch]$ClearRemoteSnapshotsOnStart,
-    [switch]$MakeVideo
+    [switch]$MakeVideo,
+    [switch]$KeepFrames
 )
 
 $ErrorActionPreference = 'Stop'
@@ -356,6 +357,12 @@ finally {
             & $Ffmpeg.Source -hide_banner -loglevel error -y -f concat -safe 0 -i $Concat -vf 'fps=4,format=yuv420p' -c:v libx264 -crf 28 $Video
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "VIDEO       = $Video" -ForegroundColor Green
+                if (-not $KeepFrames) {
+                    Remove-Item -LiteralPath $FramesDir -Recurse -Force -ErrorAction SilentlyContinue
+                    Remove-Item -LiteralPath $Concat -Force -ErrorAction SilentlyContinue
+                    Write-Host 'FRAMES      = supprimées après création MP4 réussie (utilise -KeepFrames pour les conserver)' -ForegroundColor DarkGray
+                }
+                Write-Host 'PARTAGE     = diagnostic-preview.mp4 + telemetry.ndjson/csv + status-latest.json + snapshots-latest.json' -ForegroundColor Cyan
             } else {
                 Write-Host 'ffmpeg présent mais création MP4 échouée ; la séquence JPEG reste complète.' -ForegroundColor Yellow
             }

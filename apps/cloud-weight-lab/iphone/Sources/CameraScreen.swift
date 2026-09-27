@@ -3,6 +3,7 @@ import SwiftUI
 struct CameraScreen: View {
     @StateObject private var camera = CameraService()
     @State private var pulse = false
+    @State private var showDiagnostics = false
 
     var body: some View {
         ZStack {
@@ -28,8 +29,12 @@ struct CameraScreen: View {
             detectionOverlay
                 .ignoresSafeArea()
 
-            VStack(spacing: 0) {
+            VStack(spacing: 8) {
                 header
+                if showDiagnostics {
+                    diagnosticsCard
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
                 Spacer()
                 bottomPanel
             }
@@ -62,20 +67,120 @@ struct CameraScreen: View {
 
             Spacer()
 
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: statusColor.opacity(0.8), radius: 5)
-                Text(statusText)
-                    .font(.system(size: 10.5, weight: .black, design: .rounded))
-                    .tracking(0.55)
+            Button {
+                withAnimation(.easeInOut(duration: 0.20)) {
+                    showDiagnostics.toggle()
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: statusColor.opacity(0.8), radius: 5)
+                    Text(statusText)
+                        .font(.system(size: 10.5, weight: .black, design: .rounded))
+                        .tracking(0.55)
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(showDiagnostics ? .white : .white.opacity(0.55))
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 9)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 9)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 1))
+            .buttonStyle(.plain)
         }
+    }
+
+    @ViewBuilder
+    private var diagnosticsCard: some View {
+        if let telemetry = camera.telemetry {
+            VStack(spacing: 8) {
+                HStack(spacing: 7) {
+                    diagnosticMetric(
+                        title: "AI",
+                        value: String(format: "%.0f ms", telemetry.analysisMilliseconds)
+                    )
+                    diagnosticMetric(
+                        title: "CADENCE",
+                        value: telemetry.effectiveHz > 0
+                            ? String(format: "%.1f Hz", telemetry.effectiveHz)
+                            : "—"
+                    )
+                    diagnosticMetric(
+                        title: "Δ MASQUE",
+                        value: String(format: "%.1f %%", telemetry.maskChangePercent)
+                    )
+                    diagnosticMetric(
+                        title: "NUAGE",
+                        value: String(format: "%.1f %%", telemetry.cloudCoveragePercent)
+                    )
+                }
+
+                HStack(spacing: 7) {
+                    diagnosticMetric(
+                        title: "Δ COUV.",
+                        value: String(format: "%.1f %%", telemetry.coverageDeltaPercent)
+                    )
+                    diagnosticMetric(
+                        title: "BRUT→STABLE",
+                        value: "\(telemetry.rawDetections)→\(telemetry.stabilizedDetections)"
+                    )
+                    diagnosticMetric(
+                        title: "THERMAL",
+                        value: telemetry.thermalState.uppercased()
+                    )
+                    diagnosticMetric(
+                        title: "THROTTLE",
+                        value: "\(telemetry.throttledFrames)"
+                    )
+                }
+
+                Text("V4 · \(BuildInfo.gitSHA) · touche le badge CORE ML pour masquer les diagnostics")
+                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.48))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(10)
+            .background(
+                .black.opacity(0.48),
+                in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 17, style: .continuous)
+                    .stroke(.white.opacity(0.14), lineWidth: 1)
+            )
+        } else {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Télémétrie : attente de la première analyse…")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+            }
+            .padding(10)
+            .background(.black.opacity(0.45), in: Capsule())
+        }
+    }
+
+    private func diagnosticMetric(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 7.2, weight: .black, design: .rounded))
+                .tracking(0.35)
+                .foregroundStyle(.white.opacity(0.42))
+            Text(value)
+                .font(.system(size: 9.4, weight: .bold, design: .monospaced))
+                .lineLimit(1)
+                .minimumScaleFactor(0.62)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 6)
+        .background(
+            .white.opacity(0.07),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
     }
 
     @ViewBuilder
@@ -172,7 +277,7 @@ struct CameraScreen: View {
         case .idle, .requesting:
             messageCard(
                 title: "Préparation",
-                message: "Chargement du modèle et ouverture de la caméra…",
+                message: "Chargement des modèles et ouverture de la caméra…",
                 symbol: "sparkles"
             )
         case .running:
@@ -181,7 +286,7 @@ struct CameraScreen: View {
             } else {
                 messageCard(
                     title: "Cherche des nuages",
-                    message: "UCloudNet segmente le ciel pixel par pixel. Les formes détectées apparaissent directement sur l'image.",
+                    message: "Le garde ciel filtre la scène puis UCloudNet détoure les régions nuageuses.",
                     symbol: "viewfinder"
                 )
             }
@@ -234,7 +339,7 @@ struct CameraScreen: View {
 
             HStack(spacing: 7) {
                 Image(systemName: "waveform.path.ecg.rectangle.fill")
-                Text("\(analysis.engine.rawValue) · masque pixel par pixel · estimation de masse toujours probabiliste.")
+                Text("\(analysis.engine.rawValue) · suivi temporel V4 · estimation de masse toujours probabiliste.")
             }
             .font(.system(size: 10.5, weight: .semibold, design: .rounded))
             .foregroundStyle(.white.opacity(0.62))

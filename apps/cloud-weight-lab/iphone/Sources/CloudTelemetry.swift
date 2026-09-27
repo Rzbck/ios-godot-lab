@@ -11,6 +11,7 @@ struct CloudTelemetrySnapshot: Equatable {
     let coverageDeltaPercent: Double
     let rawDetections: Int
     let stabilizedDetections: Int
+    let droppedFrames: Int
     let throttledFrames: Int
     let thermalState: String
 }
@@ -42,6 +43,7 @@ final class CloudTelemetryMonitor {
         analysis: CloudFrameAnalysis?,
         rawDetections: Int,
         stabilizedDetections: Int,
+        droppedFrames: Int,
         throttledFrames: Int
     ) -> CloudTelemetrySnapshot {
         let now = CACurrentMediaTime()
@@ -81,6 +83,7 @@ final class CloudTelemetryMonitor {
             coverageDeltaPercent: coverageDelta,
             rawDetections: rawDetections,
             stabilizedDetections: stabilizedDetections,
+            droppedFrames: droppedFrames,
             throttledFrames: throttledFrames,
             thermalState: thermalStateName(ProcessInfo.processInfo.thermalState)
         )
@@ -88,7 +91,7 @@ final class CloudTelemetryMonitor {
         if now - lastLogTime >= 2.0 {
             lastLogTime = now
             let line = String(
-                format: "analysis=%.0fms hz=%.2f maskDelta=%.1f%% coverage=%.1f%% coverageDelta=%.1f%% raw=%d stable=%d throttle=%d thermal=%@",
+                format: "pipeline=%.0fms hz=%.2f maskDelta=%.1f%% coverage=%.1f%% coverageDelta=%.1f%% raw=%d stable=%d drop=%d throttle=%d thermal=%@",
                 snapshot.analysisMilliseconds,
                 snapshot.effectiveHz,
                 snapshot.maskChangePercent,
@@ -96,6 +99,7 @@ final class CloudTelemetryMonitor {
                 snapshot.coverageDeltaPercent,
                 snapshot.rawDetections,
                 snapshot.stabilizedDetections,
+                snapshot.droppedFrames,
                 snapshot.throttledFrames,
                 snapshot.thermalState
             )

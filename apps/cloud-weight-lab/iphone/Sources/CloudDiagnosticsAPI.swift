@@ -188,7 +188,7 @@ final class CloudDiagnosticsAPI {
                     "port": Int(Self.port),
                     "pairing_armed": armed,
                     "paired": pairedHost != nil,
-                    "privacy": "local_only_bounded_snapshots"
+                    "privacy": "local_only_rolling_sequence"
                 ])
             )
             return
@@ -241,11 +241,15 @@ final class CloudDiagnosticsAPI {
                 .first(where: { $0.name == "limit" })?
                 .value
                 .flatMap(Int.init) ?? 120
+            let after = components?.queryItems?
+                .first(where: { $0.name == "after" })?
+                .value
+                .flatMap(TimeInterval.init)
             send(
                 connection,
                 status: 200,
                 contentType: "application/json",
-                body: store.telemetryData(limit: requestedLimit)
+                body: store.telemetryData(limit: requestedLimit, after: after)
             )
             return
         }

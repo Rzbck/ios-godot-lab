@@ -101,8 +101,8 @@ final class CloudTemporalStabilizer {
         var next = track
         next.misses = 0
 
-        let geometryAlpha = centroidDistance > 0.10 ? 0.68 : 0.34
-        let measurementAlpha = centroidDistance > 0.10 ? 0.48 : 0.24
+        let geometryAlpha = centroidDistance > 0.10 ? 0.84 : 0.56
+        let measurementAlpha = centroidDistance > 0.10 ? 0.62 : 0.40
         let stableKind = stabilizedKind(track: &next, incoming: incoming.observation.kind)
 
         let oldObservation = track.detection.observation

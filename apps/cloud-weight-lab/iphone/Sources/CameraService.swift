@@ -22,6 +22,7 @@ final class CameraService: NSObject, ObservableObject {
     private let analyzer = CloudAnalyzer()
     private let estimator = CloudMassEstimator()
     private let stabilizer = CloudTemporalStabilizer()
+    private let overlayStabilizer = CloudOverlayStabilizer()
     private let telemetryMonitor = CloudTelemetryMonitor()
     private let captureQueue = DispatchQueue(label: "cloudweight.capture", qos: .userInitiated)
     private let analysisQueue = DispatchQueue(label: "cloudweight.analysis", qos: .userInitiated)
@@ -146,23 +147,35 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         analysisInFlight = true
         let analysisStarted = CACurrentMediaTime()
 
-        let nextAnalysis = analyzer.analyze(
+        let rawAnalysis = analyzer.analyze(
             sampleBuffer: sampleBuffer,
             fieldOfViewDegrees: fieldOfViewDegrees
         )
-        let rawDetections = nextAnalysis?.observations.compactMap { observation in
+        let rawDetections = rawAnalysis?.observations.compactMap { observation in
             estimator.estimate(from: observation).map {
                 CloudDetection(observation: observation, estimate: $0)
             }
         } ?? []
         let stabilizedDetections = stabilizer.update(raw: rawDetections)
+        let stabilizedOverlay = overlayStabilizer.update(rawAnalysis?.overlayImage)
+        let displayAnalysis = rawAnalysis.map { analysis in
+            CloudFrameAnalysis(
+                timestamp: analysis.timestamp,
+                observations: analysis.observations,
+                totalCoverage: analysis.totalCoverage,
+                overlayImage: stabilizedOverlay,
+                engine: analysis.engine,
+                fieldOfViewDegrees: analysis.fieldOfViewDegrees
+            )
+        }
+
         let duration = CACurrentMediaTime() - analysisStarted
         let skippedSincePreviousAnalysis = throttledFrames
         throttledFrames = 0
 
         let nextTelemetry = telemetryMonitor.snapshot(
             analysisDurationSeconds: duration,
-            analysis: nextAnalysis,
+            analysis: rawAnalysis,
             rawDetections: rawDetections.count,
             stabilizedDetections: stabilizedDetections.count,
             throttledFrames: skippedSincePreviousAnalysis
@@ -171,7 +184,7 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         analysisInFlight = false
 
         DispatchQueue.main.async { [weak self] in
-            self?.analysis = nextAnalysis
+            self?.analysis = displayAnalysis
             self?.detections = stabilizedDetections
             self?.telemetry = nextTelemetry
         }

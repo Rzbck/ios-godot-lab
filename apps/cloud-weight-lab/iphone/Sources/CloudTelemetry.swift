@@ -11,7 +11,7 @@ struct CloudAnalyzerTiming: Equatable {
     let skyCoveragePercent: Double
 }
 
-struct CloudTelemetrySnapshot: Equatable {
+struct CloudTelemetrySnapshot: Equatable, Codable {
     let analysisMilliseconds: Double
     let preprocessingMilliseconds: Double
     let skyInferenceMilliseconds: Double

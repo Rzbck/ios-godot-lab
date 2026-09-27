@@ -22,13 +22,16 @@ final class CloudAnalyzer {
     }
 
     private let context = CIContext(options: [.cacheIntermediates: false])
-    private let targetWidth = 304
-    private let targetHeight = 544
+    private let portraitWidth = 304
+    private let portraitHeight = 544
+    private let landscapeWidth = 544
+    private let landscapeHeight = 304
     private let skyInputSize = 384
     private let probabilityThreshold = 0.52
     private let skyProbabilityThreshold = 0.55
     private let minimumSkyCoverage = 0.05
-    private let cloudModel: MLModel?
+    private let portraitCloudModel: MLModel?
+    private let landscapeCloudModel: MLModel?
     private let skyModel: MLModel?
 
     private var timingPreprocessingMilliseconds = 0.0
@@ -39,19 +42,33 @@ final class CloudAnalyzer {
     let loadError: String?
     private(set) var lastTiming: CloudAnalyzerTiming?
 
-    var isReady: Bool { cloudModel != nil && skyModel != nil }
+    var isReady: Bool {
+        portraitCloudModel != nil && landscapeCloudModel != nil && skyModel != nil
+    }
 
     init() {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .all
 
-        guard let cloudURL = Bundle.main.url(
+        guard let portraitURL = Bundle.main.url(
             forResource: "CloudSegmentation",
             withExtension: "mlmodelc"
         ) else {
-            cloudModel = nil
+            portraitCloudModel = nil
+            landscapeCloudModel = nil
             skyModel = nil
-            loadError = "Modèle UCloudNet absent du bundle"
+            loadError = "Modèle UCloudNet portrait absent du bundle"
+            return
+        }
+
+        guard let landscapeURL = Bundle.main.url(
+            forResource: "CloudSegmentationLandscape",
+            withExtension: "mlmodelc"
+        ) else {
+            portraitCloudModel = nil
+            landscapeCloudModel = nil
+            skyModel = nil
+            loadError = "Modèle UCloudNet paysage absent du bundle"
             return
         }
 
@@ -59,20 +76,21 @@ final class CloudAnalyzer {
             forResource: "SkySegmentation",
             withExtension: "mlmodelc"
         ) else {
-            cloudModel = nil
+            portraitCloudModel = nil
+            landscapeCloudModel = nil
             skyModel = nil
             loadError = "Modèle de validation du ciel absent du bundle"
             return
         }
 
         do {
-            let loadedCloudModel = try MLModel(contentsOf: cloudURL, configuration: configuration)
-            let loadedSkyModel = try MLModel(contentsOf: skyURL, configuration: configuration)
-            cloudModel = loadedCloudModel
-            skyModel = loadedSkyModel
+            portraitCloudModel = try MLModel(contentsOf: portraitURL, configuration: configuration)
+            landscapeCloudModel = try MLModel(contentsOf: landscapeURL, configuration: configuration)
+            skyModel = try MLModel(contentsOf: skyURL, configuration: configuration)
             loadError = nil
         } catch {
-            cloudModel = nil
+            portraitCloudModel = nil
+            landscapeCloudModel = nil
             skyModel = nil
             loadError = "Impossible de charger les modèles Core ML : \(error.localizedDescription)"
         }
@@ -103,10 +121,21 @@ final class CloudAnalyzer {
             )
         }
 
-        guard let cloudModel,
+        guard let portraitCloudModel,
+              let landscapeCloudModel,
               let skyModel,
-              let cameraBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
-              let cloudInputBuffer = makeModelInput(
+              let cameraBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return nil
+        }
+
+        let sourceWidth = CVPixelBufferGetWidth(cameraBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(cameraBuffer)
+        let isLandscape = sourceWidth > sourceHeight
+        let targetWidth = isLandscape ? landscapeWidth : portraitWidth
+        let targetHeight = isLandscape ? landscapeHeight : portraitHeight
+        let cloudModel = isLandscape ? landscapeCloudModel : portraitCloudModel
+
+        guard let cloudInputBuffer = makeModelInput(
                 from: cameraBuffer,
                 width: targetWidth,
                 height: targetHeight
@@ -191,11 +220,17 @@ final class CloudAnalyzer {
                 id: index,
                 component: component,
                 inputBuffer: cloudInputBuffer,
+                targetWidth: targetWidth,
+                targetHeight: targetHeight,
                 fieldOfViewDegrees: fieldOfViewDegrees
             )
         }
 
-        let acceptedLabels = Set(acceptedArray.map(\.label))
+        var kindsByLabel: [Int: CloudKind] = [:]
+        for (index, component) in acceptedArray.enumerated() {
+            kindsByLabel[component.label] = observations[index].kind
+        }
+
         let acceptedPixels = acceptedArray.reduce(0) { $0 + $1.area }
         let coverage = Double(acceptedPixels) / Double(targetWidth * targetHeight)
 
@@ -205,7 +240,7 @@ final class CloudAnalyzer {
             totalCoverage: coverage,
             overlayImage: makeOverlayImage(
                 labels: extraction.labels,
-                acceptedLabels: acceptedLabels,
+                kindsByLabel: kindsByLabel,
                 width: targetWidth,
                 height: targetHeight
             ),
@@ -321,7 +356,7 @@ final class CloudAnalyzer {
         )
         guard status == kCVReturnSuccess, let destination else { return nil }
 
-        let input = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
+        let input = CIImage(cvPixelBuffer: pixelBuffer)
         let sx = CGFloat(width) / input.extent.width
         let sy = CGFloat(height) / input.extent.height
         let scaled = input.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
@@ -575,6 +610,8 @@ final class CloudAnalyzer {
         id: Int,
         component: Component,
         inputBuffer: CVPixelBuffer,
+        targetWidth: Int,
+        targetHeight: Int,
         fieldOfViewDegrees: Double
     ) -> CloudObservation {
         let width = Double(component.maxX - component.minX + 1) / Double(targetWidth)
@@ -588,7 +625,8 @@ final class CloudAnalyzer {
         let coverage = Double(component.area) / Double(targetWidth * targetHeight)
         let color = colorStatistics(
             pixels: component.pixels,
-            pixelBuffer: inputBuffer
+            pixelBuffer: inputBuffer,
+            width: targetWidth
         )
         let fill = (coverage / max(width * height, 0.0001)).clamped(0...1)
         let confidence = (
@@ -620,7 +658,8 @@ final class CloudAnalyzer {
 
     private func colorStatistics(
         pixels: [Int],
-        pixelBuffer: CVPixelBuffer
+        pixelBuffer: CVPixelBuffer,
+        width: Int
     ) -> (brightness: Double, saturation: Double) {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
@@ -635,8 +674,8 @@ final class CloudAnalyzer {
         var saturationSum = 0.0
 
         for index in pixels {
-            let x = index % targetWidth
-            let y = index / targetWidth
+            let x = index % width
+            let y = index / width
             let offset = y * rowBytes + x * 4
 
             let blue = Double(bytes[offset]) / 255.0
@@ -656,15 +695,15 @@ final class CloudAnalyzer {
 
     private func makeOverlayImage(
         labels: [Int],
-        acceptedLabels: Set<Int>,
+        kindsByLabel: [Int: CloudKind],
         width: Int,
         height: Int
     ) -> CGImage? {
-        guard !acceptedLabels.isEmpty else { return nil }
+        guard !kindsByLabel.isEmpty else { return nil }
 
         var rgba = [UInt8](repeating: 0, count: width * height * 4)
 
-        func isAccepted(_ x: Int, _ y: Int, label: Int) -> Bool {
+        func matches(_ x: Int, _ y: Int, label: Int) -> Bool {
             guard x >= 0, x < width, y >= 0, y < height else { return false }
             return labels[y * width + x] == label
         }
@@ -673,19 +712,20 @@ final class CloudAnalyzer {
             for x in 0..<width {
                 let pixel = y * width + x
                 let label = labels[pixel]
-                guard acceptedLabels.contains(label) else { continue }
+                guard let kind = kindsByLabel[label] else { continue }
 
                 let boundary =
-                    !isAccepted(x - 1, y, label: label)
-                    || !isAccepted(x + 1, y, label: label)
-                    || !isAccepted(x, y - 1, label: label)
-                    || !isAccepted(x, y + 1, label: label)
+                    !matches(x - 1, y, label: label)
+                    || !matches(x + 1, y, label: label)
+                    || !matches(x, y - 1, label: label)
+                    || !matches(x, y + 1, label: label)
 
+                let color = overlayColor(kind)
                 let offset = pixel * 4
-                rgba[offset] = 110
-                rgba[offset + 1] = 225
-                rgba[offset + 2] = 255
-                rgba[offset + 3] = boundary ? 235 : 44
+                rgba[offset] = color.r
+                rgba[offset + 1] = color.g
+                rgba[offset + 2] = color.b
+                rgba[offset + 3] = boundary ? 238 : 28
             }
         }
 
@@ -705,6 +745,16 @@ final class CloudAnalyzer {
             shouldInterpolate: true,
             intent: .defaultIntent
         )
+    }
+
+    private func overlayColor(_ kind: CloudKind) -> (r: UInt8, g: UInt8, b: UInt8) {
+        switch kind {
+        case .cumulus: return (68, 210, 255)
+        case .stratocumulus: return (255, 177, 72)
+        case .stratus: return (190, 132, 255)
+        case .cirrus: return (86, 242, 184)
+        case .unknown: return (245, 245, 245)
+        }
     }
 
     static func classify(

@@ -27,6 +27,7 @@ final class CameraService: NSObject, ObservableObject {
     private let telemetryMonitor = CloudTelemetryMonitor()
     private let captureQueue = DispatchQueue(label: "cloudweight.capture", qos: .userInitiated)
     private let analysisQueue = DispatchQueue(label: "cloudweight.analysis", qos: .userInitiated)
+    private let minimumAnalysisInterval = 0.10
     private var configured = false
     private var lastAnalysisTime = 0.0
     private var fieldOfViewDegrees = 65.0
@@ -157,7 +158,7 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         from connection: AVCaptureConnection
     ) {
         let now = CACurrentMediaTime()
-        guard now - lastAnalysisTime >= 0.18, !analysisInFlight else {
+        guard now - lastAnalysisTime >= minimumAnalysisInterval, !analysisInFlight else {
             throttledFrames += 1
             return
         }

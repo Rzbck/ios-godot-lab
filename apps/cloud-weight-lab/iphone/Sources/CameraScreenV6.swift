@@ -138,9 +138,10 @@ struct CameraScreenV6: View {
     }
 
     private func cloudLabel(_ detection: CloudDetection) -> some View {
-        HStack(spacing: 5) {
+        let color = trackColor(detection.id)
+        return HStack(spacing: 5) {
             Circle()
-                .fill(kindColor(detection.observation.kind))
+                .fill(color)
                 .frame(width: 6, height: 6)
             Text("#\(detection.id) \(detection.observation.kind.rawValue.uppercased())")
                 .font(.system(size: 7.5, weight: .black, design: .rounded))
@@ -153,7 +154,7 @@ struct CameraScreenV6: View {
         .padding(.vertical, 5)
         .background(.black.opacity(0.58), in: Capsule())
         .overlay(
-            Capsule().stroke(kindColor(detection.observation.kind).opacity(0.8), lineWidth: 0.8)
+            Capsule().stroke(color.opacity(0.85), lineWidth: 0.8)
         )
     }
 
@@ -213,14 +214,18 @@ struct CameraScreenV6: View {
         }
     }
 
-    private func kindColor(_ kind: CloudKind) -> Color {
-        switch kind {
-        case .cumulus: return Color(red: 0.27, green: 0.82, blue: 1.0)
-        case .stratocumulus: return Color(red: 1.0, green: 0.69, blue: 0.28)
-        case .stratus: return Color(red: 0.75, green: 0.52, blue: 1.0)
-        case .cirrus: return Color(red: 0.34, green: 0.95, blue: 0.72)
-        case .unknown: return .white
-        }
+    private func trackColor(_ id: Int) -> Color {
+        let palette: [Color] = [
+            Color(red: 0.27, green: 0.84, blue: 1.0),
+            Color(red: 1.0, green: 0.69, blue: 0.28),
+            Color(red: 0.76, green: 0.47, blue: 1.0),
+            Color(red: 0.31, green: 0.95, blue: 0.70),
+            Color(red: 1.0, green: 0.41, blue: 0.62),
+            Color(red: 1.0, green: 0.90, blue: 0.36),
+            Color(red: 0.44, green: 0.62, blue: 1.0),
+            Color(red: 0.47, green: 0.96, blue: 0.92)
+        ]
+        return palette[abs(id) % palette.count]
     }
 
     private func massString(_ kilograms: Double) -> String {

@@ -38,7 +38,14 @@ struct CloudTelemetrySnapshot: Equatable, Codable {
     let captureHeight: Int
     let captureRotationDegrees: Double
     let sceneLuminancePercent: Double
+    let sceneDarkPercent: Double
+    let sceneBrightPercent: Double
+    let sceneClippedPercent: Double
+    let sceneNeutralHighlightPercent: Double
     let sceneRejected: Bool
+    let cameraISO: Double
+    let cameraExposureMilliseconds: Double
+    let cameraExposureTargetOffset: Double
 }
 
 final class CloudTelemetryMonitor {
@@ -87,7 +94,14 @@ final class CloudTelemetryMonitor {
         captureHeight: Int,
         captureRotationDegrees: Double,
         sceneLuminancePercent: Double,
-        sceneRejected: Bool
+        sceneDarkPercent: Double,
+        sceneBrightPercent: Double,
+        sceneClippedPercent: Double,
+        sceneNeutralHighlightPercent: Double,
+        sceneRejected: Bool,
+        cameraISO: Double,
+        cameraExposureMilliseconds: Double,
+        cameraExposureTargetOffset: Double
     ) -> CloudTelemetrySnapshot {
         let now = CACurrentMediaTime()
         let milliseconds = analysisDurationSeconds * 1_000
@@ -145,7 +159,14 @@ final class CloudTelemetryMonitor {
             captureHeight: captureHeight,
             captureRotationDegrees: captureRotationDegrees,
             sceneLuminancePercent: sceneLuminancePercent,
-            sceneRejected: sceneRejected
+            sceneDarkPercent: sceneDarkPercent,
+            sceneBrightPercent: sceneBrightPercent,
+            sceneClippedPercent: sceneClippedPercent,
+            sceneNeutralHighlightPercent: sceneNeutralHighlightPercent,
+            sceneRejected: sceneRejected,
+            cameraISO: cameraISO,
+            cameraExposureMilliseconds: cameraExposureMilliseconds,
+            cameraExposureTargetOffset: cameraExposureTargetOffset
         )
 
         samples.append(
@@ -161,7 +182,7 @@ final class CloudTelemetryMonitor {
         if now - lastLogTime >= 2.0 {
             lastLogTime = now
             let line = String(
-                format: "pipeline=%.0fms prep=%.0fms sky=%.0fms cloud=%.0fms post=%.0fms hz=%.2f maskDelta=%.1f%% cloudCov=%.1f%% skyCov=%.1f%% raw=%d visible=%d tracks=%d hidden=%d matched=%d new=%d drop=%d throttle=%d thermal=%@ capture=%@ %dx%d rot=%.1f device=%@ luma=%.1f%% rejected=%@",
+                format: "pipeline=%.0fms prep=%.0fms sky=%.0fms cloud=%.0fms post=%.0fms hz=%.2f maskDelta=%.1f%% cloudCov=%.1f%% skyCov=%.1f%% raw=%d visible=%d tracks=%d hidden=%d matched=%d new=%d drop=%d throttle=%d thermal=%@ capture=%@ %dx%d rot=%.1f device=%@ luma=%.1f%% dark=%.1f%% bright=%.1f%% clipped=%.1f%% neutralHi=%.1f%% iso=%.0f exposure=%.2fms target=%.2f rejected=%@",
                 snapshot.analysisMilliseconds,
                 snapshot.preprocessingMilliseconds,
                 snapshot.skyInferenceMilliseconds,
@@ -186,6 +207,13 @@ final class CloudTelemetryMonitor {
                 snapshot.captureRotationDegrees,
                 snapshot.deviceOrientation,
                 snapshot.sceneLuminancePercent,
+                snapshot.sceneDarkPercent,
+                snapshot.sceneBrightPercent,
+                snapshot.sceneClippedPercent,
+                snapshot.sceneNeutralHighlightPercent,
+                snapshot.cameraISO,
+                snapshot.cameraExposureMilliseconds,
+                snapshot.cameraExposureTargetOffset,
                 snapshot.sceneRejected ? "yes" : "no"
             )
             logger.info("\(line, privacy: .public)")
@@ -197,10 +225,10 @@ final class CloudTelemetryMonitor {
     func makeReport(buildSHA: String) -> String {
         guard !samples.isEmpty else {
             return [
-                "CLOUD_WEIGHT_DIAG_V8",
+                "CLOUD_WEIGHT_DIAG_V10",
                 "build=\(buildSHA)",
                 "samples=0",
-                "privacy=local_bounded_diagnostics"
+                "privacy=local_persistent_session_recorder"
             ].joined(separator: "\n")
         }
 
@@ -220,14 +248,18 @@ final class CloudTelemetryMonitor {
         let latest = snapshots.last!
 
         var lines = [
-            "CLOUD_WEIGHT_DIAG_V8",
+            "CLOUD_WEIGHT_DIAG_V10",
             "build=\(buildSHA)",
             "samples=\(samples.count)",
-            "privacy=local_bounded_diagnostics",
+            "privacy=local_persistent_session_recorder",
             "capture_last=\(latest.orientation) \(latest.captureWidth)x\(latest.captureHeight) rot=\(number(latest.captureRotationDegrees, decimals: 1))",
             "device_orientation_last=\(latest.deviceOrientation)",
             "thermal_last=\(latest.thermalState)",
             "scene_luma_last_pct=\(number(latest.sceneLuminancePercent, decimals: 1))",
+            "scene_clipped_last_pct=\(number(latest.sceneClippedPercent, decimals: 1))",
+            "scene_neutral_highlight_last_pct=\(number(latest.sceneNeutralHighlightPercent, decimals: 1))",
+            "camera_iso_last=\(number(latest.cameraISO, decimals: 0))",
+            "camera_exposure_last_ms=\(number(latest.cameraExposureMilliseconds, decimals: 2))",
             "scene_rejected_last=\(latest.sceneRejected)",
             "scene_rejected_total=\(rejectedTotal)",
             "pipeline_ms_avg=\(number(average(pipelines), decimals: 1))",
@@ -254,7 +286,7 @@ final class CloudTelemetryMonitor {
         for sample in samples.suffix(20) {
             let value = sample.snapshot
             lines.append(
-                "t=\(number(sample.elapsedSeconds, decimals: 1))s total=\(number(value.analysisMilliseconds, decimals: 0)) prep=\(number(value.preprocessingMilliseconds, decimals: 0)) sky=\(number(value.skyInferenceMilliseconds, decimals: 0)) cloud=\(number(value.cloudInferenceMilliseconds, decimals: 0)) post=\(number(value.postprocessingMilliseconds, decimals: 0)) hz=\(number(value.effectiveHz, decimals: 2)) mask=\(number(value.maskChangePercent, decimals: 1)) cloudCov=\(number(value.cloudCoveragePercent, decimals: 1)) skyCov=\(number(value.skyCoveragePercent, decimals: 1)) raw=\(value.rawDetections) visible=\(value.trackingVisibleTracks) active=\(value.trackingActiveTracks) hidden=\(value.trackingHiddenMissedTracks) matched=\(value.trackingMatchedTracks) new=\(value.trackingCreatedTracks) drop=\(value.droppedFrames) throttle=\(value.throttledFrames) capture=\(value.orientation) size=\(value.captureWidth)x\(value.captureHeight) rot=\(number(value.captureRotationDegrees, decimals: 1)) device=\(value.deviceOrientation) luma=\(number(value.sceneLuminancePercent, decimals: 1)) reject=\(value.sceneRejected) thermal=\(value.thermalState)"
+                "t=\(number(sample.elapsedSeconds, decimals: 1))s total=\(number(value.analysisMilliseconds, decimals: 0)) prep=\(number(value.preprocessingMilliseconds, decimals: 0)) sky=\(number(value.skyInferenceMilliseconds, decimals: 0)) cloud=\(number(value.cloudInferenceMilliseconds, decimals: 0)) post=\(number(value.postprocessingMilliseconds, decimals: 0)) hz=\(number(value.effectiveHz, decimals: 2)) mask=\(number(value.maskChangePercent, decimals: 1)) cloudCov=\(number(value.cloudCoveragePercent, decimals: 1)) skyCov=\(number(value.skyCoveragePercent, decimals: 1)) raw=\(value.rawDetections) visible=\(value.trackingVisibleTracks) active=\(value.trackingActiveTracks) hidden=\(value.trackingHiddenMissedTracks) matched=\(value.trackingMatchedTracks) new=\(value.trackingCreatedTracks) drop=\(value.droppedFrames) throttle=\(value.throttledFrames) capture=\(value.orientation) size=\(value.captureWidth)x\(value.captureHeight) rot=\(number(value.captureRotationDegrees, decimals: 1)) device=\(value.deviceOrientation) luma=\(number(value.sceneLuminancePercent, decimals: 1)) clipped=\(number(value.sceneClippedPercent, decimals: 1)) glare=\(number(value.sceneNeutralHighlightPercent, decimals: 1)) iso=\(number(value.cameraISO, decimals: 0)) exp=\(number(value.cameraExposureMilliseconds, decimals: 2)) reject=\(value.sceneRejected) thermal=\(value.thermalState)"
             )
         }
 

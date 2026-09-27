@@ -25,15 +25,15 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Cloud Weight
-        CFBundleShortVersionString: "0.9.0"
-        CFBundleVersion: "9"
+        CFBundleShortVersionString: "0.10.0"
+        CFBundleVersion: "10"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: Cloud Weight utilise la caméra uniquement sur cet iPhone pour reconnaître le ciel, détourer les nuages puis estimer leur masse. Les images ne sont pas envoyées sur un serveur.
-        NSLocalNetworkUsageDescription: Cloud Weight utilise le réseau local uniquement pour permettre à votre PC de développement de lire la télémétrie et les captures diagnostic temporaires de l'application.
+        NSLocalNetworkUsageDescription: Cloud Weight utilise le réseau local uniquement pour synchroniser vers votre PC les sessions diagnostic enregistrées localement sur cet iPhone.
         NSBonjourServices:
           - _cloudweight._tcp
     settings:

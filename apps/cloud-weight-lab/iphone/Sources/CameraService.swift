@@ -28,8 +28,12 @@ final class CameraService: NSObject, ObservableObject {
     private let overlayStabilizer = CloudOverlayStabilizer()
     private let telemetryMonitor = CloudTelemetryMonitor()
     private let diagnosticsStore = CloudDiagnosticsStore()
+    private let sessionRecorder = CloudSessionRecorder()
     private lazy var diagnosticsAPI: CloudDiagnosticsAPI = {
-        let api = CloudDiagnosticsAPI(store: diagnosticsStore)
+        let api = CloudDiagnosticsAPI(
+            store: diagnosticsStore,
+            sessionRecorder: sessionRecorder
+        )
         api.stateDidChange = { [weak self] next in
             self?.apiState = next
         }
@@ -38,15 +42,14 @@ final class CameraService: NSObject, ObservableObject {
 
     private let captureQueue = DispatchQueue(label: "cloudweight.capture", qos: .userInitiated)
     private let analysisQueue = DispatchQueue(label: "cloudweight.analysis", qos: .userInitiated)
-    private let minimumAnalysisInterval = 0.07
     private let rotationStateLock = NSLock()
     private var configured = false
-    private var lastAnalysisTime = 0.0
     private var fieldOfViewDegrees = 65.0
     private var analysisInFlight = false
     private var droppedFrames = 0
     private var throttledFrames = 0
     private var videoOutput: AVCaptureVideoDataOutput?
+    private var captureDevice: AVCaptureDevice?
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservation: NSKeyValueObservation?
     private var captureRotationDegrees = 0.0
@@ -99,8 +102,11 @@ final class CameraService: NSObject, ObservableObject {
         diagnosticsAPI.stop()
         rotationObservation = nil
         captureQueue.async { [weak self] in
-            guard let self, self.session.isRunning else { return }
-            self.session.stopRunning()
+            guard let self else { return }
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+            self.sessionRecorder.endSession()
         }
     }
 
@@ -129,6 +135,7 @@ final class CameraService: NSObject, ObservableObject {
                     }
                     self.session.addInput(input)
                     self.fieldOfViewDegrees = Double(camera.activeFormat.videoFieldOfView)
+                    self.captureDevice = camera
                 } catch {
                     self.finishConfigurationFailure("Impossible d'ouvrir la caméra")
                     return
@@ -174,6 +181,10 @@ final class CameraService: NSObject, ObservableObject {
             if !self.session.isRunning {
                 self.session.startRunning()
             }
+            self.sessionRecorder.startSession(
+                buildSHA: BuildInfo.gitSHA,
+                version: BuildInfo.version
+            )
             DispatchQueue.main.async {
                 self.status = .running
             }
@@ -226,15 +237,13 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        let now = CACurrentMediaTime()
-        guard now - lastAnalysisTime >= minimumAnalysisInterval, !analysisInFlight else {
+        guard !analysisInFlight else {
             throttledFrames += 1
             return
         }
 
         guard let cameraBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        lastAnalysisTime = now
         analysisInFlight = true
         let analysisStarted = CACurrentMediaTime()
         let captureWidth = CVPixelBufferGetWidth(cameraBuffer)
@@ -283,7 +292,10 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
         } ?? []
         let stabilizedDetections = stabilizer.update(raw: rawDetections)
-        let stabilizedOverlay = overlayStabilizer.update(rawAnalysis?.overlayImage)
+        let stabilizedOverlay = overlayStabilizer.update(
+            rawAnalysis?.overlayImage,
+            detections: stabilizedDetections
+        )
         let displayAnalysis = rawAnalysis.map { analysis in
             CloudFrameAnalysis(
                 timestamp: analysis.timestamp,
@@ -301,6 +313,12 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         droppedFrames = 0
         throttledFrames = 0
 
+        let cameraISO = Double(captureDevice?.iso ?? 0)
+        let exposureMilliseconds = captureDevice.map {
+            max(0, CMTimeGetSeconds($0.exposureDuration) * 1_000)
+        } ?? 0
+        let exposureTargetOffset = Double(captureDevice?.exposureTargetOffset ?? 0)
+
         let nextTelemetry = telemetryMonitor.snapshot(
             analysisDurationSeconds: duration,
             analyzerTiming: analyzerTiming,
@@ -316,7 +334,14 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             captureHeight: captureHeight,
             captureRotationDegrees: currentCaptureRotationDegrees(),
             sceneLuminancePercent: sceneSanity.meanLuminance * 100,
-            sceneRejected: sceneSanity.rejected
+            sceneDarkPercent: sceneSanity.darkFraction * 100,
+            sceneBrightPercent: sceneSanity.brightFraction * 100,
+            sceneClippedPercent: sceneSanity.clippedFraction * 100,
+            sceneNeutralHighlightPercent: sceneSanity.neutralHighlightFraction * 100,
+            sceneRejected: sceneSanity.rejected,
+            cameraISO: cameraISO,
+            cameraExposureMilliseconds: exposureMilliseconds,
+            cameraExposureTargetOffset: exposureTargetOffset
         )
         let nextReport = telemetryMonitor.makeReport(buildSHA: BuildInfo.gitSHA)
 
@@ -325,6 +350,16 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             detections: stabilizedDetections
         )
         diagnosticsStore.maybeCapture(
+            sampleBuffer: sampleBuffer,
+            overlayImage: stabilizedOverlay,
+            telemetry: nextTelemetry,
+            detections: stabilizedDetections
+        )
+        sessionRecorder.record(
+            telemetry: nextTelemetry,
+            detections: stabilizedDetections
+        )
+        sessionRecorder.maybeCapture(
             sampleBuffer: sampleBuffer,
             overlayImage: stabilizedOverlay,
             telemetry: nextTelemetry,

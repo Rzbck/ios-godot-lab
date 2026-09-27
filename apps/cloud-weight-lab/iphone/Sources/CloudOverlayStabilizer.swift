@@ -2,66 +2,35 @@ import CoreGraphics
 import Foundation
 
 final class CloudOverlayStabilizer {
-    private var history: [[UInt8]] = []
     private var width = 0
     private var height = 0
-    private var lastOutput: CGImage?
-    private var missingFrames = 0
-
-    private let historyLimit = 1
-    private let resetChangePercent = 18.0
 
     func reset() {
-        history.removeAll(keepingCapacity: true)
         width = 0
         height = 0
-        lastOutput = nil
-        missingFrames = 0
     }
 
-    func update(_ image: CGImage?) -> CGImage? {
-        guard let image else {
-            missingFrames += 1
-            if missingFrames <= 1 {
-                return lastOutput
-            }
+    func update(_ image: CGImage?, detections: [CloudDetection]) -> CGImage? {
+        guard let image, !detections.isEmpty else {
+            reset()
+            return nil
+        }
+        guard let mask = alphaMask(from: image) else {
             reset()
             return nil
         }
 
-        missingFrames = 0
-        guard let current = alphaMask(from: image) else {
-            reset()
-            return image
-        }
-
         if width != image.width || height != image.height {
-            history.removeAll(keepingCapacity: true)
             width = image.width
             height = image.height
-            lastOutput = nil
         }
 
-        if let previous = history.last,
-           changePercent(previous, current) > resetChangePercent {
-            history.removeAll(keepingCapacity: true)
-        }
-
-        history.append(current)
-        if history.count > historyLimit {
-            history.removeFirst(history.count - historyLimit)
-        }
-
-        let displayMask = current
-        let output = makeOverlay(
-            mask: displayMask,
-            currentImage: image,
-            previousImage: lastOutput,
+        return makeOverlay(
+            mask: mask,
+            detections: detections,
             width: width,
             height: height
         )
-        lastOutput = output ?? image
-        return lastOutput
     }
 
     private func alphaMask(from image: CGImage) -> [UInt8]? {
@@ -85,86 +54,70 @@ final class CloudOverlayStabilizer {
         return mask
     }
 
-    private func changePercent(_ lhs: [UInt8], _ rhs: [UInt8]) -> Double {
-        guard lhs.count == rhs.count, !rhs.isEmpty else { return 100 }
-        var changed = 0
-        for index in rhs.indices where lhs[index] != rhs[index] {
-            changed += 1
-        }
-        return Double(changed) / Double(rhs.count) * 100
-    }
-
-    private func rgbaBytes(_ image: CGImage?) -> (bytes: CFData, pointer: UnsafePointer<UInt8>, row: Int, pixel: Int)? {
-        guard let image,
-              image.bitsPerPixel >= 32,
-              let data = image.dataProvider?.data,
-              let pointer = CFDataGetBytePtr(data) else {
-            return nil
-        }
-        return (
-            data,
-            pointer,
-            image.bytesPerRow,
-            max(1, image.bitsPerPixel / 8)
-        )
-    }
-
     private func makeOverlay(
         mask: [UInt8],
-        currentImage: CGImage,
-        previousImage: CGImage?,
+        detections: [CloudDetection],
         width: Int,
         height: Int
     ) -> CGImage? {
         guard width > 0, height > 0, mask.count == width * height else { return nil }
-        var rgba = [UInt8](repeating: 0, count: width * height * 4)
-        let current = rgbaBytes(currentImage)
-        let previous = rgbaBytes(previousImage)
 
-        func isCloud(_ x: Int, _ y: Int) -> Bool {
-            guard x >= 0, x < width, y >= 0, y < height else { return false }
-            return mask[y * width + x] != 0
-        }
-
-        func sourceColor(_ x: Int, _ y: Int) -> (UInt8, UInt8, UInt8) {
-            if let current {
-                let offset = y * current.row + x * current.pixel
-                let alpha = current.pointer[offset + min(3, current.pixel - 1)]
-                if alpha > 0 {
-                    return (
-                        current.pointer[offset],
-                        current.pointer[offset + min(1, current.pixel - 1)],
-                        current.pointer[offset + min(2, current.pixel - 1)]
-                    )
-                }
-            }
-            if let previous {
-                let offset = y * previous.row + x * previous.pixel
-                let alpha = previous.pointer[offset + min(3, previous.pixel - 1)]
-                if alpha > 0 {
-                    return (
-                        previous.pointer[offset],
-                        previous.pointer[offset + min(1, previous.pixel - 1)],
-                        previous.pointer[offset + min(2, previous.pixel - 1)]
-                    )
-                }
-            }
-            return (245, 245, 245)
+        var assignments = [Int](repeating: -1, count: width * height)
+        let expanded = detections.map { detection in
+            (
+                detection: detection,
+                bounds: detection.observation.bounds.insetBy(dx: -0.018, dy: -0.018)
+            )
         }
 
         for y in 0..<height {
-            for x in 0..<width where isCloud(x, y) {
+            let normalizedY = (CGFloat(y) + 0.5) / CGFloat(height)
+            for x in 0..<width where mask[y * width + x] != 0 {
+                let normalizedX = (CGFloat(x) + 0.5) / CGFloat(width)
+                let point = CGPoint(x: normalizedX, y: normalizedY)
+
+                var bestID = -1
+                var bestDistance = Double.greatestFiniteMagnitude
+                for item in expanded where item.bounds.contains(point) {
+                    let centroid = item.detection.observation.centroid
+                    let dx = Double(point.x - centroid.x)
+                    let dy = Double(point.y - centroid.y)
+                    let distance = dx * dx + dy * dy
+                    if distance < bestDistance {
+                        bestDistance = distance
+                        bestID = item.detection.id
+                    }
+                }
+
+                if bestID >= 0 {
+                    assignments[y * width + x] = bestID
+                }
+            }
+        }
+
+        var rgba = [UInt8](repeating: 0, count: width * height * 4)
+
+        func assignedID(_ x: Int, _ y: Int) -> Int {
+            guard x >= 0, x < width, y >= 0, y < height else { return -1 }
+            return assignments[y * width + x]
+        }
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let id = assignedID(x, y)
+                guard id >= 0 else { continue }
+
                 let boundary =
-                    !isCloud(x - 1, y)
-                    || !isCloud(x + 1, y)
-                    || !isCloud(x, y - 1)
-                    || !isCloud(x, y + 1)
+                    assignedID(x - 1, y) != id
+                    || assignedID(x + 1, y) != id
+                    || assignedID(x, y - 1) != id
+                    || assignedID(x, y + 1) != id
                 let offset = (y * width + x) * 4
-                let color = sourceColor(x, y)
+                let color = trackColor(id)
                 rgba[offset] = color.0
                 rgba[offset + 1] = color.1
                 rgba[offset + 2] = color.2
-                rgba[offset + 3] = boundary ? 232 : 52
+                rgba[offset + 3] = boundary ? 238 : 48
             }
         }
 
@@ -183,5 +136,20 @@ final class CloudOverlayStabilizer {
             shouldInterpolate: true,
             intent: .defaultIntent
         )
+    }
+
+    private func trackColor(_ id: Int) -> (UInt8, UInt8, UInt8) {
+        let palette: [(UInt8, UInt8, UInt8)] = [
+            (70, 214, 255),
+            (255, 177, 72),
+            (194, 121, 255),
+            (80, 242, 179),
+            (255, 104, 158),
+            (255, 231, 92),
+            (112, 157, 255),
+            (120, 245, 235)
+        ]
+        let index = abs(id) % palette.count
+        return palette[index]
     }
 }

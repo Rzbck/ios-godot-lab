@@ -16,6 +16,7 @@ final class CloudDiagnosticsAPI {
     var stateDidChange: ((State) -> Void)?
 
     private let store: CloudDiagnosticsStore
+    private let sessionRecorder: CloudSessionRecorder
     private let queue = DispatchQueue(label: "cloudweight.diagnostics.api", qos: .utility)
     private var listener: NWListener?
     private var state: State = .stopped
@@ -23,8 +24,9 @@ final class CloudDiagnosticsAPI {
     private var pairedHost: String?
     private var bearerToken: String?
 
-    init(store: CloudDiagnosticsStore) {
+    init(store: CloudDiagnosticsStore, sessionRecorder: CloudSessionRecorder) {
         self.store = store
+        self.sessionRecorder = sessionRecorder
     }
 
     func start() {
@@ -74,7 +76,6 @@ final class CloudDiagnosticsAPI {
             self.pairingDeadline = nil
             self.pairedHost = nil
             self.bearerToken = nil
-            self.store.setCaptureEnabled(false)
             self.publish(.stopped)
         }
     }
@@ -85,7 +86,6 @@ final class CloudDiagnosticsAPI {
             self.pairingDeadline = Date().addingTimeInterval(seconds)
             self.pairedHost = nil
             self.bearerToken = nil
-            self.store.setCaptureEnabled(false)
             self.publish(.pairing)
         }
     }
@@ -96,7 +96,6 @@ final class CloudDiagnosticsAPI {
             self.pairingDeadline = nil
             self.pairedHost = nil
             self.bearerToken = nil
-            self.store.setCaptureEnabled(false)
             self.publish(.ready)
         }
     }
@@ -182,13 +181,14 @@ final class CloudDiagnosticsAPI {
                 contentType: "application/json",
                 body: json([
                     "app": "Cloud Weight Lab",
-                    "api_version": "1",
+                    "api_version": "2",
                     "version": BuildInfo.version,
                     "build": BuildInfo.gitSHA,
                     "port": Int(Self.port),
                     "pairing_armed": armed,
                     "paired": pairedHost != nil,
-                    "privacy": "local_only_rolling_sequence"
+                    "active_session": sessionRecorder.activeSessionID() ?? "",
+                    "privacy": "local_persistent_bounded_sessions"
                 ])
             )
             return
@@ -215,6 +215,7 @@ final class CloudDiagnosticsAPI {
                     "token": token,
                     "host": host,
                     "build": BuildInfo.gitSHA,
+                    "active_session": sessionRecorder.activeSessionID() ?? "",
                     "expires": "app_session"
                 ])
             )
@@ -289,11 +290,62 @@ final class CloudDiagnosticsAPI {
             return
         }
 
+        if method == "GET", path == "/api/v1/sessions" {
+            send(
+                connection,
+                status: 200,
+                contentType: "application/json",
+                body: sessionRecorder.sessionsData()
+            )
+            return
+        }
+
+        let pathParts = path.split(separator: "/").map(String.init)
+        if pathParts.count >= 4,
+           pathParts[0] == "api",
+           pathParts[1] == "v1",
+           pathParts[2] == "sessions" {
+            let sessionID = pathParts[3]
+
+            if method == "GET", pathParts.count == 5, pathParts[4] == "manifest" {
+                guard let body = sessionRecorder.sessionManifestData(id: sessionID) else {
+                    send(connection, status: 404, contentType: "application/json", body: json(["error": "session_not_found"])); return
+                }
+                send(connection, status: 200, contentType: "application/json", body: body)
+                return
+            }
+
+            if method == "GET", pathParts.count == 5, pathParts[4] == "files" {
+                guard let body = sessionRecorder.sessionFilesData(id: sessionID) else {
+                    send(connection, status: 404, contentType: "application/json", body: json(["error": "session_not_found"])); return
+                }
+                send(connection, status: 200, contentType: "application/json", body: body)
+                return
+            }
+
+            if method == "GET", pathParts.count == 5, pathParts[4] == "file" {
+                guard let relativePath = components?.queryItems?
+                        .first(where: { $0.name == "path" })?.value,
+                      let body = sessionRecorder.sessionFileData(
+                        id: sessionID,
+                        relativePath: relativePath
+                      ) else {
+                    send(connection, status: 404, contentType: "application/json", body: json(["error": "session_file_not_found"])); return
+                }
+                send(
+                    connection,
+                    status: 200,
+                    contentType: contentType(for: relativePath),
+                    body: body
+                )
+                return
+            }
+        }
+
         if method == "POST", path == "/api/v1/unpair" {
             pairedHost = nil
             bearerToken = nil
             pairingDeadline = nil
-            store.setCaptureEnabled(false)
             publish(.ready)
             send(connection, status: 200, contentType: "application/json", body: json(["ok": true]))
             return
@@ -336,6 +388,14 @@ final class CloudDiagnosticsAPI {
         DispatchQueue.main.async { [weak self] in
             self?.stateDidChange?(next)
         }
+    }
+
+    private func contentType(for path: String) -> String {
+        let lower = path.lowercased()
+        if lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") { return "image/jpeg" }
+        if lower.hasSuffix(".ndjson") { return "application/x-ndjson" }
+        if lower.hasSuffix(".json") { return "application/json" }
+        return "application/octet-stream"
     }
 
     private func json(_ object: [String: Any]) -> Data {

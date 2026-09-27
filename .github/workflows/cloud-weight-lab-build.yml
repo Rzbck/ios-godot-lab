@@ -127,7 +127,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:12}"
           cat > "$APP_DIR/iphone/Sources/BuildInfo.swift" <<EOF
           enum BuildInfo {
-              static let version = "0.3.0"
+              static let version = "0.4.0"
               static let gitSHA = "$SHORT_SHA"
           }
           EOF
@@ -188,6 +188,7 @@ jobs:
           test "$BUNDLE_ID" = 'com.rzbck.cloudweightlab'
           /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$APP_PATH/Info.plist" >/dev/null
           grep -Fq "${GITHUB_SHA:0:12}" "$APP_DIR/iphone/Sources/BuildInfo.swift"
+          grep -Fq '0.4.0' "$APP_DIR/iphone/Sources/BuildInfo.swift"
           test -n "$(find "$APP_PATH" -type d -name 'CloudSegmentation.mlmodelc' -print -quit)"
           test -n "$(find "$APP_PATH" -type d -name 'SkySegmentation.mlmodelc' -print -quit)"
 
@@ -208,12 +209,14 @@ jobs:
           cat > "$OUT/BUILD-METADATA.json" <<EOF
           {
             "app": "Cloud Weight Lab",
-            "version": "0.3.0",
+            "version": "0.4.0",
             "sha": "$GITHUB_SHA",
             "bundle_id": "com.rzbck.cloudweightlab",
             "artifact": "$IPA",
             "segmentation_engine": "ucloudnet-k2-day-coreml-v2",
             "sky_gate_engine": "skywater-segformer-b2-coreml-v3",
+            "stabilization_engine": "centroid-iou-temporal-v4",
+            "telemetry": "bounded-live-hud-oslog-v4",
             "ucloudnet_source_commit": "$UCLOUDNET_COMMIT",
             "skywater_source_revision": "$SKYWATER_REVISION",
             "device_validation": false

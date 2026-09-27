@@ -21,17 +21,19 @@ final class CloudDiagnosticsAPI {
     private var listener: NWListener?
     private var state: State = .stopped
     private var pairingDeadline: Date?
-    private var pairedHost: String?
     private var bearerToken: String?
 
     init(store: CloudDiagnosticsStore, sessionRecorder: CloudSessionRecorder) {
         self.store = store
         self.sessionRecorder = sessionRecorder
+        self.bearerToken = DiagnosticsKeychain.loadToken()
     }
 
     func start() {
         queue.async { [weak self] in
             guard let self, self.listener == nil else { return }
+
+            self.bearerToken = self.bearerToken ?? DiagnosticsKeychain.loadToken()
 
             do {
                 guard let port = NWEndpoint.Port(rawValue: Self.port) else {
@@ -48,7 +50,7 @@ final class CloudDiagnosticsAPI {
                     guard let self else { return }
                     switch next {
                     case .ready:
-                        self.publish(self.pairedHost == nil ? .ready : .paired(self.pairedHost!))
+                        self.publish(self.bearerToken == nil ? .ready : .paired("saved"))
                     case .failed(let error):
                         self.publish(.failed(error.localizedDescription))
                     case .cancelled:
@@ -74,18 +76,17 @@ final class CloudDiagnosticsAPI {
             self.listener?.cancel()
             self.listener = nil
             self.pairingDeadline = nil
-            self.pairedHost = nil
-            self.bearerToken = nil
             self.publish(.stopped)
         }
     }
 
-    func armPairing(seconds: TimeInterval = 45) {
+    // Kept as a recovery hook for diagnostics/settings. Normal V12 sync does not
+    // require touching the iPhone UI: the first LAN client claims a persistent
+    // token once, then both phone and PC reuse it.
+    func armPairing(seconds: TimeInterval = 120) {
         queue.async { [weak self] in
             guard let self else { return }
             self.pairingDeadline = Date().addingTimeInterval(seconds)
-            self.pairedHost = nil
-            self.bearerToken = nil
             self.publish(.pairing)
         }
     }
@@ -94,8 +95,8 @@ final class CloudDiagnosticsAPI {
         queue.async { [weak self] in
             guard let self else { return }
             self.pairingDeadline = nil
-            self.pairedHost = nil
             self.bearerToken = nil
+            DiagnosticsKeychain.deleteToken()
             self.publish(.ready)
         }
     }
@@ -116,9 +117,7 @@ final class CloudDiagnosticsAPI {
             }
 
             var next = accumulated
-            if let content {
-                next.append(content)
-            }
+            if let content { next.append(content) }
 
             if next.range(of: Data("\r\n\r\n".utf8)) != nil || isComplete {
                 self.route(connection: connection, requestData: next)
@@ -171,8 +170,6 @@ final class CloudDiagnosticsAPI {
             headers[key] = value
         }
 
-        let host = remoteHost(connection)
-
         if method == "GET", path == "/api/v1/health" {
             let armed = pairingDeadline.map { $0 > Date() } ?? false
             send(
@@ -181,12 +178,13 @@ final class CloudDiagnosticsAPI {
                 contentType: "application/json",
                 body: json([
                     "app": "Cloud Weight Lab",
-                    "api_version": "2",
+                    "api_version": "3",
                     "version": BuildInfo.version,
                     "build": BuildInfo.gitSHA,
                     "port": Int(Self.port),
                     "pairing_armed": armed,
-                    "paired": pairedHost != nil,
+                    "paired": bearerToken != nil,
+                    "pairing_mode": "persistent_keychain_first_claim",
                     "active_session": sessionRecorder.activeSessionID() ?? "",
                     "privacy": "local_persistent_bounded_sessions"
                 ])
@@ -195,34 +193,61 @@ final class CloudDiagnosticsAPI {
         }
 
         if method == "POST", path == "/api/v1/pair" {
-            guard let deadline = pairingDeadline, deadline > Date() else {
-                publish(pairedHost == nil ? .ready : .paired(pairedHost!))
-                send(connection, status: 403, contentType: "application/json", body: json(["error": "pairing_not_armed"]))
+            if let existing = bearerToken {
+                guard authorized(headers: headers) else {
+                    send(
+                        connection,
+                        status: 403,
+                        contentType: "application/json",
+                        body: json(["error": "already_paired"])
+                    )
+                    return
+                }
+                send(
+                    connection,
+                    status: 200,
+                    contentType: "application/json",
+                    body: json([
+                        "token": existing,
+                        "build": BuildInfo.gitSHA,
+                        "active_session": sessionRecorder.activeSessionID() ?? "",
+                        "expires": "persistent_keychain"
+                    ])
+                )
                 return
             }
 
+            // First claim is intentionally automatic on the local LAN so the
+            // Windows sync no longer needs a physical API button press.
             let token = randomToken()
+            guard DiagnosticsKeychain.saveToken(token) else {
+                send(
+                    connection,
+                    status: 500,
+                    contentType: "application/json",
+                    body: json(["error": "keychain_write_failed"])
+                )
+                return
+            }
             pairingDeadline = nil
-            pairedHost = host
             bearerToken = token
             store.setCaptureEnabled(true)
-            publish(.paired(host))
+            publish(.paired("saved"))
             send(
                 connection,
                 status: 200,
                 contentType: "application/json",
                 body: json([
                     "token": token,
-                    "host": host,
                     "build": BuildInfo.gitSHA,
                     "active_session": sessionRecorder.activeSessionID() ?? "",
-                    "expires": "app_session"
+                    "expires": "persistent_keychain"
                 ])
             )
             return
         }
 
-        guard authorized(headers: headers, host: host) else {
+        guard authorized(headers: headers) else {
             send(connection, status: 401, contentType: "application/json", body: json(["error": "unauthorized"]))
             return
         }
@@ -256,12 +281,7 @@ final class CloudDiagnosticsAPI {
         }
 
         if method == "GET", path == "/api/v1/snapshots" {
-            send(
-                connection,
-                status: 200,
-                contentType: "application/json",
-                body: store.snapshotListData()
-            )
+            send(connection, status: 200, contentType: "application/json", body: store.snapshotListData())
             return
         }
 
@@ -291,12 +311,7 @@ final class CloudDiagnosticsAPI {
         }
 
         if method == "GET", path == "/api/v1/sessions" {
-            send(
-                connection,
-                status: 200,
-                contentType: "application/json",
-                body: sessionRecorder.sessionsData()
-            )
+            send(connection, status: 200, contentType: "application/json", body: sessionRecorder.sessionsData())
             return
         }
 
@@ -326,10 +341,7 @@ final class CloudDiagnosticsAPI {
             if method == "GET", pathParts.count == 5, pathParts[4] == "file" {
                 guard let relativePath = components?.queryItems?
                         .first(where: { $0.name == "path" })?.value,
-                      let body = sessionRecorder.sessionFileData(
-                        id: sessionID,
-                        relativePath: relativePath
-                      ) else {
+                      let body = sessionRecorder.sessionFileData(id: sessionID, relativePath: relativePath) else {
                     send(connection, status: 404, contentType: "application/json", body: json(["error": "session_file_not_found"])); return
                 }
                 send(
@@ -343,9 +355,9 @@ final class CloudDiagnosticsAPI {
         }
 
         if method == "POST", path == "/api/v1/unpair" {
-            pairedHost = nil
             bearerToken = nil
             pairingDeadline = nil
+            DiagnosticsKeychain.deleteToken()
             publish(.ready)
             send(connection, status: 200, contentType: "application/json", body: json(["ok": true]))
             return
@@ -354,24 +366,13 @@ final class CloudDiagnosticsAPI {
         send(connection, status: 404, contentType: "application/json", body: json(["error": "not_found"]))
     }
 
-    private func authorized(headers: [String: String], host: String) -> Bool {
-        guard let pairedHost,
-              pairedHost == host,
-              let bearerToken,
+    private func authorized(headers: [String: String]) -> Bool {
+        guard let bearerToken,
               let value = headers["authorization"],
               value == "Bearer \(bearerToken)" else {
             return false
         }
         return true
-    }
-
-    private func remoteHost(_ connection: NWConnection) -> String {
-        switch connection.endpoint {
-        case .hostPort(let host, _):
-            return "\(host)"
-        default:
-            return "unknown"
-        }
     }
 
     private func randomToken() -> String {
@@ -415,6 +416,8 @@ final class CloudDiagnosticsAPI {
         case 401: reason = "Unauthorized"
         case 403: reason = "Forbidden"
         case 404: reason = "Not Found"
+        case 409: reason = "Conflict"
+        case 500: reason = "Internal Server Error"
         default: reason = "Error"
         }
 

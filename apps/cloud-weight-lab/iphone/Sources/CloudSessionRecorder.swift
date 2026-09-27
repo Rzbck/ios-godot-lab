@@ -160,7 +160,7 @@ final class CloudSessionRecorder {
     private let maxGlobalBytes: Int64 = 512 * 1024 * 1024
     private let maxStoredSessions = 8
 
-    private let rootDirectory: URL
+    private var rootDirectory: URL
     private var active: ActiveSession?
 
     init() {
@@ -181,7 +181,7 @@ final class CloudSessionRecorder {
 
             let startedAt = Date().timeIntervalSince1970
             let id = "session-\(Int(startedAt * 1_000))-\(String(buildSHA.prefix(8)))"
-            let directory = rootDirectory.appendingPathComponent(id, isDirectory: true)
+            var directory = rootDirectory.appendingPathComponent(id, isDirectory: true)
             let telemetryDirectory = directory.appendingPathComponent("telemetry", isDirectory: true)
             let visualDirectory = directory.appendingPathComponent("visual", isDirectory: true)
             let keyframesDirectory = visualDirectory.appendingPathComponent("keyframes", isDirectory: true)

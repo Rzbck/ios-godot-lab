@@ -1,9 +1,11 @@
 import SwiftUI
+import UIKit
 
 struct CameraScreen: View {
     @StateObject private var camera = CameraService()
     @State private var pulse = false
     @State private var showDiagnostics = false
+    @State private var diagnosticCopied = false
 
     var body: some View {
         ZStack {
@@ -70,6 +72,7 @@ struct CameraScreen: View {
             Button {
                 withAnimation(.easeInOut(duration: 0.20)) {
                     showDiagnostics.toggle()
+                    diagnosticCopied = false
                 }
             } label: {
                 HStack(spacing: 7) {
@@ -99,7 +102,7 @@ struct CameraScreen: View {
             VStack(spacing: 8) {
                 HStack(spacing: 7) {
                     diagnosticMetric(
-                        title: "AI",
+                        title: "PIPELINE",
                         value: String(format: "%.0f ms", telemetry.analysisMilliseconds)
                     )
                     diagnosticMetric(
@@ -120,31 +123,80 @@ struct CameraScreen: View {
 
                 HStack(spacing: 7) {
                     diagnosticMetric(
-                        title: "Δ COUV.",
-                        value: String(format: "%.1f %%", telemetry.coverageDeltaPercent)
+                        title: "PREP",
+                        value: String(format: "%.0f ms", telemetry.preprocessingMilliseconds)
+                    )
+                    diagnosticMetric(
+                        title: "CIEL AI",
+                        value: String(format: "%.0f ms", telemetry.skyInferenceMilliseconds)
+                    )
+                    diagnosticMetric(
+                        title: "NUAGE AI",
+                        value: String(format: "%.0f ms", telemetry.cloudInferenceMilliseconds)
+                    )
+                    diagnosticMetric(
+                        title: "POST",
+                        value: String(format: "%.0f ms", telemetry.postprocessingMilliseconds)
+                    )
+                }
+
+                HStack(spacing: 7) {
+                    diagnosticMetric(
+                        title: "CIEL",
+                        value: String(format: "%.1f %%", telemetry.skyCoveragePercent)
                     )
                     diagnosticMetric(
                         title: "BRUT→STABLE",
                         value: "\(telemetry.rawDetections)→\(telemetry.stabilizedDetections)"
                     )
                     diagnosticMetric(
-                        title: "THERMAL",
-                        value: telemetry.thermalState.uppercased()
+                        title: "DROP/THR",
+                        value: "\(telemetry.droppedFrames)/\(telemetry.throttledFrames)"
                     )
                     diagnosticMetric(
-                        title: "THROTTLE",
-                        value: "\(telemetry.throttledFrames)"
+                        title: "ORIENT.",
+                        value: shortOrientation(telemetry.orientation)
                     )
                 }
 
-                Text("V4 · \(BuildInfo.gitSHA) · touche le badge CORE ML pour masquer les diagnostics")
-                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.48))
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("THERMAL · \(telemetry.thermalState.uppercased())")
+                            .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                        Text("Paysage mesuré en V5 mais pas encore corrigé : la V4/V5 reste orientée portrait.")
+                            .font(.system(size: 8.2, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.52))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button {
+                        guard !camera.diagnosticReport.isEmpty else { return }
+                        UIPasteboard.general.string = camera.diagnosticReport
+                        diagnosticCopied = true
+                    } label: {
+                        Label(
+                            diagnosticCopied ? "COPIÉ" : "COPIER DIAG",
+                            systemImage: diagnosticCopied ? "checkmark" : "doc.on.doc"
+                        )
+                        .font(.system(size: 9, weight: .black, design: .rounded))
+                        .tracking(0.3)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(.white.opacity(0.12), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(camera.diagnosticReport.isEmpty)
+                }
+
+                Text("V5 · \(BuildInfo.gitSHA) · rapport local uniquement · aucune image, localisation ou identité appareil")
+                    .font(.system(size: 8.2, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.46))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(10)
             .background(
-                .black.opacity(0.48),
+                .black.opacity(0.52),
                 in: RoundedRectangle(cornerRadius: 17, style: .continuous)
             )
             .overlay(
@@ -172,7 +224,7 @@ struct CameraScreen: View {
             Text(value)
                 .font(.system(size: 9.4, weight: .bold, design: .monospaced))
                 .lineLimit(1)
-                .minimumScaleFactor(0.62)
+                .minimumScaleFactor(0.54)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 7)
@@ -339,7 +391,7 @@ struct CameraScreen: View {
 
             HStack(spacing: 7) {
                 Image(systemName: "waveform.path.ecg.rectangle.fill")
-                Text("\(analysis.engine.rawValue) · suivi temporel V4 · estimation de masse toujours probabiliste.")
+                Text("\(analysis.engine.rawValue) · suivi temporel V4 · diagnostic V5 local · masse toujours probabiliste.")
             }
             .font(.system(size: 10.5, weight: .semibold, design: .rounded))
             .foregroundStyle(.white.opacity(0.62))
@@ -440,6 +492,18 @@ struct CameraScreen: View {
         case .running: return .green
         case .requesting, .idle: return .yellow
         case .denied, .failed: return .red
+        }
+    }
+
+    private func shortOrientation(_ orientation: String) -> String {
+        switch orientation {
+        case "portrait": return "PORTRAIT"
+        case "portraitUpsideDown": return "P. INV."
+        case "landscapeLeft": return "LAND. G"
+        case "landscapeRight": return "LAND. D"
+        case "faceUp": return "À PLAT ↑"
+        case "faceDown": return "À PLAT ↓"
+        default: return "?"
         }
     }
 

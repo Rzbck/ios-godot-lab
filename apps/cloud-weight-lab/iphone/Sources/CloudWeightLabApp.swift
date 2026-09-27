@@ -4,7 +4,7 @@ import SwiftUI
 struct CloudWeightLabApp: App {
     var body: some Scene {
         WindowGroup {
-            CameraScreen()
+            CameraScreenV6()
                 .preferredColorScheme(.dark)
         }
     }

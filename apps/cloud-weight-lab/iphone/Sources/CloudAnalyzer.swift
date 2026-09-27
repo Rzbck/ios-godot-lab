@@ -35,6 +35,44 @@ final class CloudAnalyzer {
         let wall: [Double]
     }
 
+    private final class ParallelInferenceResults: @unchecked Sendable {
+        private let lock = NSLock()
+        private var semanticSquare: SkySemanticMaps?
+        private var cloudProbabilityMap: [Double]?
+        private var skyMilliseconds = 0.0
+        private var cloudMilliseconds = 0.0
+
+        func setSky(_ result: (maps: SkySemanticMaps, milliseconds: Double)?) {
+            lock.lock()
+            semanticSquare = result?.maps
+            skyMilliseconds = result?.milliseconds ?? 0
+            lock.unlock()
+        }
+
+        func setCloud(_ result: (values: [Double], milliseconds: Double)?) {
+            lock.lock()
+            cloudProbabilityMap = result?.values
+            cloudMilliseconds = result?.milliseconds ?? 0
+            lock.unlock()
+        }
+
+        func snapshot() -> (
+            semanticSquare: SkySemanticMaps?,
+            cloudProbabilityMap: [Double]?,
+            skyMilliseconds: Double,
+            cloudMilliseconds: Double
+        ) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (
+                semanticSquare,
+                cloudProbabilityMap,
+                skyMilliseconds,
+                cloudMilliseconds
+            )
+        }
+    }
+
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let portraitWidth = 304
     private let portraitHeight = 544
@@ -218,18 +256,20 @@ final class CloudAnalyzer {
             return nil
         }
 
-        var semanticSquare: SkySemanticMaps?
-        var cloudProbabilityMap: [Double]?
-        var skyMilliseconds = 0.0
-        var cloudMilliseconds = 0.0
-        let resultLock = NSLock()
         let thermal = ProcessInfo.processInfo.thermalState
         let allowParallel = thermal == .nominal || thermal == .fair
         timingInferenceMode = allowParallel ? "parallel" : "sequential_thermal"
         let wallStarted = CACurrentMediaTime()
 
+        let semanticSquare: SkySemanticMaps?
+        let cloudProbabilityMap: [Double]?
+        let skyMilliseconds: Double
+        let cloudMilliseconds: Double
+
         if allowParallel {
             let group = DispatchGroup()
+            let results = ParallelInferenceResults()
+
             group.enter()
             skyInferenceQueue.async { [self] in
                 let result = predictSkySemanticMaps(
@@ -238,10 +278,7 @@ final class CloudAnalyzer {
                     width: skyInputSize,
                     height: skyInputSize
                 )
-                resultLock.lock()
-                semanticSquare = result?.maps
-                skyMilliseconds = result?.milliseconds ?? 0
-                resultLock.unlock()
+                results.setSky(result)
                 group.leave()
             }
 
@@ -254,13 +291,16 @@ final class CloudAnalyzer {
                     width: targetWidth,
                     height: targetHeight
                 )
-                resultLock.lock()
-                cloudProbabilityMap = result?.values
-                cloudMilliseconds = result?.milliseconds ?? 0
-                resultLock.unlock()
+                results.setCloud(result)
                 group.leave()
             }
             group.wait()
+
+            let snapshot = results.snapshot()
+            semanticSquare = snapshot.semanticSquare
+            cloudProbabilityMap = snapshot.cloudProbabilityMap
+            skyMilliseconds = snapshot.skyMilliseconds
+            cloudMilliseconds = snapshot.cloudMilliseconds
         } else {
             let skyResult = skyInferenceQueue.sync { [self] in
                 predictSkySemanticMaps(

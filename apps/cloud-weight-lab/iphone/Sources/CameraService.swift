@@ -38,7 +38,8 @@ final class CameraService: NSObject, ObservableObject {
 
     private let captureQueue = DispatchQueue(label: "cloudweight.capture", qos: .userInitiated)
     private let analysisQueue = DispatchQueue(label: "cloudweight.analysis", qos: .userInitiated)
-    private let minimumAnalysisInterval = 0.10
+    private let minimumAnalysisInterval = 0.07
+    private let rotationStateLock = NSLock()
     private var configured = false
     private var lastAnalysisTime = 0.0
     private var fieldOfViewDegrees = 65.0
@@ -48,6 +49,10 @@ final class CameraService: NSObject, ObservableObject {
     private var videoOutput: AVCaptureVideoDataOutput?
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservation: NSKeyValueObservation?
+    private var captureRotationDegrees = 0.0
+    private var lastCaptureWidth = 0
+    private var lastCaptureHeight = 0
+    private var lastRawCoverage: Double?
 
     func requestAndStart() {
         telemetryMonitor.reset()
@@ -176,11 +181,22 @@ final class CameraService: NSObject, ObservableObject {
     }
 
     private func applyCaptureRotation(_ angle: CGFloat) {
+        rotationStateLock.lock()
+        captureRotationDegrees = Double(angle)
+        rotationStateLock.unlock()
+
         guard let connection = videoOutput?.connection(with: .video),
               connection.isVideoRotationAngleSupported(angle) else {
             return
         }
         connection.videoRotationAngle = angle
+    }
+
+    private func currentCaptureRotationDegrees() -> Double {
+        rotationStateLock.lock()
+        let value = captureRotationDegrees
+        rotationStateLock.unlock()
+        return value
     }
 
     private func finishConfigurationFailure(_ message: String) {
@@ -216,14 +232,51 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
 
+        guard let cameraBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
         lastAnalysisTime = now
         analysisInFlight = true
         let analysisStarted = CACurrentMediaTime()
+        let captureWidth = CVPixelBufferGetWidth(cameraBuffer)
+        let captureHeight = CVPixelBufferGetHeight(cameraBuffer)
+        let captureOrientation = captureWidth > captureHeight ? "landscape" : "portrait"
+        let sceneSanity = SceneSanityGate.evaluate(sampleBuffer: sampleBuffer)
 
-        let rawAnalysis = analyzer.analyze(
-            sampleBuffer: sampleBuffer,
-            fieldOfViewDegrees: fieldOfViewDegrees
-        )
+        let rawAnalysis: CloudFrameAnalysis?
+        let analyzerTiming: CloudAnalyzerTiming?
+        if sceneSanity.rejected {
+            rawAnalysis = CloudFrameAnalysis(
+                timestamp: Date(),
+                observations: [],
+                totalCoverage: 0,
+                overlayImage: nil,
+                engine: .ucloudNetCoreML,
+                fieldOfViewDegrees: fieldOfViewDegrees
+            )
+            analyzerTiming = nil
+        } else {
+            rawAnalysis = analyzer.analyze(
+                sampleBuffer: sampleBuffer,
+                fieldOfViewDegrees: fieldOfViewDegrees
+            )
+            analyzerTiming = analyzer.lastTiming
+        }
+
+        let rawCoverage = rawAnalysis?.totalCoverage ?? 0
+        let geometryChanged =
+            lastCaptureWidth > 0
+            && lastCaptureHeight > 0
+            && (lastCaptureWidth != captureWidth || lastCaptureHeight != captureHeight)
+        let sceneJump = lastRawCoverage.map { abs(rawCoverage - $0) > 0.30 } ?? false
+
+        if geometryChanged || sceneJump {
+            stabilizer.reset()
+            overlayStabilizer.reset()
+        }
+        lastCaptureWidth = captureWidth
+        lastCaptureHeight = captureHeight
+        lastRawCoverage = rawCoverage
+
         let rawDetections = rawAnalysis?.observations.compactMap { observation in
             estimator.estimate(from: observation).map {
                 CloudDetection(observation: observation, estimate: $0)
@@ -248,16 +301,21 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         droppedFrames = 0
         throttledFrames = 0
 
-        let orientation = currentOrientationName()
         let nextTelemetry = telemetryMonitor.snapshot(
             analysisDurationSeconds: duration,
-            analyzerTiming: analyzer.lastTiming,
+            analyzerTiming: analyzerTiming,
             analysis: rawAnalysis,
             rawDetections: rawDetections.count,
             stabilizedDetections: stabilizedDetections.count,
             droppedFrames: droppedSincePreviousAnalysis,
             throttledFrames: throttledSincePreviousAnalysis,
-            orientation: orientation
+            orientation: captureOrientation,
+            deviceOrientation: currentOrientationName(),
+            captureWidth: captureWidth,
+            captureHeight: captureHeight,
+            captureRotationDegrees: currentCaptureRotationDegrees(),
+            sceneLuminancePercent: sceneSanity.meanLuminance * 100,
+            sceneRejected: sceneSanity.rejected
         )
         let nextReport = telemetryMonitor.makeReport(buildSHA: BuildInfo.gitSHA)
 

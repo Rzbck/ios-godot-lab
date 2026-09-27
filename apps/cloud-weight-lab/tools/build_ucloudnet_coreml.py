@@ -149,10 +149,11 @@ def map_state(model: nn.Module, paddle_state: dict):
     converted = {}
 
     for source_key, raw_value in paddle_state.items():
+        if source_key == "StructuredToParameterName@@":
+            continue
+
         key = source_key.replace("._mean", ".running_mean").replace("._variance", ".running_var")
         if key not in target:
-            if ".aux_" in key or key.startswith("aux_"):
-                continue
             raise KeyError(f"Unexpected Paddle parameter: {source_key} -> {key}")
 
         array = numpy_value(raw_value)

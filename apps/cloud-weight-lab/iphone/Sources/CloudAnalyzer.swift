@@ -6,6 +6,10 @@ import Foundation
 import ImageIO
 import QuartzCore
 
+struct CloudAnalysisEnvironment: Equatable {
+    let lowLight: Bool
+}
+
 final class CloudAnalyzer {
     private struct Component {
         let label: Int
@@ -21,23 +25,42 @@ final class CloudAnalyzer {
         var area: Int { pixels.count }
     }
 
+    private struct SkySemanticMaps {
+        let sky: [Double]
+        let blocker: [Double]
+        let tree: [Double]
+        let building: [Double]
+        let person: [Double]
+        let plant: [Double]
+        let wall: [Double]
+    }
+
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let portraitWidth = 304
     private let portraitHeight = 544
     private let landscapeWidth = 544
     private let landscapeHeight = 304
     private let skyInputSize = 384
-    private let probabilityThreshold = 0.52
-    private let skyProbabilityThreshold = 0.55
-    private let minimumSkyCoverage = 0.05
     private let portraitCloudModel: MLModel?
     private let landscapeCloudModel: MLModel?
     private let skyModel: MLModel?
+    private let semanticGate = CloudSemanticGate()
+
+    private let skyInferenceQueue = DispatchQueue(
+        label: "cloudweight.inference.sky",
+        qos: .userInitiated
+    )
+    private let cloudInferenceQueue = DispatchQueue(
+        label: "cloudweight.inference.cloud",
+        qos: .userInitiated
+    )
 
     private var timingPreprocessingMilliseconds = 0.0
     private var timingSkyInferenceMilliseconds = 0.0
     private var timingCloudInferenceMilliseconds = 0.0
-    private var timingSkyCoveragePercent = 0.0
+    private var timingInferenceWallMilliseconds = 0.0
+    private var timingInferenceMode = "parallel"
+    private var gateMetrics: CloudGateMetrics?
 
     let loadError: String?
     private(set) var lastTiming: CloudAnalyzerTiming?
@@ -79,26 +102,14 @@ final class CloudAnalyzer {
             portraitCloudModel = nil
             landscapeCloudModel = nil
             skyModel = nil
-            loadError = "Modèle de validation du ciel absent du bundle"
+            loadError = "Modèle de validation sémantique du ciel absent du bundle"
             return
         }
 
         do {
-            let loadedPortraitCloudModel = try MLModel(
-                contentsOf: portraitURL,
-                configuration: configuration
-            )
-            let loadedLandscapeCloudModel = try MLModel(
-                contentsOf: landscapeURL,
-                configuration: configuration
-            )
-            let loadedSkyModel = try MLModel(
-                contentsOf: skyURL,
-                configuration: configuration
-            )
-            portraitCloudModel = loadedPortraitCloudModel
-            landscapeCloudModel = loadedLandscapeCloudModel
-            skyModel = loadedSkyModel
+            portraitCloudModel = try MLModel(contentsOf: portraitURL, configuration: configuration)
+            landscapeCloudModel = try MLModel(contentsOf: landscapeURL, configuration: configuration)
+            skyModel = try MLModel(contentsOf: skyURL, configuration: configuration)
             loadError = nil
         } catch {
             portraitCloudModel = nil
@@ -108,28 +119,57 @@ final class CloudAnalyzer {
         }
     }
 
+    func resetSemanticGate() {
+        semanticGate.reset()
+    }
+
     func analyze(
         sampleBuffer: CMSampleBuffer,
-        fieldOfViewDegrees: Double
+        fieldOfViewDegrees: Double,
+        environment: CloudAnalysisEnvironment
     ) -> CloudFrameAnalysis? {
         let analysisStarted = CACurrentMediaTime()
         timingPreprocessingMilliseconds = 0
         timingSkyInferenceMilliseconds = 0
         timingCloudInferenceMilliseconds = 0
-        timingSkyCoveragePercent = 0
+        timingInferenceWallMilliseconds = 0
+        timingInferenceMode = "parallel"
+        gateMetrics = nil
         lastTiming = nil
 
         defer {
             let totalMilliseconds = (CACurrentMediaTime() - analysisStarted) * 1_000
-            let knownMilliseconds = timingPreprocessingMilliseconds
-                + timingSkyInferenceMilliseconds
-                + timingCloudInferenceMilliseconds
+            let knownMilliseconds = timingPreprocessingMilliseconds + timingInferenceWallMilliseconds
+            let metrics = gateMetrics
             lastTiming = CloudAnalyzerTiming(
                 preprocessingMilliseconds: timingPreprocessingMilliseconds,
                 skyInferenceMilliseconds: timingSkyInferenceMilliseconds,
                 cloudInferenceMilliseconds: timingCloudInferenceMilliseconds,
+                inferenceWallMilliseconds: timingInferenceWallMilliseconds,
+                parallelOverlapMilliseconds: max(
+                    0,
+                    timingSkyInferenceMilliseconds
+                        + timingCloudInferenceMilliseconds
+                        - timingInferenceWallMilliseconds
+                ),
                 postprocessingMilliseconds: max(0, totalMilliseconds - knownMilliseconds),
-                skyCoveragePercent: timingSkyCoveragePercent
+                skyCoveragePercent: metrics.map {
+                    $0.skySceneActive
+                        ? max(5.0, max($0.strictSkyCoveragePercent, $0.relaxedSkyCoveragePercent))
+                        : $0.strictSkyCoveragePercent
+                } ?? 0,
+                strictSkyCoveragePercent: metrics?.strictSkyCoveragePercent ?? 0,
+                relaxedSkyCoveragePercent: metrics?.relaxedSkyCoveragePercent ?? 0,
+                semanticBlockerCoveragePercent: metrics?.blockerCoveragePercent ?? 0,
+                semanticTreeCoveragePercent: metrics?.treeCoveragePercent ?? 0,
+                semanticBuildingCoveragePercent: metrics?.buildingCoveragePercent ?? 0,
+                semanticPersonCoveragePercent: metrics?.personCoveragePercent ?? 0,
+                semanticPlantCoveragePercent: metrics?.plantCoveragePercent ?? 0,
+                semanticWallCoveragePercent: metrics?.wallCoveragePercent ?? 0,
+                semanticFallbackCoveragePercent: metrics?.semanticFallbackCoveragePercent ?? 0,
+                skySceneActive: metrics?.skySceneActive ?? false,
+                skyGateMode: metrics?.mode ?? "unavailable",
+                inferenceMode: timingInferenceMode
             )
         }
 
@@ -161,53 +201,119 @@ final class CloudAnalyzer {
                 from: skyInputBuffer,
                 width: skyInputSize,
                 height: skyInputSize
-              ),
-              let skyProbabilitySquare = predictTensorProbabilityMap(
-                model: skyModel,
-                inputTensor: skyInputTensor,
-                inputName: "image_tensor",
-                outputName: "sky_probability",
-                width: skyInputSize,
-                height: skyInputSize
               ) else {
             return nil
         }
 
-        let skyProbabilityMap = Self.resampleProbabilityMap(
-            skyProbabilitySquare,
+        var semanticSquare: SkySemanticMaps?
+        var cloudProbabilityMap: [Double]?
+        var skyMilliseconds = 0.0
+        var cloudMilliseconds = 0.0
+        let resultLock = NSLock()
+        let thermal = ProcessInfo.processInfo.thermalState
+        let allowParallel = thermal == .nominal || thermal == .fair
+        timingInferenceMode = allowParallel ? "parallel" : "sequential_thermal"
+        let wallStarted = CACurrentMediaTime()
+
+        if allowParallel {
+            let group = DispatchGroup()
+            group.enter()
+            skyInferenceQueue.async { [self] in
+                let result = predictSkySemanticMaps(
+                    model: skyModel,
+                    inputTensor: skyInputTensor,
+                    width: skyInputSize,
+                    height: skyInputSize
+                )
+                resultLock.lock()
+                semanticSquare = result?.maps
+                skyMilliseconds = result?.milliseconds ?? 0
+                resultLock.unlock()
+                group.leave()
+            }
+
+            group.enter()
+            cloudInferenceQueue.async { [self] in
+                let result = predictImageProbabilityMap(
+                    model: cloudModel,
+                    inputBuffer: cloudInputBuffer,
+                    outputName: "cloud_probability",
+                    width: targetWidth,
+                    height: targetHeight
+                )
+                resultLock.lock()
+                cloudProbabilityMap = result?.values
+                cloudMilliseconds = result?.milliseconds ?? 0
+                resultLock.unlock()
+                group.leave()
+            }
+            group.wait()
+        } else {
+            let skyResult = skyInferenceQueue.sync { [self] in
+                predictSkySemanticMaps(
+                    model: skyModel,
+                    inputTensor: skyInputTensor,
+                    width: skyInputSize,
+                    height: skyInputSize
+                )
+            }
+            semanticSquare = skyResult?.maps
+            skyMilliseconds = skyResult?.milliseconds ?? 0
+
+            let cloudResult = cloudInferenceQueue.sync { [self] in
+                predictImageProbabilityMap(
+                    model: cloudModel,
+                    inputBuffer: cloudInputBuffer,
+                    outputName: "cloud_probability",
+                    width: targetWidth,
+                    height: targetHeight
+                )
+            }
+            cloudProbabilityMap = cloudResult?.values
+            cloudMilliseconds = cloudResult?.milliseconds ?? 0
+        }
+
+        timingInferenceWallMilliseconds = (CACurrentMediaTime() - wallStarted) * 1_000
+        timingSkyInferenceMilliseconds = skyMilliseconds
+        timingCloudInferenceMilliseconds = cloudMilliseconds
+
+        guard let semanticSquare, let cloudProbabilityMap else { return nil }
+
+        let sky = resample(
+            semanticSquare.sky,
             sourceWidth: skyInputSize,
             sourceHeight: skyInputSize,
             targetWidth: targetWidth,
             targetHeight: targetHeight
         )
-        let skyCoverage = Double(
-            skyProbabilityMap.reduce(0) { partial, value in
-                partial + (value >= skyProbabilityThreshold ? 1 : 0)
-            }
-        ) / Double(targetWidth * targetHeight)
-        timingSkyCoveragePercent = skyCoverage * 100
-
-        guard skyCoverage >= minimumSkyCoverage else {
-            return emptyAnalysis(fieldOfViewDegrees: fieldOfViewDegrees)
-        }
-
-        guard let cloudProbabilityMap = predictImageProbabilityMap(
-            model: cloudModel,
-            inputBuffer: cloudInputBuffer,
-            outputName: "cloud_probability",
-            width: targetWidth,
-            height: targetHeight
-        ) else {
-            return nil
-        }
-
-        var mask = Self.gatedCloudMask(
-            cloudProbabilities: cloudProbabilityMap,
-            skyProbabilities: skyProbabilityMap,
-            cloudThreshold: probabilityThreshold,
-            skyThreshold: skyProbabilityThreshold
+        let blocker = resample(
+            semanticSquare.blocker,
+            sourceWidth: skyInputSize,
+            sourceHeight: skyInputSize,
+            targetWidth: targetWidth,
+            targetHeight: targetHeight
         )
-        mask = cleanup(mask: mask, width: targetWidth, height: targetHeight)
+        let classCoverage = CloudSemanticClassCoverage(
+            treePercent: Self.coveragePercent(semanticSquare.tree, threshold: 0.48),
+            buildingPercent: Self.coveragePercent(semanticSquare.building, threshold: 0.48),
+            personPercent: Self.coveragePercent(semanticSquare.person, threshold: 0.48),
+            plantPercent: Self.coveragePercent(semanticSquare.plant, threshold: 0.48),
+            wallPercent: Self.coveragePercent(semanticSquare.wall, threshold: 0.48)
+        )
+
+        let gated = semanticGate.makeMask(
+            cloudProbabilities: cloudProbabilityMap,
+            skyProbabilities: sky,
+            blockerProbabilities: blocker,
+            classCoverage: classCoverage,
+            lowLight: environment.lowLight
+        )
+        gateMetrics = gated.metrics
+
+        var mask = cleanup(mask: gated.mask, width: targetWidth, height: targetHeight)
+        if mask.isEmpty {
+            mask = [Bool](repeating: false, count: targetWidth * targetHeight)
+        }
 
         let extraction = connectedComponents(
             mask: mask,
@@ -278,12 +384,8 @@ final class CloudAnalyzer {
         outputName: String,
         width: Int,
         height: Int
-    ) -> [Double]? {
+    ) -> (values: [Double], milliseconds: Double)? {
         let started = CACurrentMediaTime()
-        defer {
-            timingCloudInferenceMilliseconds += (CACurrentMediaTime() - started) * 1_000
-        }
-
         let provider: MLDictionaryFeatureProvider
         do {
             provider = try MLDictionaryFeatureProvider(dictionary: [
@@ -300,29 +402,24 @@ final class CloudAnalyzer {
             return nil
         }
 
-        guard let array = prediction.featureValue(for: outputName)?.multiArrayValue else {
+        guard let array = prediction.featureValue(for: outputName)?.multiArrayValue,
+              let values = probabilityValues(from: array, width: width, height: height) else {
             return nil
         }
-        return probabilityValues(from: array, width: width, height: height)
+        return (values, (CACurrentMediaTime() - started) * 1_000)
     }
 
-    private func predictTensorProbabilityMap(
+    private func predictSkySemanticMaps(
         model: MLModel,
         inputTensor: MLMultiArray,
-        inputName: String,
-        outputName: String,
         width: Int,
         height: Int
-    ) -> [Double]? {
+    ) -> (maps: SkySemanticMaps, milliseconds: Double)? {
         let started = CACurrentMediaTime()
-        defer {
-            timingSkyInferenceMilliseconds += (CACurrentMediaTime() - started) * 1_000
-        }
-
         let provider: MLDictionaryFeatureProvider
         do {
             provider = try MLDictionaryFeatureProvider(dictionary: [
-                inputName: MLFeatureValue(multiArray: inputTensor)
+                "image_tensor": MLFeatureValue(multiArray: inputTensor)
             ])
         } catch {
             return nil
@@ -335,10 +432,33 @@ final class CloudAnalyzer {
             return nil
         }
 
-        guard let array = prediction.featureValue(for: outputName)?.multiArrayValue else {
+        func values(_ name: String) -> [Double]? {
+            guard let array = prediction.featureValue(for: name)?.multiArrayValue else { return nil }
+            return probabilityValues(from: array, width: width, height: height)
+        }
+
+        guard let sky = values("sky_probability"),
+              let blocker = values("blocker_probability"),
+              let tree = values("tree_probability"),
+              let building = values("building_probability"),
+              let person = values("person_probability"),
+              let plant = values("plant_probability"),
+              let wall = values("wall_probability") else {
             return nil
         }
-        return probabilityValues(from: array, width: width, height: height)
+
+        return (
+            SkySemanticMaps(
+                sky: sky,
+                blocker: blocker,
+                tree: tree,
+                building: building,
+                person: person,
+                plant: plant,
+                wall: wall
+            ),
+            (CACurrentMediaTime() - started) * 1_000
+        )
     }
 
     private func makeModelInput(
@@ -470,16 +590,26 @@ final class CloudAnalyzer {
         }
     }
 
-    static func gatedCloudMask(
-        cloudProbabilities: [Double],
-        skyProbabilities: [Double],
-        cloudThreshold: Double,
-        skyThreshold: Double
-    ) -> [Bool] {
-        guard cloudProbabilities.count == skyProbabilities.count else { return [] }
-        return zip(cloudProbabilities, skyProbabilities).map { cloud, sky in
-            cloud >= cloudThreshold && sky >= skyThreshold
-        }
+    private static func coveragePercent(_ values: [Double], threshold: Double) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let hits = values.reduce(0) { $0 + ($1 >= threshold ? 1 : 0) }
+        return Double(hits) / Double(values.count) * 100
+    }
+
+    private func resample(
+        _ source: [Double],
+        sourceWidth: Int,
+        sourceHeight: Int,
+        targetWidth: Int,
+        targetHeight: Int
+    ) -> [Double] {
+        Self.resampleProbabilityMap(
+            source,
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight,
+            targetWidth: targetWidth,
+            targetHeight: targetHeight
+        )
     }
 
     static func resampleProbabilityMap(
@@ -516,16 +646,14 @@ final class CloudAnalyzer {
 
     private func cleanup(mask: [Bool], width: Int, height: Int) -> [Bool] {
         var output = mask
-        guard width > 2, height > 2 else { return output }
+        guard mask.count == width * height, width > 2, height > 2 else { return output }
 
         for y in 1..<(height - 1) {
             for x in 1..<(width - 1) {
                 var count = 0
                 for dy in -1...1 {
                     for dx in -1...1 {
-                        if mask[(y + dy) * width + (x + dx)] {
-                            count += 1
-                        }
+                        if mask[(y + dy) * width + (x + dx)] { count += 1 }
                     }
                 }
 

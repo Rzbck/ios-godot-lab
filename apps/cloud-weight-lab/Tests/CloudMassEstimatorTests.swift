@@ -6,21 +6,61 @@ final class CloudMassEstimatorTests: XCTestCase {
 
     func testEstimateKeepsOrderedRange() throws {
         let result = try XCTUnwrap(
-            estimator.estimate(from: observation(width: 0.30, height: 0.24))
+            estimator.estimate(
+                from: observation(width: 0.30, height: 0.24),
+                cameraElevationDegrees: 55,
+                isLandscape: true,
+                motionReliable: true
+            )
         )
         XCTAssertLessThan(result.lowKilograms, result.midpointKilograms)
         XCTAssertLessThan(result.midpointKilograms, result.highKilograms)
         XCTAssertGreaterThan(result.estimatedWidthMeters, 0)
+        XCTAssertGreaterThan(result.estimatedDistanceMeters, 0)
+        XCTAssertGreaterThan(result.angularWidthDegrees, 0)
     }
 
     func testLargerAngularCloudProducesMoreMass() throws {
         let small = try XCTUnwrap(
-            estimator.estimate(from: observation(width: 0.18, height: 0.14))
+            estimator.estimate(
+                from: observation(width: 0.18, height: 0.14),
+                cameraElevationDegrees: 55,
+                isLandscape: true,
+                motionReliable: true
+            )
         )
         let large = try XCTUnwrap(
-            estimator.estimate(from: observation(width: 0.46, height: 0.36))
+            estimator.estimate(
+                from: observation(width: 0.46, height: 0.36),
+                cameraElevationDegrees: 55,
+                isLandscape: true,
+                motionReliable: true
+            )
         )
         XCTAssertGreaterThan(large.midpointKilograms, small.midpointKilograms)
+    }
+
+    func testLowerElevationMeansGreaterDistanceAndMass() throws {
+        let cloud = observation(width: 0.28, height: 0.20)
+        let high = try XCTUnwrap(
+            estimator.estimate(
+                from: cloud,
+                cameraElevationDegrees: 70,
+                isLandscape: true,
+                motionReliable: true
+            )
+        )
+        let low = try XCTUnwrap(
+            estimator.estimate(
+                from: cloud,
+                cameraElevationDegrees: 20,
+                isLandscape: true,
+                motionReliable: true
+            )
+        )
+        XCTAssertGreaterThan(low.estimatedDistanceMeters, high.estimatedDistanceMeters)
+        XCTAssertGreaterThan(low.midpointKilograms, high.midpointKilograms)
+        XCTAssertLessThan(low.confidence, high.confidence)
     }
 
     func testClassifierProfiles() {

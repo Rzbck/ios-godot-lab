@@ -20,6 +20,16 @@ final class CloudSessionRecorder {
         let midpointKilograms: Double
         let lowKilograms: Double
         let highKilograms: Double
+        let estimatedWidthMeters: Double
+        let estimatedHeightMeters: Double
+        let estimatedDepthMeters: Double
+        let estimatedDistanceMeters: Double
+        let projectedAreaSquareMeters: Double
+        let estimatedVolumeCubicMeters: Double
+        let angularWidthDegrees: Double
+        let angularHeightDegrees: Double
+        let centerElevationDegrees: Double
+        let massConfidence: Double
     }
 
     struct TelemetryRecord: Codable {
@@ -149,11 +159,11 @@ final class CloudSessionRecorder {
     private let ioQueue = DispatchQueue(label: "cloudweight.session-recorder", qos: .utility)
     private let context = CIContext(options: [.cacheIntermediates: false])
 
-    private let schemaVersion = 1
+    private let schemaVersion = 2
     private let telemetryChunkRecordLimit = 5_000
     private let baselineSnapshotInterval: TimeInterval = 1.0
     private let burstSnapshotInterval: TimeInterval = 0.25
-    private let eventBurstDuration: TimeInterval = 4.0
+    private let eventBurstDuration: TimeInterval = 2.5
     private let maxSnapshotDimension = 640
     private let jpegQuality = 0.34
     private let maxSessionVisualBytes: Int64 = 320 * 1024 * 1024
@@ -287,7 +297,9 @@ final class CloudSessionRecorder {
                 )
                 self.appendJSONLine(event, to: session.eventsURL)
                 session.eventRecordCount += 1
-                session.burstUntil = max(session.burstUntil, timestamp + self.eventBurstDuration)
+                if self.shouldTriggerVisualBurst(reason: reason, telemetry: telemetry) {
+                    session.burstUntil = max(session.burstUntil, timestamp + self.eventBurstDuration)
+                }
             }
             session.previousTelemetry = telemetry
 
@@ -515,7 +527,7 @@ final class CloudSessionRecorder {
         return candidates.filter { reason in
             let minimumSpacing: TimeInterval
             switch reason.type {
-            case "track_created", "track_missed": minimumSpacing = 0.75
+            case "track_created", "track_missed": minimumSpacing = 1.5
             case "mask_jump": minimumSpacing = 1.0
             case "highlight_glare": minimumSpacing = 2.0
             default: minimumSpacing = 0
@@ -524,6 +536,28 @@ final class CloudSessionRecorder {
             guard timestamp - previousTime >= minimumSpacing else { return false }
             session.lastEventTimes[reason.type] = timestamp
             return true
+        }
+    }
+
+    private func shouldTriggerVisualBurst(
+        reason: EventReason,
+        telemetry: CloudTelemetrySnapshot
+    ) -> Bool {
+        switch reason.type {
+        case "track_created":
+            return telemetry.cloudCoveragePercent >= 3.0
+                && telemetry.trackingVisibleTracks > 0
+        case "track_missed":
+            return false
+        case "mask_jump":
+            return telemetry.maskChangePercent >= 12.0
+        case "highlight_glare":
+            return telemetry.sceneClippedPercent >= 4.0
+                || telemetry.sceneNeutralHighlightPercent >= 10.0
+        case "sky_enter", "sky_exit", "scene_rejected", "scene_accepted", "thermal_change":
+            return true
+        default:
+            return false
         }
     }
 
@@ -582,9 +616,47 @@ final class CloudSessionRecorder {
                   manifest.state == "recording" else {
                 continue
             }
+
+            let telemetryDirectory = directory.appendingPathComponent("telemetry", isDirectory: true)
+            let telemetryFiles = (try? fileManager.contentsOfDirectory(
+                at: telemetryDirectory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ))?.filter { $0.pathExtension == "ndjson" } ?? []
+            let eventsURL = directory.appendingPathComponent("events.ndjson")
+            let visualDirectory = directory.appendingPathComponent("visual", isDirectory: true)
+            let visualIndexURL = visualDirectory.appendingPathComponent("visual.ndjson")
+
+            manifest.telemetryRecords = telemetryFiles.reduce(0) {
+                $0 + countJSONLines(in: $1)
+            }
+            manifest.eventRecords = countJSONLines(in: eventsURL)
+            manifest.visualFrames = countJSONLines(in: visualIndexURL)
+            manifest.visualBytes = recursiveFiles(in: visualDirectory)
+                .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
+                .reduce(Int64(0)) { partial, url in
+                    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    return partial + Int64(size)
+                }
+            manifest.endedAt = latestModificationTime(in: directory) ?? Date().timeIntervalSince1970
             manifest.state = "interrupted"
             try? encode(manifest).write(to: manifestURL, options: .atomic)
         }
+    }
+
+    private func countJSONLines(in url: URL) -> Int {
+        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]), !data.isEmpty else {
+            return 0
+        }
+        return data.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+    }
+
+    private func latestModificationTime(in directory: URL) -> TimeInterval? {
+        recursiveFiles(in: directory).compactMap { url in
+            try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate?
+                .timeIntervalSince1970
+        }.max()
     }
 
     private func pruneOldSessions(excluding protectedID: String?) {
@@ -653,7 +725,7 @@ final class CloudSessionRecorder {
     private func recursiveFiles(in directory: URL) -> [URL] {
         guard let enumerator = fileManager.enumerator(
             at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
             options: [.skipsHiddenFiles]
         ) else {
             return []
@@ -718,7 +790,17 @@ final class CloudSessionRecorder {
             boundsHeight: Double(detection.observation.bounds.size.height),
             midpointKilograms: detection.estimate.midpointKilograms,
             lowKilograms: detection.estimate.lowKilograms,
-            highKilograms: detection.estimate.highKilograms
+            highKilograms: detection.estimate.highKilograms,
+            estimatedWidthMeters: detection.estimate.estimatedWidthMeters,
+            estimatedHeightMeters: detection.estimate.estimatedHeightMeters,
+            estimatedDepthMeters: detection.estimate.estimatedDepthMeters,
+            estimatedDistanceMeters: detection.estimate.estimatedDistanceMeters,
+            projectedAreaSquareMeters: detection.estimate.projectedAreaSquareMeters,
+            estimatedVolumeCubicMeters: detection.estimate.estimatedVolumeCubicMeters,
+            angularWidthDegrees: detection.estimate.angularWidthDegrees,
+            angularHeightDegrees: detection.estimate.angularHeightDegrees,
+            centerElevationDegrees: detection.estimate.centerElevationDegrees,
+            massConfidence: detection.estimate.confidence
         )
     }
 

@@ -34,6 +34,7 @@ final class CloudTemporalStabilizer {
     private let maximumCentroidDistance = 0.22
     private let minimumIntersectionOverUnion = 0.035
     private let smallTrackConfirmationCoverage = 0.02
+    private let kindConfirmationHits = 15
 
     private(set) var lastStats = CloudTrackingStats(
         activeTracks: 0,
@@ -139,10 +140,7 @@ final class CloudTemporalStabilizer {
 
             for detectionIndex in detections.indices {
                 let candidate = detections[detectionIndex]
-                let distance = centroidDistance(
-                    predicted,
-                    candidate.observation.centroid
-                )
+                let distance = centroidDistance(predicted, candidate.observation.centroid)
                 let overlap = intersectionOverUnion(
                     existing.detection.observation.bounds,
                     candidate.observation.bounds
@@ -200,7 +198,7 @@ final class CloudTemporalStabilizer {
         )
 
         let geometryAlpha = centroidDistance > 0.085 ? 0.90 : 0.70
-        let measurementAlpha = centroidDistance > 0.085 ? 0.72 : 0.52
+        let measurementAlpha = centroidDistance > 0.085 ? 0.62 : 0.42
         let stableKind = stabilizedKind(track: &next, incoming: newObservation.kind)
 
         let smoothedObservation = CloudObservation(
@@ -215,14 +213,21 @@ final class CloudTemporalStabilizer {
             fieldOfViewDegrees: newObservation.fieldOfViewDegrees
         )
 
-        let smoothedEstimate = CloudMassEstimate(
-            lowKilograms: blend(oldEstimate.lowKilograms, newEstimate.lowKilograms, alpha: measurementAlpha),
-            midpointKilograms: blend(oldEstimate.midpointKilograms, newEstimate.midpointKilograms, alpha: measurementAlpha),
-            highKilograms: blend(oldEstimate.highKilograms, newEstimate.highKilograms, alpha: measurementAlpha),
-            estimatedWidthMeters: blend(oldEstimate.estimatedWidthMeters, newEstimate.estimatedWidthMeters, alpha: measurementAlpha),
-            estimatedHeightMeters: blend(oldEstimate.estimatedHeightMeters, newEstimate.estimatedHeightMeters, alpha: measurementAlpha),
-            confidence: blend(oldEstimate.confidence, newEstimate.confidence, alpha: measurementAlpha)
-        )
+        // Raw classification flicker must not move the mass estimate before the
+        // type itself has been accepted by the temporal hysteresis.
+        let incomingAgreesWithStableKind = newObservation.kind == stableKind
+        let targetEstimate = incomingAgreesWithStableKind ? newEstimate : oldEstimate
+        let kindChanged = stableKind != oldObservation.kind
+        let massAlpha: Double
+        if kindChanged {
+            massAlpha = 0.10
+        } else if incomingAgreesWithStableKind {
+            massAlpha = centroidDistance > 0.085 ? 0.42 : 0.24
+        } else {
+            massAlpha = 0.04
+        }
+
+        let smoothedEstimate = blendEstimate(oldEstimate, targetEstimate, alpha: massAlpha)
 
         next.detection = CloudDetection(
             observation: smoothedObservation,
@@ -246,12 +251,34 @@ final class CloudTemporalStabilizer {
             track.pendingKindCount = 1
         }
 
-        if track.pendingKindCount >= 3 {
+        if track.pendingKindCount >= kindConfirmationHits {
             track.pendingKind = nil
             track.pendingKindCount = 0
             return incoming
         }
         return current
+    }
+
+    private func blendEstimate(
+        _ old: CloudMassEstimate,
+        _ new: CloudMassEstimate,
+        alpha: Double
+    ) -> CloudMassEstimate {
+        CloudMassEstimate(
+            lowKilograms: blend(old.lowKilograms, new.lowKilograms, alpha: alpha),
+            midpointKilograms: blend(old.midpointKilograms, new.midpointKilograms, alpha: alpha),
+            highKilograms: blend(old.highKilograms, new.highKilograms, alpha: alpha),
+            estimatedWidthMeters: blend(old.estimatedWidthMeters, new.estimatedWidthMeters, alpha: alpha),
+            estimatedHeightMeters: blend(old.estimatedHeightMeters, new.estimatedHeightMeters, alpha: alpha),
+            estimatedDepthMeters: blend(old.estimatedDepthMeters, new.estimatedDepthMeters, alpha: alpha),
+            estimatedDistanceMeters: blend(old.estimatedDistanceMeters, new.estimatedDistanceMeters, alpha: alpha),
+            projectedAreaSquareMeters: blend(old.projectedAreaSquareMeters, new.projectedAreaSquareMeters, alpha: alpha),
+            estimatedVolumeCubicMeters: blend(old.estimatedVolumeCubicMeters, new.estimatedVolumeCubicMeters, alpha: alpha),
+            angularWidthDegrees: blend(old.angularWidthDegrees, new.angularWidthDegrees, alpha: alpha),
+            angularHeightDegrees: blend(old.angularHeightDegrees, new.angularHeightDegrees, alpha: alpha),
+            centerElevationDegrees: blend(old.centerElevationDegrees, new.centerElevationDegrees, alpha: alpha),
+            confidence: blend(old.confidence, new.confidence, alpha: alpha)
+        )
     }
 
     private func detectionWithStableID(_ detection: CloudDetection, id: Int) -> CloudDetection {

@@ -33,6 +33,52 @@ final class CloudTemporalStabilizerTests: XCTestCase {
         XCTAssertLessThan(second.estimate.midpointKilograms, 500_000)
     }
 
+    func testClassifierFlickerDoesNotImmediatelyMoveKindOrMass() throws {
+        let stabilizer = CloudTemporalStabilizer()
+        let initial = try XCTUnwrap(
+            stabilizer.update(raw: [
+                detection(id: 0, x: 0.40, y: 0.40, mass: 500_000, kind: .cumulus)
+            ]).first
+        )
+
+        for index in 0..<14 {
+            let next = try XCTUnwrap(
+                stabilizer.update(raw: [
+                    detection(
+                        id: index + 1,
+                        x: 0.40,
+                        y: 0.40,
+                        mass: 80_000,
+                        kind: .stratocumulus
+                    )
+                ]).first
+            )
+            XCTAssertEqual(next.observation.kind, .cumulus)
+            XCTAssertGreaterThan(next.estimate.midpointKilograms, initial.estimate.midpointKilograms * 0.80)
+        }
+    }
+
+    func testSustainedKindChangeEventuallySwitches() throws {
+        let stabilizer = CloudTemporalStabilizer()
+        _ = stabilizer.update(raw: [
+            detection(id: 0, x: 0.40, y: 0.40, mass: 500_000, kind: .cumulus)
+        ])
+
+        var latest: CloudDetection?
+        for index in 0..<15 {
+            latest = stabilizer.update(raw: [
+                detection(
+                    id: index + 1,
+                    x: 0.40,
+                    y: 0.40,
+                    mass: 80_000,
+                    kind: .stratocumulus
+                )
+            ]).first
+        }
+        XCTAssertEqual(try XCTUnwrap(latest).observation.kind, .stratocumulus)
+    }
+
     func testSingleMissingAnalysisIsHiddenButIdentityRecovers() throws {
         let stabilizer = CloudTemporalStabilizer()
 
@@ -95,11 +141,12 @@ final class CloudTemporalStabilizerTests: XCTestCase {
         id: Int,
         x: Double,
         y: Double,
-        mass: Double
+        mass: Double,
+        kind: CloudKind = .cumulus
     ) -> CloudDetection {
         let observation = CloudObservation(
             id: id,
-            kind: .cumulus,
+            kind: kind,
             confidence: 0.82,
             coverage: 0.12,
             bounds: CGRect(x: x, y: y, width: 0.24, height: 0.18),
@@ -114,6 +161,13 @@ final class CloudTemporalStabilizerTests: XCTestCase {
             highKilograms: mass * 1.5,
             estimatedWidthMeters: 900,
             estimatedHeightMeters: 650,
+            estimatedDepthMeters: 450,
+            estimatedDistanceMeters: 2_000,
+            projectedAreaSquareMeters: 300_000,
+            estimatedVolumeCubicMeters: 135_000_000,
+            angularWidthDegrees: 12,
+            angularHeightDegrees: 8,
+            centerElevationDegrees: 55,
             confidence: 0.78
         )
         return CloudDetection(observation: observation, estimate: estimate)

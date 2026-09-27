@@ -8,33 +8,37 @@ enum CloudKind: String, CaseIterable {
     case cirrus = "Cirrus"
     case unknown = "Nuage"
 
+    // Representative height above observer, not a measured cloud-base height.
+    // Ranges are intentionally broad because a single RGB frame cannot recover distance.
     var altitudeMeters: ClosedRange<Double> {
         switch self {
-        case .cumulus: return 800...2_500
-        case .stratocumulus: return 600...2_000
-        case .stratus: return 200...1_200
-        case .cirrus: return 6_000...12_000
-        case .unknown: return 800...4_000
+        case .cumulus: return 500...3_000
+        case .stratocumulus: return 400...2_500
+        case .stratus: return 100...1_500
+        case .cirrus: return 5_000...13_000
+        case .unknown: return 300...6_000
         }
     }
 
+    // Condensed liquid/ice water content prior, in g/m3.
     var waterContentGramsPerCubicMeter: ClosedRange<Double> {
         switch self {
-        case .cumulus: return 0.20...1.00
-        case .stratocumulus: return 0.15...0.60
-        case .stratus: return 0.10...0.50
-        case .cirrus: return 0.01...0.08
-        case .unknown: return 0.05...0.80
+        case .cumulus: return 0.20...2.50
+        case .stratocumulus: return 0.10...1.00
+        case .stratus: return 0.05...0.50
+        case .cirrus: return 0.005...0.12
+        case .unknown: return 0.03...1.20
         }
     }
 
+    // Line-of-sight cloud depth relative to the square root of projected area.
     var depthRatio: ClosedRange<Double> {
         switch self {
-        case .cumulus: return 0.50...1.30
-        case .stratocumulus: return 0.25...0.70
-        case .stratus: return 0.08...0.25
-        case .cirrus: return 0.05...0.20
-        case .unknown: return 0.20...0.80
+        case .cumulus: return 0.35...1.20
+        case .stratocumulus: return 0.15...0.60
+        case .stratus: return 0.05...0.18
+        case .cirrus: return 0.05...0.25
+        case .unknown: return 0.10...0.80
         }
     }
 }
@@ -70,6 +74,13 @@ struct CloudMassEstimate: Equatable {
     let highKilograms: Double
     let estimatedWidthMeters: Double
     let estimatedHeightMeters: Double
+    let estimatedDepthMeters: Double
+    let estimatedDistanceMeters: Double
+    let projectedAreaSquareMeters: Double
+    let estimatedVolumeCubicMeters: Double
+    let angularWidthDegrees: Double
+    let angularHeightDegrees: Double
+    let centerElevationDegrees: Double
     let confidence: Double
 }
 

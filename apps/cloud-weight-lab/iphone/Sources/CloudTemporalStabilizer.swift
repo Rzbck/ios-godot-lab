@@ -1,13 +1,30 @@
 import CoreGraphics
 import Foundation
 
+struct CloudTrackingStats: Equatable {
+    let activeTracks: Int
+    let visibleTracks: Int
+    let matchedTracks: Int
+    let createdTracks: Int
+    let hiddenMissedTracks: Int
+}
+
 final class CloudTemporalStabilizer {
     private struct Track {
         let id: Int
         var detection: CloudDetection
         var misses: Int
+        var hits: Int
+        var velocity: CGPoint
         var pendingKind: CloudKind?
         var pendingKindCount: Int
+    }
+
+    private struct MatchCandidate {
+        let trackIndex: Int
+        let detectionIndex: Int
+        let score: Double
+        let centroidDistance: Double
     }
 
     private var tracks: [Track] = []
@@ -15,82 +32,153 @@ final class CloudTemporalStabilizer {
 
     private let maximumMisses = 1
     private let maximumCentroidDistance = 0.22
-    private let minimumIntersectionOverUnion = 0.04
+    private let minimumIntersectionOverUnion = 0.035
+    private let smallTrackConfirmationCoverage = 0.02
+
+    private(set) var lastStats = CloudTrackingStats(
+        activeTracks: 0,
+        visibleTracks: 0,
+        matchedTracks: 0,
+        createdTracks: 0,
+        hiddenMissedTracks: 0
+    )
 
     func reset() {
         tracks.removeAll(keepingCapacity: true)
         nextTrackID = 1
+        lastStats = CloudTrackingStats(
+            activeTracks: 0,
+            visibleTracks: 0,
+            matchedTracks: 0,
+            createdTracks: 0,
+            hiddenMissedTracks: 0
+        )
     }
 
     func update(raw detections: [CloudDetection]) -> [CloudDetection] {
-        var unmatched = Set(detections.indices)
+        let candidates = matchCandidates(for: detections)
+        var matchedTrackIndices = Set<Int>()
+        var matchedDetectionIndices = Set<Int>()
+        var matches: [Int: MatchCandidate] = [:]
 
-        for index in tracks.indices {
-            guard let match = bestMatch(for: tracks[index].detection, in: detections, candidates: unmatched) else {
-                tracks[index].misses += 1
+        // Global greedy assignment: choose the strongest edge first instead of
+        // letting track array order decide who owns an ambiguous detection.
+        for candidate in candidates.sorted(by: { $0.score > $1.score }) {
+            guard !matchedTrackIndices.contains(candidate.trackIndex),
+                  !matchedDetectionIndices.contains(candidate.detectionIndex) else {
                 continue
             }
+            matchedTrackIndices.insert(candidate.trackIndex)
+            matchedDetectionIndices.insert(candidate.detectionIndex)
+            matches[candidate.trackIndex] = candidate
+        }
 
-            unmatched.remove(match.index)
-            tracks[index] = updatedTrack(
-                tracks[index],
-                with: detections[match.index],
-                centroidDistance: match.centroidDistance
-            )
+        for index in tracks.indices {
+            if let match = matches[index] {
+                tracks[index] = updatedTrack(
+                    tracks[index],
+                    with: detections[match.detectionIndex],
+                    centroidDistance: match.centroidDistance
+                )
+            } else {
+                tracks[index].misses += 1
+                tracks[index].velocity = CGPoint(
+                    x: tracks[index].velocity.x * 0.45,
+                    y: tracks[index].velocity.y * 0.45
+                )
+            }
         }
 
         tracks.removeAll { $0.misses > maximumMisses }
 
-        for index in unmatched.sorted() {
+        var createdTracks = 0
+        for index in detections.indices where !matchedDetectionIndices.contains(index) {
             let detection = detectionWithStableID(detections[index], id: nextTrackID)
             tracks.append(
                 Track(
                     id: nextTrackID,
                     detection: detection,
                     misses: 0,
+                    hits: 1,
+                    velocity: .zero,
                     pendingKind: nil,
                     pendingKindCount: 0
                 )
             )
             nextTrackID += 1
+            createdTracks += 1
         }
 
-        return tracks
+        // A missed track remains internally for one analysis so it can reclaim
+        // its ID, but it is deliberately not rendered. This removes the ghost
+        // labels observed in V7 while preserving identity through one bad frame.
+        let visible = tracks.filter { track in
+            guard track.misses == 0 else { return false }
+            return track.hits >= 2
+                || track.detection.observation.coverage >= smallTrackConfirmationCoverage
+        }
+
+        lastStats = CloudTrackingStats(
+            activeTracks: tracks.count,
+            visibleTracks: visible.count,
+            matchedTracks: matchedTrackIndices.count,
+            createdTracks: createdTracks,
+            hiddenMissedTracks: tracks.filter { $0.misses > 0 }.count
+        )
+
+        return visible
             .map(\.detection)
             .sorted { $0.estimate.midpointKilograms > $1.estimate.midpointKilograms }
     }
 
-    private func bestMatch(
-        for existing: CloudDetection,
-        in detections: [CloudDetection],
-        candidates: Set<Int>
-    ) -> (index: Int, score: Double, centroidDistance: Double)? {
-        var best: (index: Int, score: Double, centroidDistance: Double)?
+    private func matchCandidates(for detections: [CloudDetection]) -> [MatchCandidate] {
+        var result: [MatchCandidate] = []
+        result.reserveCapacity(tracks.count * detections.count)
 
-        for index in candidates {
-            let candidate = detections[index]
-            let distance = centroidDistance(
-                existing.observation.centroid,
-                candidate.observation.centroid
-            )
-            let overlap = intersectionOverUnion(
-                existing.observation.bounds,
-                candidate.observation.bounds
+        for trackIndex in tracks.indices {
+            let existing = tracks[trackIndex]
+            let predicted = CGPoint(
+                x: (existing.detection.observation.centroid.x + existing.velocity.x).clamped(0...1),
+                y: (existing.detection.observation.centroid.y + existing.velocity.y).clamped(0...1)
             )
 
-            guard distance <= maximumCentroidDistance || overlap >= minimumIntersectionOverUnion else {
-                continue
-            }
+            for detectionIndex in detections.indices {
+                let candidate = detections[detectionIndex]
+                let distance = centroidDistance(
+                    predicted,
+                    candidate.observation.centroid
+                )
+                let overlap = intersectionOverUnion(
+                    existing.detection.observation.bounds,
+                    candidate.observation.bounds
+                )
 
-            let distanceScore = max(0, 1 - distance / maximumCentroidDistance)
-            let score = overlap * 0.72 + distanceScore * 0.28
+                guard distance <= maximumCentroidDistance
+                        || overlap >= minimumIntersectionOverUnion else {
+                    continue
+                }
 
-            if best == nil || score > best!.score {
-                best = (index, score, distance)
+                let distanceScore = max(0, 1 - distance / maximumCentroidDistance)
+                let oldCoverage = max(0.0001, existing.detection.observation.coverage)
+                let newCoverage = max(0.0001, candidate.observation.coverage)
+                let coverageRatio = min(oldCoverage, newCoverage) / max(oldCoverage, newCoverage)
+                let kindBonus = existing.detection.observation.kind == candidate.observation.kind ? 1.0 : 0.0
+                let score = overlap * 0.52
+                    + distanceScore * 0.30
+                    + coverageRatio * 0.13
+                    + kindBonus * 0.05
+
+                result.append(
+                    MatchCandidate(
+                        trackIndex: trackIndex,
+                        detectionIndex: detectionIndex,
+                        score: score,
+                        centroidDistance: distance
+                    )
+                )
             }
         }
-
-        return best
+        return result
     }
 
     private func updatedTrack(
@@ -100,15 +188,27 @@ final class CloudTemporalStabilizer {
     ) -> Track {
         var next = track
         next.misses = 0
-
-        let geometryAlpha = centroidDistance > 0.10 ? 0.84 : 0.56
-        let measurementAlpha = centroidDistance > 0.10 ? 0.62 : 0.40
-        let stableKind = stabilizedKind(track: &next, incoming: incoming.observation.kind)
+        next.hits += 1
 
         let oldObservation = track.detection.observation
         let newObservation = incoming.observation
         let oldEstimate = track.detection.estimate
         let newEstimate = incoming.estimate
+
+        let measuredVelocity = CGPoint(
+            x: newObservation.centroid.x - oldObservation.centroid.x,
+            y: newObservation.centroid.y - oldObservation.centroid.y
+        )
+        next.velocity = CGPoint(
+            x: blend(track.velocity.x, measuredVelocity.x, alpha: 0.58),
+            y: blend(track.velocity.y, measuredVelocity.y, alpha: 0.58)
+        )
+
+        // Normal motion is still damped, but rapid motion catches up quickly.
+        // This keeps the label readable without visibly lagging behind a pan.
+        let geometryAlpha = centroidDistance > 0.085 ? 0.90 : 0.70
+        let measurementAlpha = centroidDistance > 0.085 ? 0.72 : 0.52
+        let stableKind = stabilizedKind(track: &next, incoming: newObservation.kind)
 
         let smoothedObservation = CloudObservation(
             id: track.id,

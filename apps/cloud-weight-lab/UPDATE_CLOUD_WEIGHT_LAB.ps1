@@ -2,8 +2,8 @@
 param(
     [string]$Repository = 'Rzbck/ios-godot-lab',
     [string]$Workflow = 'cloud-weight-lab-build.yml',
-    [string]$ExpectedBranch = 'feat/cloud-weight-lab-v1-20260926',
-    [int]$BuildTimeoutMinutes = 30,
+    [string]$ExpectedBranch = 'feat/cloud-weight-segmentation-v2-20260927',
+    [int]$BuildTimeoutMinutes = 40,
     [switch]$NoAutoBuild,
     [switch]$OpenFolder
 )

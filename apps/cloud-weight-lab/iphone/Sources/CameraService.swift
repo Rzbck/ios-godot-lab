@@ -17,15 +17,19 @@ final class CameraService: NSObject, ObservableObject {
     @Published private(set) var status: Status = .idle
     @Published private(set) var analysis: CloudFrameAnalysis?
     @Published private(set) var detections: [CloudDetection] = []
+    @Published private(set) var telemetry: CloudTelemetrySnapshot?
 
     private let analyzer = CloudAnalyzer()
     private let estimator = CloudMassEstimator()
+    private let stabilizer = CloudTemporalStabilizer()
+    private let telemetryMonitor = CloudTelemetryMonitor()
     private let captureQueue = DispatchQueue(label: "cloudweight.capture", qos: .userInitiated)
     private let analysisQueue = DispatchQueue(label: "cloudweight.analysis", qos: .userInitiated)
     private var configured = false
     private var lastAnalysisTime = 0.0
     private var fieldOfViewDegrees = 65.0
     private var analysisInFlight = false
+    private var throttledFrames = 0
 
     func requestAndStart() {
         guard analyzer.isReady else {
@@ -133,25 +137,43 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         from connection: AVCaptureConnection
     ) {
         let now = CACurrentMediaTime()
-        guard now - lastAnalysisTime >= 0.18, !analysisInFlight else { return }
+        guard now - lastAnalysisTime >= 0.18, !analysisInFlight else {
+            throttledFrames += 1
+            return
+        }
+
         lastAnalysisTime = now
         analysisInFlight = true
+        let analysisStarted = CACurrentMediaTime()
 
         let nextAnalysis = analyzer.analyze(
             sampleBuffer: sampleBuffer,
             fieldOfViewDegrees: fieldOfViewDegrees
         )
-        let nextDetections = nextAnalysis?.observations.compactMap { observation in
+        let rawDetections = nextAnalysis?.observations.compactMap { observation in
             estimator.estimate(from: observation).map {
                 CloudDetection(observation: observation, estimate: $0)
             }
         } ?? []
+        let stabilizedDetections = stabilizer.update(raw: rawDetections)
+        let duration = CACurrentMediaTime() - analysisStarted
+        let skippedSincePreviousAnalysis = throttledFrames
+        throttledFrames = 0
+
+        let nextTelemetry = telemetryMonitor.snapshot(
+            analysisDurationSeconds: duration,
+            analysis: nextAnalysis,
+            rawDetections: rawDetections.count,
+            stabilizedDetections: stabilizedDetections.count,
+            throttledFrames: skippedSincePreviousAnalysis
+        )
 
         analysisInFlight = false
 
         DispatchQueue.main.async { [weak self] in
             self?.analysis = nextAnalysis
-            self?.detections = nextDetections
+            self?.detections = stabilizedDetections
+            self?.telemetry = nextTelemetry
         }
     }
 }

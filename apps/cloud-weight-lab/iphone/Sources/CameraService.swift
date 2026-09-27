@@ -307,6 +307,7 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             analysis: rawAnalysis,
             rawDetections: rawDetections.count,
             stabilizedDetections: stabilizedDetections.count,
+            trackingStats: stabilizer.lastStats,
             droppedFrames: droppedSincePreviousAnalysis,
             throttledFrames: throttledSincePreviousAnalysis,
             orientation: captureOrientation,

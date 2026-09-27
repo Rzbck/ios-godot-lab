@@ -30,10 +30,7 @@ final class CameraService: NSObject, ObservableObject {
     private let diagnosticsStore = CloudDiagnosticsStore()
     private let sessionRecorder = CloudSessionRecorder()
     private lazy var diagnosticsAPI: CloudDiagnosticsAPI = {
-        let api = CloudDiagnosticsAPI(
-            store: diagnosticsStore,
-            sessionRecorder: sessionRecorder
-        )
+        let api = CloudDiagnosticsAPI(store: diagnosticsStore, sessionRecorder: sessionRecorder)
         api.stateDidChange = { [weak self] next in
             self?.apiState = next
         }
@@ -56,6 +53,9 @@ final class CameraService: NSObject, ObservableObject {
     private var lastCaptureWidth = 0
     private var lastCaptureHeight = 0
     private var lastRawCoverage: Double?
+    private var lowLightActive = false
+    private var lowLightEnterStreak = 0
+    private var lowLightExitStreak = 0
 
     func requestAndStart() {
         telemetryMonitor.reset()
@@ -90,7 +90,7 @@ final class CameraService: NSObject, ObservableObject {
     }
 
     func armDiagnosticsAPI() {
-        diagnosticsAPI.armPairing(seconds: 45)
+        diagnosticsAPI.armPairing(seconds: 120)
     }
 
     func unpairDiagnosticsAPI() {
@@ -103,9 +103,7 @@ final class CameraService: NSObject, ObservableObject {
         rotationObservation = nil
         captureQueue.async { [weak self] in
             guard let self else { return }
-            if self.session.isRunning {
-                self.session.stopRunning()
-            }
+            if self.session.isRunning { self.session.stopRunning() }
             self.sessionRecorder.endSession()
         }
     }
@@ -134,6 +132,7 @@ final class CameraService: NSObject, ObservableObject {
                         return
                     }
                     self.session.addInput(input)
+                    self.configureCameraForAnalysis(camera)
                     self.fieldOfViewDegrees = Double(camera.activeFormat.videoFieldOfView)
                     self.captureDevice = camera
                 } catch {
@@ -144,8 +143,7 @@ final class CameraService: NSObject, ObservableObject {
                 let output = AVCaptureVideoDataOutput()
                 output.alwaysDiscardsLateVideoFrames = true
                 output.videoSettings = [
-                    kCVPixelBufferPixelFormatTypeKey as String:
-                        kCVPixelFormatType_32BGRA
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
                 ]
                 output.setSampleBufferDelegate(self, queue: self.analysisQueue)
 
@@ -156,10 +154,7 @@ final class CameraService: NSObject, ObservableObject {
                 self.session.addOutput(output)
                 self.videoOutput = output
 
-                let coordinator = AVCaptureDevice.RotationCoordinator(
-                    device: camera,
-                    previewLayer: nil
-                )
+                let coordinator = AVCaptureDevice.RotationCoordinator(device: camera, previewLayer: nil)
                 self.rotationCoordinator = coordinator
                 self.rotationObservation = coordinator.observe(
                     \.videoRotationAngleForHorizonLevelCapture,
@@ -173,21 +168,31 @@ final class CameraService: NSObject, ObservableObject {
 
                 self.session.commitConfiguration()
                 self.configured = true
-                DispatchQueue.main.async {
-                    self.activeCamera = camera
-                }
+                DispatchQueue.main.async { self.activeCamera = camera }
             }
 
-            if !self.session.isRunning {
-                self.session.startRunning()
+            if !self.session.isRunning { self.session.startRunning() }
+            self.sessionRecorder.startSession(buildSHA: BuildInfo.gitSHA, version: BuildInfo.version)
+            DispatchQueue.main.async { self.status = .running }
+        }
+    }
+
+    private func configureCameraForAnalysis(_ camera: AVCaptureDevice) {
+        do {
+            try camera.lockForConfiguration()
+            defer { camera.unlockForConfiguration() }
+
+            if camera.isExposureModeSupported(.continuousAutoExposure) {
+                camera.exposureMode = .continuousAutoExposure
             }
-            self.sessionRecorder.startSession(
-                buildSHA: BuildInfo.gitSHA,
-                version: BuildInfo.version
-            )
-            DispatchQueue.main.async {
-                self.status = .running
+            if camera.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                camera.whiteBalanceMode = .continuousAutoWhiteBalance
             }
+            if camera.isLowLightBoostSupported {
+                camera.automaticallyEnablesLowLightBoostWhenAvailable = true
+            }
+        } catch {
+            // Capture continues with system defaults; telemetry records support/state.
         }
     }
 
@@ -197,9 +202,7 @@ final class CameraService: NSObject, ObservableObject {
         rotationStateLock.unlock()
 
         guard let connection = videoOutput?.connection(with: .video),
-              connection.isVideoRotationAngleSupported(angle) else {
-            return
-        }
+              connection.isVideoRotationAngleSupported(angle) else { return }
         connection.videoRotationAngle = angle
     }
 
@@ -212,9 +215,48 @@ final class CameraService: NSObject, ObservableObject {
 
     private func finishConfigurationFailure(_ message: String) {
         session.commitConfiguration()
-        DispatchQueue.main.async {
-            self.status = .failed(message)
+        DispatchQueue.main.async { self.status = .failed(message) }
+    }
+
+    private func updateLowLightMode(
+        boostEnabled: Bool,
+        iso: Double,
+        exposureMilliseconds: Double,
+        meanLuminance: Double
+    ) -> Bool {
+        let enterCandidate = boostEnabled
+            || iso >= 110
+            || exposureMilliseconds >= 17
+            || meanLuminance < 0.22
+        let exitCandidate = !boostEnabled
+            && iso < 85
+            && exposureMilliseconds < 13
+            && meanLuminance > 0.30
+
+        if lowLightActive {
+            lowLightEnterStreak = 0
+            if exitCandidate {
+                lowLightExitStreak += 1
+                if lowLightExitStreak >= 30 {
+                    lowLightActive = false
+                    lowLightExitStreak = 0
+                }
+            } else {
+                lowLightExitStreak = 0
+            }
+        } else {
+            lowLightExitStreak = 0
+            if enterCandidate {
+                lowLightEnterStreak += 1
+                if lowLightEnterStreak >= 5 {
+                    lowLightActive = true
+                    lowLightEnterStreak = 0
+                }
+            } else {
+                lowLightEnterStreak = 0
+            }
         }
+        return lowLightActive
     }
 
     private func currentOrientationName() -> String {
@@ -241,7 +283,6 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             throttledFrames += 1
             return
         }
-
         guard let cameraBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         analysisInFlight = true
@@ -250,6 +291,29 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         let captureHeight = CVPixelBufferGetHeight(cameraBuffer)
         let captureOrientation = captureWidth > captureHeight ? "landscape" : "portrait"
         let sceneSanity = SceneSanityGate.evaluate(sampleBuffer: sampleBuffer)
+
+        let cameraISO = Double(captureDevice?.iso ?? 0)
+        let exposureMilliseconds = captureDevice.map {
+            max(0, CMTimeGetSeconds($0.exposureDuration) * 1_000)
+        } ?? 0
+        let exposureTargetOffset = Double(captureDevice?.exposureTargetOffset ?? 0)
+        let boostSupported = captureDevice?.isLowLightBoostSupported ?? false
+        let boostEnabled = captureDevice?.isLowLightBoostEnabled ?? false
+
+        var whiteBalanceTemperature = 0.0
+        var whiteBalanceTint = 0.0
+        if let device = captureDevice {
+            let values = device.temperatureAndTintValues(for: device.deviceWhiteBalanceGains)
+            whiteBalanceTemperature = Double(values.temperature)
+            whiteBalanceTint = Double(values.tint)
+        }
+
+        let lowLightMode = updateLowLightMode(
+            boostEnabled: boostEnabled,
+            iso: cameraISO,
+            exposureMilliseconds: exposureMilliseconds,
+            meanLuminance: sceneSanity.meanLuminance
+        )
 
         let rawAnalysis: CloudFrameAnalysis?
         let analyzerTiming: CloudAnalyzerTiming?
@@ -266,21 +330,24 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         } else {
             rawAnalysis = analyzer.analyze(
                 sampleBuffer: sampleBuffer,
-                fieldOfViewDegrees: fieldOfViewDegrees
+                fieldOfViewDegrees: fieldOfViewDegrees,
+                environment: CloudAnalysisEnvironment(lowLight: lowLightMode)
             )
             analyzerTiming = analyzer.lastTiming
         }
 
         let rawCoverage = rawAnalysis?.totalCoverage ?? 0
-        let geometryChanged =
-            lastCaptureWidth > 0
+        let geometryChanged = lastCaptureWidth > 0
             && lastCaptureHeight > 0
             && (lastCaptureWidth != captureWidth || lastCaptureHeight != captureHeight)
-        let sceneJump = lastRawCoverage.map { abs(rawCoverage - $0) > 0.30 } ?? false
+        let sceneJump = lastRawCoverage.map { abs(rawCoverage - $0) > 0.60 } ?? false
 
         if geometryChanged || sceneJump {
             stabilizer.reset()
             overlayStabilizer.reset()
+        }
+        if geometryChanged {
+            analyzer.resetSemanticGate()
         }
         lastCaptureWidth = captureWidth
         lastCaptureHeight = captureHeight
@@ -313,12 +380,6 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         droppedFrames = 0
         throttledFrames = 0
 
-        let cameraISO = Double(captureDevice?.iso ?? 0)
-        let exposureMilliseconds = captureDevice.map {
-            max(0, CMTimeGetSeconds($0.exposureDuration) * 1_000)
-        } ?? 0
-        let exposureTargetOffset = Double(captureDevice?.exposureTargetOffset ?? 0)
-
         let nextTelemetry = telemetryMonitor.snapshot(
             analysisDurationSeconds: duration,
             analyzerTiming: analyzerTiming,
@@ -334,31 +395,31 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             captureHeight: captureHeight,
             captureRotationDegrees: currentCaptureRotationDegrees(),
             sceneLuminancePercent: sceneSanity.meanLuminance * 100,
+            sceneSaturationPercent: sceneSanity.meanSaturation * 100,
             sceneDarkPercent: sceneSanity.darkFraction * 100,
             sceneBrightPercent: sceneSanity.brightFraction * 100,
             sceneClippedPercent: sceneSanity.clippedFraction * 100,
             sceneNeutralHighlightPercent: sceneSanity.neutralHighlightFraction * 100,
             sceneRejected: sceneSanity.rejected,
+            lowLightMode: lowLightMode,
             cameraISO: cameraISO,
             cameraExposureMilliseconds: exposureMilliseconds,
-            cameraExposureTargetOffset: exposureTargetOffset
+            cameraExposureTargetOffset: exposureTargetOffset,
+            cameraLowLightBoostSupported: boostSupported,
+            cameraLowLightBoostEnabled: boostEnabled,
+            cameraWhiteBalanceTemperatureKelvin: whiteBalanceTemperature,
+            cameraWhiteBalanceTint: whiteBalanceTint
         )
         let nextReport = telemetryMonitor.makeReport(buildSHA: BuildInfo.gitSHA)
 
-        diagnosticsStore.record(
-            telemetry: nextTelemetry,
-            detections: stabilizedDetections
-        )
+        diagnosticsStore.record(telemetry: nextTelemetry, detections: stabilizedDetections)
         diagnosticsStore.maybeCapture(
             sampleBuffer: sampleBuffer,
             overlayImage: stabilizedOverlay,
             telemetry: nextTelemetry,
             detections: stabilizedDetections
         )
-        sessionRecorder.record(
-            telemetry: nextTelemetry,
-            detections: stabilizedDetections
-        )
+        sessionRecorder.record(telemetry: nextTelemetry, detections: stabilizedDetections)
         sessionRecorder.maybeCapture(
             sampleBuffer: sampleBuffer,
             overlayImage: stabilizedOverlay,
@@ -388,9 +449,7 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
 final class CameraPreviewView: UIView {
     override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
 
-    var previewLayer: AVCaptureVideoPreviewLayer {
-        layer as! AVCaptureVideoPreviewLayer
-    }
+    var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
 
     private weak var configuredDevice: AVCaptureDevice?
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
@@ -405,19 +464,13 @@ final class CameraPreviewView: UIView {
 
         configuredDevice = device
         rotationObservation = nil
-        let coordinator = AVCaptureDevice.RotationCoordinator(
-            device: device,
-            previewLayer: previewLayer
-        )
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
         rotationCoordinator = coordinator
         rotationObservation = coordinator.observe(
             \.videoRotationAngleForHorizonLevelPreview,
             options: [.initial, .new]
         ) { [weak self] coordinator, _ in
-            guard let self,
-                  let connection = self.previewLayer.connection else {
-                return
-            }
+            guard let self, let connection = self.previewLayer.connection else { return }
             let angle = coordinator.videoRotationAngleForHorizonLevelPreview
             if connection.isVideoRotationAngleSupported(angle) {
                 connection.videoRotationAngle = angle

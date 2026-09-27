@@ -23,32 +23,49 @@ final class CloudAnalyzer {
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let targetWidth = 304
     private let targetHeight = 544
+    private let skyInputSize = 384
     private let probabilityThreshold = 0.52
-    private let model: MLModel?
+    private let skyProbabilityThreshold = 0.55
+    private let minimumSkyCoverage = 0.05
+    private let cloudModel: MLModel?
+    private let skyModel: MLModel?
 
     let loadError: String?
 
-    var isReady: Bool { model != nil }
+    var isReady: Bool { cloudModel != nil && skyModel != nil }
 
     init() {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .all
 
-        guard let url = Bundle.main.url(
+        guard let cloudURL = Bundle.main.url(
             forResource: "CloudSegmentation",
             withExtension: "mlmodelc"
         ) else {
-            model = nil
+            cloudModel = nil
+            skyModel = nil
             loadError = "Modèle UCloudNet absent du bundle"
             return
         }
 
+        guard let skyURL = Bundle.main.url(
+            forResource: "SkySegmentation",
+            withExtension: "mlmodelc"
+        ) else {
+            cloudModel = nil
+            skyModel = nil
+            loadError = "Modèle de validation du ciel absent du bundle"
+            return
+        }
+
         do {
-            model = try MLModel(contentsOf: url, configuration: configuration)
+            cloudModel = try MLModel(contentsOf: cloudURL, configuration: configuration)
+            skyModel = try MLModel(contentsOf: skyURL, configuration: configuration)
             loadError = nil
         } catch {
-            model = nil
-            loadError = "Impossible de charger UCloudNet : \(error.localizedDescription)"
+            cloudModel = nil
+            skyModel = nil
+            loadError = "Impossible de charger les modèles Core ML : \(error.localizedDescription)"
         }
     }
 
@@ -56,41 +73,67 @@ final class CloudAnalyzer {
         sampleBuffer: CMSampleBuffer,
         fieldOfViewDegrees: Double
     ) -> CloudFrameAnalysis? {
-        guard let model,
+        guard let cloudModel,
+              let skyModel,
               let cameraBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
-              let inputBuffer = makeModelInput(from: cameraBuffer) else {
+              let cloudInputBuffer = makeModelInput(
+                from: cameraBuffer,
+                width: targetWidth,
+                height: targetHeight
+              ),
+              let skyInputBuffer = makeModelInput(
+                from: cameraBuffer,
+                width: skyInputSize,
+                height: skyInputSize
+              ),
+              let skyProbabilitySquare = predictProbabilityMap(
+                model: skyModel,
+                inputBuffer: skyInputBuffer,
+                outputName: "sky_probability",
+                width: skyInputSize,
+                height: skyInputSize
+              ) else {
             return nil
         }
 
-        let provider: MLDictionaryFeatureProvider
-        do {
-            provider = try MLDictionaryFeatureProvider(dictionary: [
-                "image": MLFeatureValue(pixelBuffer: inputBuffer)
-            ])
-        } catch {
+        let skyProbabilityMap = Self.resampleProbabilityMap(
+            skyProbabilitySquare,
+            sourceWidth: skyInputSize,
+            sourceHeight: skyInputSize,
+            targetWidth: targetWidth,
+            targetHeight: targetHeight
+        )
+        let skyCoverage = Double(
+            skyProbabilityMap.reduce(0) { partial, value in
+                partial + (value >= skyProbabilityThreshold ? 1 : 0)
+            }
+        ) / Double(targetWidth * targetHeight)
+
+        guard skyCoverage >= minimumSkyCoverage else {
+            return emptyAnalysis(fieldOfViewDegrees: fieldOfViewDegrees)
+        }
+
+        guard let cloudProbabilityMap = predictProbabilityMap(
+            model: cloudModel,
+            inputBuffer: cloudInputBuffer,
+            outputName: "cloud_probability",
+            width: targetWidth,
+            height: targetHeight
+        ) else {
             return nil
         }
 
-        let prediction: MLFeatureProvider
-        do {
-            prediction = try model.prediction(from: provider)
-        } catch {
-            return nil
-        }
-
-        guard let probabilities = prediction
-            .featureValue(for: "cloud_probability")?
-            .multiArrayValue,
-              let probabilityMap = probabilityValues(from: probabilities) else {
-            return nil
-        }
-
-        var mask = probabilityMap.map { $0 >= probabilityThreshold }
+        var mask = Self.gatedCloudMask(
+            cloudProbabilities: cloudProbabilityMap,
+            skyProbabilities: skyProbabilityMap,
+            cloudThreshold: probabilityThreshold,
+            skyThreshold: skyProbabilityThreshold
+        )
         mask = cleanup(mask: mask, width: targetWidth, height: targetHeight)
 
         let extraction = connectedComponents(
             mask: mask,
-            probabilities: probabilityMap,
+            probabilities: cloudProbabilityMap,
             width: targetWidth,
             height: targetHeight
         )
@@ -102,14 +145,7 @@ final class CloudAnalyzer {
             .prefix(8)
 
         guard !accepted.isEmpty else {
-            return CloudFrameAnalysis(
-                timestamp: Date(),
-                observations: [],
-                totalCoverage: 0,
-                overlayImage: nil,
-                engine: .ucloudNetCoreML,
-                fieldOfViewDegrees: fieldOfViewDegrees
-            )
+            return emptyAnalysis(fieldOfViewDegrees: fieldOfViewDegrees)
         }
 
         let acceptedArray = Array(accepted)
@@ -117,7 +153,7 @@ final class CloudAnalyzer {
             observation(
                 id: index,
                 component: component,
-                inputBuffer: inputBuffer,
+                inputBuffer: cloudInputBuffer,
                 fieldOfViewDegrees: fieldOfViewDegrees
             )
         }
@@ -141,7 +177,51 @@ final class CloudAnalyzer {
         )
     }
 
-    private func makeModelInput(from pixelBuffer: CVPixelBuffer) -> CVPixelBuffer? {
+    private func emptyAnalysis(fieldOfViewDegrees: Double) -> CloudFrameAnalysis {
+        CloudFrameAnalysis(
+            timestamp: Date(),
+            observations: [],
+            totalCoverage: 0,
+            overlayImage: nil,
+            engine: .ucloudNetCoreML,
+            fieldOfViewDegrees: fieldOfViewDegrees
+        )
+    }
+
+    private func predictProbabilityMap(
+        model: MLModel,
+        inputBuffer: CVPixelBuffer,
+        outputName: String,
+        width: Int,
+        height: Int
+    ) -> [Double]? {
+        let provider: MLDictionaryFeatureProvider
+        do {
+            provider = try MLDictionaryFeatureProvider(dictionary: [
+                "image": MLFeatureValue(pixelBuffer: inputBuffer)
+            ])
+        } catch {
+            return nil
+        }
+
+        let prediction: MLFeatureProvider
+        do {
+            prediction = try model.prediction(from: provider)
+        } catch {
+            return nil
+        }
+
+        guard let array = prediction.featureValue(for: outputName)?.multiArrayValue else {
+            return nil
+        }
+        return probabilityValues(from: array, width: width, height: height)
+    }
+
+    private func makeModelInput(
+        from pixelBuffer: CVPixelBuffer,
+        width: Int,
+        height: Int
+    ) -> CVPixelBuffer? {
         var destination: CVPixelBuffer?
         let attributes: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
@@ -151,8 +231,8 @@ final class CloudAnalyzer {
 
         let status = CVPixelBufferCreate(
             kCFAllocatorDefault,
-            targetWidth,
-            targetHeight,
+            width,
+            height,
             kCVPixelFormatType_32BGRA,
             attributes as CFDictionary,
             &destination
@@ -160,39 +240,40 @@ final class CloudAnalyzer {
         guard status == kCVReturnSuccess, let destination else { return nil }
 
         let input = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
-        let sx = CGFloat(targetWidth) / input.extent.width
-        let sy = CGFloat(targetHeight) / input.extent.height
+        let sx = CGFloat(width) / input.extent.width
+        let sy = CGFloat(height) / input.extent.height
         let scaled = input.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
 
         context.render(
             scaled,
             to: destination,
-            bounds: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight),
+            bounds: CGRect(x: 0, y: 0, width: width, height: height),
             colorSpace: CGColorSpaceCreateDeviceRGB()
         )
         return destination
     }
 
-    private func probabilityValues(from array: MLMultiArray) -> [Double]? {
+    private func probabilityValues(
+        from array: MLMultiArray,
+        width: Int,
+        height: Int
+    ) -> [Double]? {
         let shape = array.shape.map { Int(truncating: $0) }
         let strides = array.strides.map { Int(truncating: $0) }
 
         guard shape.count == 4,
               shape[0] == 1,
               shape[1] == 1,
-              shape[2] == targetHeight,
-              shape[3] == targetWidth else {
+              shape[2] == height,
+              shape[3] == width else {
             return nil
         }
 
-        var values = [Double](repeating: 0, count: targetWidth * targetHeight)
-        for y in 0..<targetHeight {
-            for x in 0..<targetWidth {
+        var values = [Double](repeating: 0, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
                 let sourceIndex = y * strides[2] + x * strides[3]
-                values[y * targetWidth + x] = scalarValue(
-                    array: array,
-                    index: sourceIndex
-                )
+                values[y * width + x] = scalarValue(array: array, index: sourceIndex)
             }
         }
         return values
@@ -215,6 +296,50 @@ final class CloudAnalyzer {
         @unknown default:
             return 0
         }
+    }
+
+    static func gatedCloudMask(
+        cloudProbabilities: [Double],
+        skyProbabilities: [Double],
+        cloudThreshold: Double,
+        skyThreshold: Double
+    ) -> [Bool] {
+        guard cloudProbabilities.count == skyProbabilities.count else { return [] }
+        return zip(cloudProbabilities, skyProbabilities).map { cloud, sky in
+            cloud >= cloudThreshold && sky >= skyThreshold
+        }
+    }
+
+    static func resampleProbabilityMap(
+        _ source: [Double],
+        sourceWidth: Int,
+        sourceHeight: Int,
+        targetWidth: Int,
+        targetHeight: Int
+    ) -> [Double] {
+        guard sourceWidth > 0,
+              sourceHeight > 0,
+              targetWidth > 0,
+              targetHeight > 0,
+              source.count == sourceWidth * sourceHeight else {
+            return []
+        }
+
+        var output = [Double](repeating: 0, count: targetWidth * targetHeight)
+        for y in 0..<targetHeight {
+            let sourceY = min(
+                sourceHeight - 1,
+                Int((Double(y) + 0.5) * Double(sourceHeight) / Double(targetHeight))
+            )
+            for x in 0..<targetWidth {
+                let sourceX = min(
+                    sourceWidth - 1,
+                    Int((Double(x) + 0.5) * Double(sourceWidth) / Double(targetWidth))
+                )
+                output[y * targetWidth + x] = source[sourceY * sourceWidth + sourceX]
+            }
+        }
+        return output
     }
 
     private func cleanup(mask: [Bool], width: Int, height: Int) -> [Bool] {
@@ -340,9 +465,7 @@ final class CloudAnalyzer {
             pixels: component.pixels,
             pixelBuffer: inputBuffer
         )
-        let fill = (
-            coverage / max(width * height, 0.0001)
-        ).clamped(0...1)
+        let fill = (coverage / max(width * height, 0.0001)).clamped(0...1)
         let confidence = (
             0.30
             + component.meanProbability * 0.52

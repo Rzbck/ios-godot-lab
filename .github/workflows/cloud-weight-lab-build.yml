@@ -30,12 +30,14 @@ env:
   XCODEGEN_SHA256: '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806'
   UCLOUDNET_COMMIT: '799f25917361663a1ce2cf210c14a01c1ae45f15'
   UCLOUDNET_WEIGHT_BLOB: '12bc7b57460e1820bc303c7513c8f2eee9b4a47f'
+  SKYWATER_REVISION: 'a45ff48a4f924057e9fd947ec736b4098b06e337'
+  SKYWATER_SHA256: 'bba260c601533e4d34c7891cd055b051c2cd5fd2c22084a35d902bfb43e31341'
 
 jobs:
   build:
-    name: Build Core ML segmentation and package unsigned IPA
+    name: Build gated Core ML segmentation and package unsigned IPA
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 50
 
     steps:
       - name: Checkout exact commit
@@ -58,7 +60,9 @@ jobs:
         with:
           python-version: '3.13'
           cache: 'pip'
-          cache-dependency-path: 'apps/cloud-weight-lab/tools/build_ucloudnet_coreml.py'
+          cache-dependency-path: |
+            apps/cloud-weight-lab/tools/build_ucloudnet_coreml.py
+            apps/cloud-weight-lab/tools/build_sky_gate_coreml.py
 
       - name: Install pinned XcodeGen
         shell: bash
@@ -77,35 +81,44 @@ jobs:
           echo "XCODEGEN_BIN=$XCODEGEN_BIN" >> "$GITHUB_ENV"
           "$XCODEGEN_BIN" --version
 
-      - name: Build pinned UCloudNet Core ML model
+      - name: Build pinned Core ML models
         shell: bash
         run: |
           set -euo pipefail
           VENV="$RUNNER_TEMP/cloudweight-ml"
-          WEIGHTS="$RUNNER_TEMP/ucloudnet-day.pdparam"
-          MODEL="$GITHUB_WORKSPACE/$APP_DIR/iphone/Models/CloudSegmentation.mlpackage"
+          UCLOUD_WEIGHTS="$RUNNER_TEMP/ucloudnet-day.pdparam"
+          SKY_WEIGHTS="$RUNNER_TEMP/skywater-model.safetensors"
+          CLOUD_MODEL="$GITHUB_WORKSPACE/$APP_DIR/iphone/Models/CloudSegmentation.mlpackage"
+          SKY_MODEL="$GITHUB_WORKSPACE/$APP_DIR/iphone/Models/SkySegmentation.mlpackage"
 
-          python3 --version
           python3 -m venv "$VENV"
           source "$VENV/bin/activate"
           python -m pip install --disable-pip-version-check --upgrade pip
           python -m pip install --disable-pip-version-check \
             'torch==2.7.0' \
-            'coremltools==9.0'
+            'coremltools==9.0' \
+            'segmentation-models-pytorch==0.5.0' \
+            'safetensors==0.6.2'
 
           curl --fail --location --retry 3 --retry-delay 2 \
             "https://raw.githubusercontent.com/Att100/UCloudNet/${UCLOUDNET_COMMIT}/weights/ucloudnet_k_2_aux_lr_decay_d_epochs_100.pdparam" \
-            --output "$WEIGHTS"
+            --output "$UCLOUD_WEIGHTS"
+          test "$(git hash-object "$UCLOUD_WEIGHTS")" = "$UCLOUDNET_WEIGHT_BLOB"
 
-          ACTUAL_BLOB="$(git hash-object "$WEIGHTS")"
-          test "$ACTUAL_BLOB" = "$UCLOUDNET_WEIGHT_BLOB"
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://huggingface.co/Realcat/skywater_seg/resolve/${SKYWATER_REVISION}/model.safetensors?download=true" \
+            --output "$SKY_WEIGHTS"
+          echo "${SKYWATER_SHA256}  ${SKY_WEIGHTS}" | shasum -a 256 -c -
 
           python "$APP_DIR/tools/build_ucloudnet_coreml.py" \
-            --weights "$WEIGHTS" \
-            --output "$MODEL"
+            --weights "$UCLOUD_WEIGHTS" \
+            --output "$CLOUD_MODEL"
+          python "$APP_DIR/tools/build_sky_gate_coreml.py" \
+            --weights "$SKY_WEIGHTS" \
+            --output "$SKY_MODEL"
 
-          test -d "$MODEL"
-          test -f "$MODEL/Manifest.json"
+          test -f "$CLOUD_MODEL/Manifest.json"
+          test -f "$SKY_MODEL/Manifest.json"
 
       - name: Stamp exact build identity
         shell: bash
@@ -114,7 +127,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:12}"
           cat > "$APP_DIR/iphone/Sources/BuildInfo.swift" <<EOF
           enum BuildInfo {
-              static let version = "0.2.0"
+              static let version = "0.3.0"
               static let gitSHA = "$SHORT_SHA"
           }
           EOF
@@ -164,10 +177,7 @@ jobs:
             build
 
           APP_PATH="$(find "$DEVICE_DERIVED/Build/Products" -type d -path '*Release-iphoneos/CloudWeightLab.app' | head -n 1)"
-          if [ -z "$APP_PATH" ]; then
-            echo 'CloudWeightLab.app was not produced.' >&2
-            exit 1
-          fi
+          test -n "$APP_PATH"
           echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
 
       - name: Verify packaged app contract
@@ -178,9 +188,8 @@ jobs:
           test "$BUNDLE_ID" = 'com.rzbck.cloudweightlab'
           /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$APP_PATH/Info.plist" >/dev/null
           grep -Fq "${GITHUB_SHA:0:12}" "$APP_DIR/iphone/Sources/BuildInfo.swift"
-
-          COMPILED_MODEL="$(find "$APP_PATH" -type d -name 'CloudSegmentation.mlmodelc' -print -quit)"
-          test -n "$COMPILED_MODEL"
+          test -n "$(find "$APP_PATH" -type d -name 'CloudSegmentation.mlmodelc' -print -quit)"
+          test -n "$(find "$APP_PATH" -type d -name 'SkySegmentation.mlmodelc' -print -quit)"
 
       - name: Package exact-SHA IPA
         shell: bash
@@ -199,12 +208,14 @@ jobs:
           cat > "$OUT/BUILD-METADATA.json" <<EOF
           {
             "app": "Cloud Weight Lab",
-            "version": "0.2.0",
+            "version": "0.3.0",
             "sha": "$GITHUB_SHA",
             "bundle_id": "com.rzbck.cloudweightlab",
             "artifact": "$IPA",
             "segmentation_engine": "ucloudnet-k2-day-coreml-v2",
+            "sky_gate_engine": "skywater-segformer-b2-coreml-v3",
             "ucloudnet_source_commit": "$UCLOUDNET_COMMIT",
+            "skywater_source_revision": "$SKYWATER_REVISION",
             "device_validation": false
           }
           EOF

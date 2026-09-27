@@ -33,17 +33,62 @@ final class CloudTemporalStabilizerTests: XCTestCase {
         XCTAssertLessThan(second.estimate.midpointKilograms, 500_000)
     }
 
-    func testSingleMissingAnalysisDoesNotBlinkTrack() {
+    func testSingleMissingAnalysisIsHiddenButIdentityRecovers() throws {
+        let stabilizer = CloudTemporalStabilizer()
+
+        let first = try XCTUnwrap(
+            stabilizer.update(raw: [
+                detection(id: 0, x: 0.50, y: 0.45, mass: 220_000)
+            ]).first
+        )
+
+        let oneMiss = stabilizer.update(raw: [])
+        XCTAssertTrue(oneMiss.isEmpty)
+        XCTAssertEqual(stabilizer.lastStats.hiddenMissedTracks, 1)
+        XCTAssertEqual(stabilizer.lastStats.activeTracks, 1)
+
+        let recovered = try XCTUnwrap(
+            stabilizer.update(raw: [
+                detection(id: 9, x: 0.515, y: 0.455, mass: 225_000)
+            ]).first
+        )
+        XCTAssertEqual(recovered.id, first.id)
+        XCTAssertEqual(stabilizer.lastStats.hiddenMissedTracks, 0)
+    }
+
+    func testTwoMissesRemoveTrack() {
         let stabilizer = CloudTemporalStabilizer()
 
         _ = stabilizer.update(raw: [
             detection(id: 0, x: 0.50, y: 0.45, mass: 220_000)
         ])
-        let oneMiss = stabilizer.update(raw: [])
-        let twoMisses = stabilizer.update(raw: [])
+        _ = stabilizer.update(raw: [])
+        _ = stabilizer.update(raw: [])
 
-        XCTAssertEqual(oneMiss.count, 1)
-        XCTAssertTrue(twoMisses.isEmpty)
+        XCTAssertEqual(stabilizer.lastStats.activeTracks, 0)
+    }
+
+    func testTwoNearbyCloudsDoNotSwapIdsWhenInputOrderChanges() throws {
+        let stabilizer = CloudTemporalStabilizer()
+
+        let first = stabilizer.update(raw: [
+            detection(id: 0, x: 0.18, y: 0.30, mass: 160_000),
+            detection(id: 1, x: 0.58, y: 0.30, mass: 120_000)
+        ])
+        XCTAssertEqual(first.count, 2)
+
+        let leftID = try XCTUnwrap(first.min(by: { $0.observation.centroid.x < $1.observation.centroid.x })?.id)
+        let rightID = try XCTUnwrap(first.max(by: { $0.observation.centroid.x < $1.observation.centroid.x })?.id)
+
+        let second = stabilizer.update(raw: [
+            detection(id: 7, x: 0.56, y: 0.31, mass: 130_000),
+            detection(id: 8, x: 0.20, y: 0.31, mass: 170_000)
+        ])
+
+        let leftSecond = try XCTUnwrap(second.min(by: { $0.observation.centroid.x < $1.observation.centroid.x }))
+        let rightSecond = try XCTUnwrap(second.max(by: { $0.observation.centroid.x < $1.observation.centroid.x }))
+        XCTAssertEqual(leftSecond.id, leftID)
+        XCTAssertEqual(rightSecond.id, rightID)
     }
 
     private func detection(

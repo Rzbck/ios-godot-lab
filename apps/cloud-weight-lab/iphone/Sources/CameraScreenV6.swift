@@ -82,28 +82,19 @@ struct CameraScreenV6: View {
 
             Spacer()
 
-            Button {
-                switch camera.apiState {
-                case .paired:
-                    camera.unpairDiagnosticsAPI()
-                default:
-                    camera.armDiagnosticsAPI()
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(apiColor)
-                        .frame(width: 6, height: 6)
-                    Text(apiLabel)
-                        .font(.system(size: 9, weight: .black, design: .rounded))
-                        .tracking(0.45)
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .background(.black.opacity(0.35), in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(0.13), lineWidth: 0.8))
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(syncColor)
+                    .frame(width: 6, height: 6)
+                Text(syncLabel)
+                    .font(.system(size: 8.5, weight: .black, design: .rounded))
+                    .tracking(0.4)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.28), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.10), lineWidth: 0.8))
+            .allowsHitTesting(false)
         }
     }
 
@@ -153,9 +144,7 @@ struct CameraScreenV6: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(.black.opacity(0.58), in: Capsule())
-        .overlay(
-            Capsule().stroke(color.opacity(0.85), lineWidth: 0.8)
-        )
+        .overlay(Capsule().stroke(color.opacity(0.85), lineWidth: 0.8))
     }
 
     @ViewBuilder
@@ -184,6 +173,10 @@ struct CameraScreenV6: View {
 
                 Spacer(minLength: 4)
 
+                if telemetry.lowLightMode {
+                    Text("LOW LIGHT")
+                        .foregroundStyle(.yellow.opacity(0.90))
+                }
                 Text(String(format: "CIEL %.0f%%", telemetry.skyCoveragePercent))
                 Text(String(format: "NUAGE %.0f%%", telemetry.cloudCoveragePercent))
             }
@@ -195,21 +188,19 @@ struct CameraScreenV6: View {
         }
     }
 
-    private var apiLabel: String {
+    private var syncLabel: String {
         switch camera.apiState {
-        case .stopped: return "API"
-        case .ready: return "API"
-        case .pairing: return "PAIR"
-        case .paired: return "LINK"
-        case .failed: return "API !"
+        case .paired: return "SYNC AUTO"
+        case .failed: return "SYNC !"
+        case .stopped, .ready, .pairing: return "SYNC READY"
         }
     }
 
-    private var apiColor: Color {
+    private var syncColor: Color {
         switch camera.apiState {
         case .paired: return .green
-        case .pairing: return .yellow
         case .failed: return .red
+        case .pairing: return .yellow
         case .ready, .stopped: return .white.opacity(0.55)
         }
     }

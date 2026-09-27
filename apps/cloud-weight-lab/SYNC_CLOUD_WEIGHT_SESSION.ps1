@@ -291,7 +291,14 @@ if ($AllSessions) {
     $Selected = @($Sessions | Where-Object { [string]$_.sessionID -eq $SessionId })
     if ($Selected.Count -eq 0) { throw "Session '$SessionId' introuvable." }
 } else {
-    $Selected = @($Sessions[0])
+    $FinishedSessions = @($Sessions | Where-Object { [string]$_.state -ne 'recording' })
+    if ($FinishedSessions.Count -gt 0) {
+        $Selected = @($FinishedSessions[0])
+        Write-Host "Session terminée la plus récente sélectionnée : $($FinishedSessions[0].sessionID)" -ForegroundColor DarkCyan
+    } else {
+        $Selected = @($Sessions[0])
+        Write-Host 'Aucune session terminée trouvée ; synchronisation de la session active.' -ForegroundColor Yellow
+    }
 }
 
 $LastOutput = $null

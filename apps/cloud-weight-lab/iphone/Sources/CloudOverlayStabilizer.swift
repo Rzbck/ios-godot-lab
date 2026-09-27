@@ -8,7 +8,7 @@ final class CloudOverlayStabilizer {
     private var lastOutput: CGImage?
     private var missingFrames = 0
 
-    private let historyLimit = 3
+    private let historyLimit = 1
     private let resetChangePercent = 18.0
 
     func reset() {
@@ -52,13 +52,7 @@ final class CloudOverlayStabilizer {
             history.removeFirst(history.count - historyLimit)
         }
 
-        let displayMask: [UInt8]
-        if history.count < historyLimit {
-            displayMask = current
-        } else {
-            displayMask = majorityMask(history)
-        }
-
+        let displayMask = current
         let output = makeOverlay(
             mask: displayMask,
             currentImage: image,
@@ -98,21 +92,6 @@ final class CloudOverlayStabilizer {
             changed += 1
         }
         return Double(changed) / Double(rhs.count) * 100
-    }
-
-    private func majorityMask(_ masks: [[UInt8]]) -> [UInt8] {
-        guard let first = masks.first else { return [] }
-        var result = [UInt8](repeating: 0, count: first.count)
-        let required = masks.count / 2 + 1
-
-        for index in first.indices {
-            var votes = 0
-            for mask in masks where mask[index] != 0 {
-                votes += 1
-            }
-            result[index] = votes >= required ? 1 : 0
-        }
-        return result
     }
 
     private func rgbaBytes(_ image: CGImage?) -> (bytes: CFData, pointer: UnsafePointer<UInt8>, row: Int, pixel: Int)? {
@@ -185,7 +164,7 @@ final class CloudOverlayStabilizer {
                 rgba[offset] = color.0
                 rgba[offset + 1] = color.1
                 rgba[offset + 2] = color.2
-                rgba[offset + 3] = boundary ? 238 : 28
+                rgba[offset + 3] = boundary ? 232 : 52
             }
         }
 

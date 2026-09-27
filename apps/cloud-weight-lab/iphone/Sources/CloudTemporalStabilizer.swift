@@ -61,8 +61,6 @@ final class CloudTemporalStabilizer {
         var matchedDetectionIndices = Set<Int>()
         var matches: [Int: MatchCandidate] = [:]
 
-        // Global greedy assignment: choose the strongest edge first instead of
-        // letting track array order decide who owns an ambiguous detection.
         for candidate in candidates.sorted(by: { $0.score > $1.score }) {
             guard !matchedTrackIndices.contains(candidate.trackIndex),
                   !matchedDetectionIndices.contains(candidate.detectionIndex) else {
@@ -109,9 +107,6 @@ final class CloudTemporalStabilizer {
             createdTracks += 1
         }
 
-        // A missed track remains internally for one analysis so it can reclaim
-        // its ID, but it is deliberately not rendered. This removes the ghost
-        // labels observed in V7 while preserving identity through one bad frame.
         let visible = tracks.filter { track in
             guard track.misses == 0 else { return false }
             return track.hits >= 2
@@ -138,8 +133,8 @@ final class CloudTemporalStabilizer {
         for trackIndex in tracks.indices {
             let existing = tracks[trackIndex]
             let predicted = CGPoint(
-                x: (existing.detection.observation.centroid.x + existing.velocity.x).clamped(0...1),
-                y: (existing.detection.observation.centroid.y + existing.velocity.y).clamped(0...1)
+                x: clampUnit(existing.detection.observation.centroid.x + existing.velocity.x),
+                y: clampUnit(existing.detection.observation.centroid.y + existing.velocity.y)
             )
 
             for detectionIndex in detections.indices {
@@ -204,8 +199,6 @@ final class CloudTemporalStabilizer {
             y: blend(track.velocity.y, measuredVelocity.y, alpha: 0.58)
         )
 
-        // Normal motion is still damped, but rapid motion catches up quickly.
-        // This keeps the label readable without visibly lagging behind a pan.
         let geometryAlpha = centroidDistance > 0.085 ? 0.90 : 0.70
         let measurementAlpha = centroidDistance > 0.085 ? 0.72 : 0.52
         let stableKind = stabilizedKind(track: &next, incoming: newObservation.kind)
@@ -295,6 +288,10 @@ final class CloudTemporalStabilizer {
         let union = lhsArea + rhsArea - intersectionArea
         guard union > 0 else { return 0 }
         return intersectionArea / union
+    }
+
+    private func clampUnit(_ value: CGFloat) -> CGFloat {
+        min(max(value, 0), 1)
     }
 
     private func blend(_ old: Double, _ new: Double, alpha: Double) -> Double {

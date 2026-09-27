@@ -4,6 +4,7 @@ import CoreImage
 import CoreML
 import Foundation
 import ImageIO
+import QuartzCore
 
 final class CloudAnalyzer {
     private struct Component {
@@ -30,7 +31,13 @@ final class CloudAnalyzer {
     private let cloudModel: MLModel?
     private let skyModel: MLModel?
 
+    private var timingPreprocessingMilliseconds = 0.0
+    private var timingSkyInferenceMilliseconds = 0.0
+    private var timingCloudInferenceMilliseconds = 0.0
+    private var timingSkyCoveragePercent = 0.0
+
     let loadError: String?
+    private(set) var lastTiming: CloudAnalyzerTiming?
 
     var isReady: Bool { cloudModel != nil && skyModel != nil }
 
@@ -75,6 +82,27 @@ final class CloudAnalyzer {
         sampleBuffer: CMSampleBuffer,
         fieldOfViewDegrees: Double
     ) -> CloudFrameAnalysis? {
+        let analysisStarted = CACurrentMediaTime()
+        timingPreprocessingMilliseconds = 0
+        timingSkyInferenceMilliseconds = 0
+        timingCloudInferenceMilliseconds = 0
+        timingSkyCoveragePercent = 0
+        lastTiming = nil
+
+        defer {
+            let totalMilliseconds = (CACurrentMediaTime() - analysisStarted) * 1_000
+            let knownMilliseconds = timingPreprocessingMilliseconds
+                + timingSkyInferenceMilliseconds
+                + timingCloudInferenceMilliseconds
+            lastTiming = CloudAnalyzerTiming(
+                preprocessingMilliseconds: timingPreprocessingMilliseconds,
+                skyInferenceMilliseconds: timingSkyInferenceMilliseconds,
+                cloudInferenceMilliseconds: timingCloudInferenceMilliseconds,
+                postprocessingMilliseconds: max(0, totalMilliseconds - knownMilliseconds),
+                skyCoveragePercent: timingSkyCoveragePercent
+            )
+        }
+
         guard let cloudModel,
               let skyModel,
               let cameraBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
@@ -116,6 +144,7 @@ final class CloudAnalyzer {
                 partial + (value >= skyProbabilityThreshold ? 1 : 0)
             }
         ) / Double(targetWidth * targetHeight)
+        timingSkyCoveragePercent = skyCoverage * 100
 
         guard skyCoverage >= minimumSkyCoverage else {
             return emptyAnalysis(fieldOfViewDegrees: fieldOfViewDegrees)
@@ -203,6 +232,11 @@ final class CloudAnalyzer {
         width: Int,
         height: Int
     ) -> [Double]? {
+        let started = CACurrentMediaTime()
+        defer {
+            timingCloudInferenceMilliseconds += (CACurrentMediaTime() - started) * 1_000
+        }
+
         let provider: MLDictionaryFeatureProvider
         do {
             provider = try MLDictionaryFeatureProvider(dictionary: [
@@ -233,6 +267,11 @@ final class CloudAnalyzer {
         width: Int,
         height: Int
     ) -> [Double]? {
+        let started = CACurrentMediaTime()
+        defer {
+            timingSkyInferenceMilliseconds += (CACurrentMediaTime() - started) * 1_000
+        }
+
         let provider: MLDictionaryFeatureProvider
         do {
             provider = try MLDictionaryFeatureProvider(dictionary: [
@@ -260,6 +299,11 @@ final class CloudAnalyzer {
         width: Int,
         height: Int
     ) -> CVPixelBuffer? {
+        let started = CACurrentMediaTime()
+        defer {
+            timingPreprocessingMilliseconds += (CACurrentMediaTime() - started) * 1_000
+        }
+
         var destination: CVPixelBuffer?
         let attributes: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
@@ -296,6 +340,11 @@ final class CloudAnalyzer {
         width: Int,
         height: Int
     ) -> MLMultiArray? {
+        let started = CACurrentMediaTime()
+        defer {
+            timingPreprocessingMilliseconds += (CACurrentMediaTime() - started) * 1_000
+        }
+
         guard CVPixelBufferGetWidth(pixelBuffer) == width,
               CVPixelBufferGetHeight(pixelBuffer) == height,
               let array = try? MLMultiArray(

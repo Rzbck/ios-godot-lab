@@ -2,7 +2,7 @@
 param(
     [string]$Repository = 'Rzbck/ios-godot-lab',
     [string]$Workflow = 'cloud-weight-lab-build.yml',
-    [string]$ExpectedBranch = 'fix/cloud-weight-realtime-v7-20260927',
+    [string]$ExpectedBranch = 'fix/cloud-weight-tracking-live-diag-v8-20260927',
     [int]$BuildTimeoutMinutes = 50,
     [switch]$NoAutoBuild,
     [switch]$OpenFolder

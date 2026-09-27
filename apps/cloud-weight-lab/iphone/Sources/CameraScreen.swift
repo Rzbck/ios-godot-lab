@@ -11,7 +11,7 @@ struct CameraScreen: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            CameraPreview(session: camera.session)
+            CameraPreview(session: camera.session, device: camera.activeCamera)
                 .ignoresSafeArea()
                 .opacity(camera.status == .running ? 1 : 0.15)
 
@@ -495,18 +495,6 @@ struct CameraScreen: View {
         }
     }
 
-    private func shortOrientation(_ orientation: String) -> String {
-        switch orientation {
-        case "portrait": return "PORTRAIT"
-        case "portraitUpsideDown": return "P. INV."
-        case "landscapeLeft": return "LAND. G"
-        case "landscapeRight": return "LAND. D"
-        case "faceUp": return "À PLAT ↑"
-        case "faceDown": return "À PLAT ↓"
-        default: return "?"
-        }
-    }
-
     private func massString(_ kilograms: Double) -> String {
         let tonnes = kilograms / 1_000.0
         if tonnes >= 1_000_000 {
@@ -526,5 +514,17 @@ struct CameraScreen: View {
 
     private func clamped(_ value: CGFloat, lower: CGFloat, upper: CGFloat) -> CGFloat {
         min(max(value, lower), upper)
+    }
+
+    private func shortOrientation(_ value: String) -> String {
+        switch value {
+        case "portrait": return "P"
+        case "portraitUpsideDown": return "P↑"
+        case "landscapeLeft": return "L←"
+        case "landscapeRight": return "L→"
+        case "faceUp": return "FACE↑"
+        case "faceDown": return "FACE↓"
+        default: return "?"
+        }
     }
 }

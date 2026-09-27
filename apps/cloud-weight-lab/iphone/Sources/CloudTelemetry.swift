@@ -3,25 +3,47 @@ import Foundation
 import OSLog
 import QuartzCore
 
+struct CloudAnalyzerTiming: Equatable {
+    let preprocessingMilliseconds: Double
+    let skyInferenceMilliseconds: Double
+    let cloudInferenceMilliseconds: Double
+    let postprocessingMilliseconds: Double
+    let skyCoveragePercent: Double
+}
+
 struct CloudTelemetrySnapshot: Equatable {
     let analysisMilliseconds: Double
+    let preprocessingMilliseconds: Double
+    let skyInferenceMilliseconds: Double
+    let cloudInferenceMilliseconds: Double
+    let postprocessingMilliseconds: Double
     let effectiveHz: Double
     let maskChangePercent: Double
     let cloudCoveragePercent: Double
+    let skyCoveragePercent: Double
     let coverageDeltaPercent: Double
     let rawDetections: Int
     let stabilizedDetections: Int
     let droppedFrames: Int
     let throttledFrames: Int
     let thermalState: String
+    let orientation: String
 }
 
 final class CloudTelemetryMonitor {
+    private struct Sample {
+        let elapsedSeconds: Double
+        let snapshot: CloudTelemetrySnapshot
+    }
+
     private let logger = Logger(
         subsystem: "com.rzbck.cloudweightlab",
         category: "telemetry"
     )
+    private let sessionStarted = CACurrentMediaTime()
+    private let maxSamples = 90
 
+    private var samples: [Sample] = []
     private var previousCompletionTime: CFTimeInterval?
     private var previousCoverage: Double?
     private var previousMask: [UInt8]?
@@ -30,6 +52,7 @@ final class CloudTelemetryMonitor {
     private var lastLogTime = 0.0
 
     func reset() {
+        samples.removeAll(keepingCapacity: true)
         previousCompletionTime = nil
         previousCoverage = nil
         previousMask = nil
@@ -40,11 +63,13 @@ final class CloudTelemetryMonitor {
 
     func snapshot(
         analysisDurationSeconds: Double,
+        analyzerTiming: CloudAnalyzerTiming?,
         analysis: CloudFrameAnalysis?,
         rawDetections: Int,
         stabilizedDetections: Int,
         droppedFrames: Int,
-        throttledFrames: Int
+        throttledFrames: Int,
+        orientation: String
     ) -> CloudTelemetrySnapshot {
         let now = CACurrentMediaTime()
         let milliseconds = analysisDurationSeconds * 1_000
@@ -77,36 +102,114 @@ final class CloudTelemetryMonitor {
 
         let snapshot = CloudTelemetrySnapshot(
             analysisMilliseconds: smoothedAnalysisMilliseconds ?? milliseconds,
+            preprocessingMilliseconds: analyzerTiming?.preprocessingMilliseconds ?? 0,
+            skyInferenceMilliseconds: analyzerTiming?.skyInferenceMilliseconds ?? 0,
+            cloudInferenceMilliseconds: analyzerTiming?.cloudInferenceMilliseconds ?? 0,
+            postprocessingMilliseconds: analyzerTiming?.postprocessingMilliseconds ?? 0,
             effectiveHz: smoothedHz ?? 0,
             maskChangePercent: maskChange,
             cloudCoveragePercent: coverage * 100,
+            skyCoveragePercent: analyzerTiming?.skyCoveragePercent ?? 0,
             coverageDeltaPercent: coverageDelta,
             rawDetections: rawDetections,
             stabilizedDetections: stabilizedDetections,
             droppedFrames: droppedFrames,
             throttledFrames: throttledFrames,
-            thermalState: thermalStateName(ProcessInfo.processInfo.thermalState)
+            thermalState: thermalStateName(ProcessInfo.processInfo.thermalState),
+            orientation: orientation
         )
+
+        samples.append(
+            Sample(
+                elapsedSeconds: now - sessionStarted,
+                snapshot: snapshot
+            )
+        )
+        if samples.count > maxSamples {
+            samples.removeFirst(samples.count - maxSamples)
+        }
 
         if now - lastLogTime >= 2.0 {
             lastLogTime = now
             let line = String(
-                format: "pipeline=%.0fms hz=%.2f maskDelta=%.1f%% coverage=%.1f%% coverageDelta=%.1f%% raw=%d stable=%d drop=%d throttle=%d thermal=%@",
+                format: "pipeline=%.0fms prep=%.0fms sky=%.0fms cloud=%.0fms post=%.0fms hz=%.2f maskDelta=%.1f%% cloudCov=%.1f%% skyCov=%.1f%% raw=%d stable=%d drop=%d throttle=%d thermal=%@ orientation=%@",
                 snapshot.analysisMilliseconds,
+                snapshot.preprocessingMilliseconds,
+                snapshot.skyInferenceMilliseconds,
+                snapshot.cloudInferenceMilliseconds,
+                snapshot.postprocessingMilliseconds,
                 snapshot.effectiveHz,
                 snapshot.maskChangePercent,
                 snapshot.cloudCoveragePercent,
-                snapshot.coverageDeltaPercent,
+                snapshot.skyCoveragePercent,
                 snapshot.rawDetections,
                 snapshot.stabilizedDetections,
                 snapshot.droppedFrames,
                 snapshot.throttledFrames,
-                snapshot.thermalState
+                snapshot.thermalState,
+                snapshot.orientation
             )
             logger.info("\(line, privacy: .public)")
         }
 
         return snapshot
+    }
+
+    func makeReport(buildSHA: String) -> String {
+        guard !samples.isEmpty else {
+            return [
+                "CLOUD_WEIGHT_DIAG_V5",
+                "build=\(buildSHA)",
+                "samples=0",
+                "privacy=no_images,no_location,no_device_id,no_camera_frames"
+            ].joined(separator: "\n")
+        }
+
+        let snapshots = samples.map(\.snapshot)
+        let pipelines = snapshots.map(\.analysisMilliseconds)
+        let preps = snapshots.map(\.preprocessingMilliseconds)
+        let skies = snapshots.map(\.skyInferenceMilliseconds)
+        let clouds = snapshots.map(\.cloudInferenceMilliseconds)
+        let posts = snapshots.map(\.postprocessingMilliseconds)
+        let maskChanges = snapshots.map(\.maskChangePercent)
+        let rates = snapshots.map(\.effectiveHz).filter { $0 > 0 }
+        let droppedTotal = snapshots.reduce(0) { $0 + $1.droppedFrames }
+        let throttledTotal = snapshots.reduce(0) { $0 + $1.throttledFrames }
+        let latest = snapshots.last!
+
+        var lines = [
+            "CLOUD_WEIGHT_DIAG_V5",
+            "build=\(buildSHA)",
+            "samples=\(samples.count)",
+            "privacy=no_images,no_location,no_device_id,no_camera_frames",
+            "orientation_last=\(latest.orientation)",
+            "thermal_last=\(latest.thermalState)",
+            "pipeline_ms_avg=\(number(average(pipelines), decimals: 1))",
+            "pipeline_ms_p95=\(number(percentile(pipelines, fraction: 0.95), decimals: 1))",
+            "pipeline_ms_max=\(number(pipelines.max() ?? 0, decimals: 1))",
+            "preprocess_ms_avg=\(number(average(preps), decimals: 1))",
+            "sky_ms_avg=\(number(average(skies), decimals: 1))",
+            "cloud_ms_avg=\(number(average(clouds), decimals: 1))",
+            "post_ms_avg=\(number(average(posts), decimals: 1))",
+            "effective_hz_avg=\(number(average(rates), decimals: 2))",
+            "mask_delta_pct_avg=\(number(average(maskChanges), decimals: 2))",
+            "mask_delta_pct_p95=\(number(percentile(maskChanges, fraction: 0.95), decimals: 2))",
+            "drop_total=\(droppedTotal)",
+            "throttle_total=\(throttledTotal)",
+            "last_cloud_coverage_pct=\(number(latest.cloudCoveragePercent, decimals: 1))",
+            "last_sky_coverage_pct=\(number(latest.skyCoveragePercent, decimals: 1))",
+            "last_raw_to_stable=\(latest.rawDetections)->\(latest.stabilizedDetections)",
+            "series_last_20:"
+        ]
+
+        for sample in samples.suffix(20) {
+            let value = sample.snapshot
+            lines.append(
+                "t=\(number(sample.elapsedSeconds, decimals: 1))s total=\(number(value.analysisMilliseconds, decimals: 0)) prep=\(number(value.preprocessingMilliseconds, decimals: 0)) sky=\(number(value.skyInferenceMilliseconds, decimals: 0)) cloud=\(number(value.cloudInferenceMilliseconds, decimals: 0)) post=\(number(value.postprocessingMilliseconds, decimals: 0)) hz=\(number(value.effectiveHz, decimals: 2)) mask=\(number(value.maskChangePercent, decimals: 1)) cloudCov=\(number(value.cloudCoveragePercent, decimals: 1)) skyCov=\(number(value.skyCoveragePercent, decimals: 1)) raw=\(value.rawDetections) stable=\(value.stabilizedDetections) drop=\(value.droppedFrames) throttle=\(value.throttledFrames) thermal=\(value.thermalState) orient=\(value.orientation)"
+            )
+        }
+
+        return lines.joined(separator: "\n")
     }
 
     private func exponentialAverage(
@@ -116,6 +219,27 @@ final class CloudTelemetryMonitor {
     ) -> Double {
         guard let previous else { return value }
         return previous + (value - previous) * alpha
+    }
+
+    private func average(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private func percentile(_ values: [Double], fraction: Double) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let index = Int((Double(sorted.count - 1) * fraction.clamped(0...1)).rounded())
+        return sorted[index]
+    }
+
+    private func number(_ value: Double, decimals: Int) -> String {
+        String(
+            format: "%.*f",
+            locale: Locale(identifier: "en_US_POSIX"),
+            decimals,
+            value
+        )
     }
 
     private func alphaMask(from image: CGImage) -> [UInt8]? {

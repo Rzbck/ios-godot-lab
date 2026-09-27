@@ -84,9 +84,21 @@ final class CloudAnalyzer {
         }
 
         do {
-            portraitCloudModel = try MLModel(contentsOf: portraitURL, configuration: configuration)
-            landscapeCloudModel = try MLModel(contentsOf: landscapeURL, configuration: configuration)
-            skyModel = try MLModel(contentsOf: skyURL, configuration: configuration)
+            let loadedPortraitCloudModel = try MLModel(
+                contentsOf: portraitURL,
+                configuration: configuration
+            )
+            let loadedLandscapeCloudModel = try MLModel(
+                contentsOf: landscapeURL,
+                configuration: configuration
+            )
+            let loadedSkyModel = try MLModel(
+                contentsOf: skyURL,
+                configuration: configuration
+            )
+            portraitCloudModel = loadedPortraitCloudModel
+            landscapeCloudModel = loadedLandscapeCloudModel
+            skyModel = loadedSkyModel
             loadError = nil
         } catch {
             portraitCloudModel = nil

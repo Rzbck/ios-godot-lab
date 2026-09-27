@@ -118,9 +118,12 @@ jobs:
             "https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512/resolve/${ADE20K_SEGFORMER_REVISION}/model.safetensors?download=true" \
             --output "$ADE_WEIGHTS"
           echo "${ADE20K_SEGFORMER_SHA256}  ${ADE_WEIGHTS}" | shasum -a 256 -c -
+          grep -Fq '"0": "wall"' "$ADE_CONFIG"
+          grep -Fq '"1": "building"' "$ADE_CONFIG"
           grep -Fq '"2": "sky"' "$ADE_CONFIG"
           grep -Fq '"4": "tree"' "$ADE_CONFIG"
           grep -Fq '"12": "person"' "$ADE_CONFIG"
+          grep -Fq '"17": "plant"' "$ADE_CONFIG"
 
           python "$APP_DIR/tools/build_ucloudnet_coreml.py" \
             --weights "$UCLOUD_WEIGHTS" \
@@ -144,7 +147,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:12}"
           cat > "$APP_DIR/iphone/Sources/BuildInfo.swift" <<EOF
           enum BuildInfo {
-              static let version = "0.11.0"
+              static let version = "0.12.0"
               static let gitSHA = "$SHORT_SHA"
           }
           EOF
@@ -206,7 +209,7 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$APP_PATH/Info.plist" >/dev/null
           /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$APP_PATH/Info.plist" >/dev/null
           grep -Fq "${GITHUB_SHA:0:12}" "$APP_DIR/iphone/Sources/BuildInfo.swift"
-          grep -Fq '0.11.0' "$APP_DIR/iphone/Sources/BuildInfo.swift"
+          grep -Fq '0.12.0' "$APP_DIR/iphone/Sources/BuildInfo.swift"
           test -n "$(find "$APP_PATH" -type d -name 'CloudSegmentation.mlmodelc' -print -quit)"
           test -n "$(find "$APP_PATH" -type d -name 'CloudSegmentationLandscape.mlmodelc' -print -quit)"
           test -n "$(find "$APP_PATH" -type d -name 'SkySegmentation.mlmodelc' -print -quit)"
@@ -228,15 +231,18 @@ jobs:
           cat > "$OUT/BUILD-METADATA.json" <<EOF
           {
             "app": "Cloud Weight Lab",
-            "version": "0.11.0",
+            "version": "0.12.0",
             "sha": "$GITHUB_SHA",
             "bundle_id": "com.rzbck.cloudweightlab",
             "artifact": "$IPA",
             "segmentation_engine": "ucloudnet-k2-day-coreml-v2-portrait-landscape",
-            "sky_gate_engine": "nvidia-segformer-b0-ade20k-sky-coreml-v9",
+            "sky_gate_engine": "nvidia-segformer-b0-ade20k-semantic-sky-blockers-v12",
             "stabilization_engine": "global-centroid-iou-kind-hysteresis-v11",
             "mass_estimator": "angle-aware-coremotion-fov-priors-v11",
-            "telemetry": "persistent-session-recorder-smart-bursts-v11",
+            "telemetry": "persistent-session-recorder-semantic-lowlight-concurrency-v12",
+            "inference": "parallel-sky-cloud-with-thermal-fallback-v12",
+            "low_light": "avfoundation-low-light-boost-plus-hysteresis-v12",
+            "diagnostics_sync": "persistent-keychain-autosync-resume-validate-v12",
             "orientation_support": "portrait-landscape-rotation-coordinator-v6",
             "ucloudnet_source_commit": "$UCLOUDNET_COMMIT",
             "sky_gate_source_revision": "$ADE20K_SEGFORMER_REVISION",

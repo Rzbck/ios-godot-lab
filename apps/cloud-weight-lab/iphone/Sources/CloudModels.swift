@@ -1,5 +1,5 @@
-import Foundation
 import CoreGraphics
+import Foundation
 
 enum CloudKind: String, CaseIterable {
     case cumulus = "Cumulus"
@@ -39,14 +39,28 @@ enum CloudKind: String, CaseIterable {
     }
 }
 
-struct CloudFrameAnalysis: Equatable {
-    let timestamp: Date
+enum SegmentationEngine: String {
+    case ucloudNetCoreML = "UCLOUDNET · CORE ML"
+}
+
+struct CloudObservation: Equatable, Identifiable {
+    let id: Int
     let kind: CloudKind
     let confidence: Double
     let coverage: Double
     let bounds: CGRect
+    let centroid: CGPoint
     let averageBrightness: Double
     let averageSaturation: Double
+    let fieldOfViewDegrees: Double
+}
+
+struct CloudFrameAnalysis {
+    let timestamp: Date
+    let observations: [CloudObservation]
+    let totalCoverage: Double
+    let overlayImage: CGImage?
+    let engine: SegmentationEngine
     let fieldOfViewDegrees: Double
 }
 
@@ -57,6 +71,13 @@ struct CloudMassEstimate: Equatable {
     let estimatedWidthMeters: Double
     let estimatedHeightMeters: Double
     let confidence: Double
+}
+
+struct CloudDetection: Equatable, Identifiable {
+    let observation: CloudObservation
+    let estimate: CloudMassEstimate
+
+    var id: Int { observation.id }
 }
 
 extension Double {

@@ -11,8 +11,8 @@ on:
       - '.github/workflows/cloud-weight-lab-build.yml'
   push:
     branches:
-      - 'feat/cloud-weight-lab-*'
-      - 'fix/cloud-weight-lab-*'
+      - 'feat/cloud-weight-*'
+      - 'fix/cloud-weight-*'
     paths:
       - 'apps/cloud-weight-lab/**'
       - '.github/workflows/cloud-weight-lab-build.yml'
@@ -28,12 +28,14 @@ env:
   APP_DIR: apps/cloud-weight-lab
   XCODEGEN_VERSION: '2.46.0'
   XCODEGEN_SHA256: '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806'
+  UCLOUDNET_COMMIT: '799f25917361663a1ce2cf210c14a01c1ae45f15'
+  UCLOUDNET_WEIGHT_BLOB: '12bc7b57460e1820bc303c7513c8f2eee9b4a47f'
 
 jobs:
   build:
-    name: Compile, test-build and package unsigned IPA
+    name: Build Core ML segmentation and package unsigned IPA
     runs-on: macos-26
-    timeout-minutes: 25
+    timeout-minutes: 40
 
     steps:
       - name: Checkout exact commit
@@ -49,6 +51,7 @@ jobs:
           sw_vers
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+          python3 --version
 
       - name: Install pinned XcodeGen
         shell: bash
@@ -67,6 +70,35 @@ jobs:
           echo "XCODEGEN_BIN=$XCODEGEN_BIN" >> "$GITHUB_ENV"
           "$XCODEGEN_BIN" --version
 
+      - name: Build pinned UCloudNet Core ML model
+        shell: bash
+        run: |
+          set -euo pipefail
+          VENV="$RUNNER_TEMP/cloudweight-ml"
+          WEIGHTS="$RUNNER_TEMP/ucloudnet-day.pdparam"
+          MODEL="$GITHUB_WORKSPACE/$APP_DIR/iphone/Models/CloudSegmentation.mlpackage"
+
+          python3 -m venv "$VENV"
+          source "$VENV/bin/activate"
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check \
+            'torch==2.7.0' \
+            'coremltools==9.0'
+
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://raw.githubusercontent.com/Att100/UCloudNet/${UCLOUDNET_COMMIT}/weights/ucloudnet_k_2_aux_lr_decay_d_epochs_100.pdparam" \
+            --output "$WEIGHTS"
+
+          ACTUAL_BLOB="$(git hash-object "$WEIGHTS")"
+          test "$ACTUAL_BLOB" = "$UCLOUDNET_WEIGHT_BLOB"
+
+          python "$APP_DIR/tools/build_ucloudnet_coreml.py" \
+            --weights "$WEIGHTS" \
+            --output "$MODEL"
+
+          test -d "$MODEL"
+          test -f "$MODEL/Manifest.json"
+
       - name: Stamp exact build identity
         shell: bash
         run: |
@@ -74,7 +106,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:12}"
           cat > "$APP_DIR/iphone/Sources/BuildInfo.swift" <<EOF
           enum BuildInfo {
-              static let version = "0.1.0"
+              static let version = "0.2.0"
               static let gitSHA = "$SHORT_SHA"
           }
           EOF
@@ -139,6 +171,9 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$APP_PATH/Info.plist" >/dev/null
           grep -Fq "${GITHUB_SHA:0:12}" "$APP_DIR/iphone/Sources/BuildInfo.swift"
 
+          COMPILED_MODEL="$(find "$APP_PATH" -type d -name 'CloudSegmentation.mlmodelc' -print -quit)"
+          test -n "$COMPILED_MODEL"
+
       - name: Package exact-SHA IPA
         shell: bash
         run: |
@@ -156,11 +191,12 @@ jobs:
           cat > "$OUT/BUILD-METADATA.json" <<EOF
           {
             "app": "Cloud Weight Lab",
-            "version": "0.1.0",
+            "version": "0.2.0",
             "sha": "$GITHUB_SHA",
             "bundle_id": "com.rzbck.cloudweightlab",
             "artifact": "$IPA",
-            "segmentation_engine": "local-heuristic-v1",
+            "segmentation_engine": "ucloudnet-k2-day-coreml-v2",
+            "ucloudnet_source_commit": "$UCLOUDNET_COMMIT",
             "device_validation": false
           }
           EOF

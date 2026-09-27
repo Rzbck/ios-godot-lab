@@ -16,7 +16,7 @@ final class CameraService: NSObject, ObservableObject {
 
     @Published private(set) var status: Status = .idle
     @Published private(set) var analysis: CloudFrameAnalysis?
-    @Published private(set) var estimate: CloudMassEstimate?
+    @Published private(set) var detections: [CloudDetection] = []
 
     private let analyzer = CloudAnalyzer()
     private let estimator = CloudMassEstimator()
@@ -25,8 +25,14 @@ final class CameraService: NSObject, ObservableObject {
     private var configured = false
     private var lastAnalysisTime = 0.0
     private var fieldOfViewDegrees = 65.0
+    private var analysisInFlight = false
 
     func requestAndStart() {
+        guard analyzer.isReady else {
+            status = .failed(analyzer.loadError ?? "Modèle de segmentation indisponible")
+            return
+        }
+
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             configureAndStart()
@@ -64,7 +70,11 @@ final class CameraService: NSObject, ObservableObject {
                 self.session.beginConfiguration()
                 self.session.sessionPreset = .hd1280x720
 
-                guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+                guard let camera = AVCaptureDevice.default(
+                    .builtInWideAngleCamera,
+                    for: .video,
+                    position: .back
+                ) else {
                     self.finishConfigurationFailure("Caméra arrière indisponible")
                     return
                 }
@@ -85,7 +95,8 @@ final class CameraService: NSObject, ObservableObject {
                 let output = AVCaptureVideoDataOutput()
                 output.alwaysDiscardsLateVideoFrames = true
                 output.videoSettings = [
-                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+                    kCVPixelBufferPixelFormatTypeKey as String:
+                        kCVPixelFormatType_32BGRA
                 ]
                 output.setSampleBufferDelegate(self, queue: self.analysisQueue)
 
@@ -122,18 +133,25 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         from connection: AVCaptureConnection
     ) {
         let now = CACurrentMediaTime()
-        guard now - lastAnalysisTime >= 0.125 else { return }
+        guard now - lastAnalysisTime >= 0.18, !analysisInFlight else { return }
         lastAnalysisTime = now
+        analysisInFlight = true
 
         let nextAnalysis = analyzer.analyze(
             sampleBuffer: sampleBuffer,
             fieldOfViewDegrees: fieldOfViewDegrees
         )
-        let nextEstimate = nextAnalysis.flatMap { estimator.estimate(from: $0) }
+        let nextDetections = nextAnalysis?.observations.compactMap { observation in
+            estimator.estimate(from: observation).map {
+                CloudDetection(observation: observation, estimate: $0)
+            }
+        } ?? []
+
+        analysisInFlight = false
 
         DispatchQueue.main.async { [weak self] in
             self?.analysis = nextAnalysis
-            self?.estimate = nextEstimate
+            self?.detections = nextDetections
         }
     }
 }
@@ -154,7 +172,8 @@ struct CameraPreview: UIViewRepresentable {
         view.backgroundColor = .black
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
-        if let connection = view.previewLayer.connection, connection.isVideoOrientationSupported {
+        if let connection = view.previewLayer.connection,
+           connection.isVideoOrientationSupported {
             connection.videoOrientation = .portrait
         }
         return view

@@ -4,236 +4,233 @@ Date : **2026-09-27**
 
 ## Objectif
 
-Application iPhone personnelle qui reconnaît uniquement les nuages présents dans le ciel, les détoure, suit plusieurs régions et affiche une estimation pédagogique de masse d'eau. Priorités actuelles : **latence, stabilité temporelle, diagnostic mesurable sur iPhone 13 mini**.
+Application iPhone personnelle qui reconnaît uniquement les nuages réellement présents dans le ciel, détoure plusieurs régions, les suit temporellement et affiche une estimation pédagogique de masse d'eau/ glace condensée. Priorités V6 : **rotation portrait/paysage correcte, UI discrète, lecture visuelle différenciée, diagnostic local récupérable directement depuis Windows sans copier-coller**.
 
 ## Identité chantier
 
 - repository : `Rzbck/ios-godot-lab` ;
 - application : `apps/cloud-weight-lab` ;
-- branche active : `fix/cloud-weight-diagnostics-v5-20260927` ;
-- base : V4 final `111b5397fcf0292debec786c93ae7d4e52206a68` ;
-- dernier SHA applicatif V5 CI validé avant ce HANDOFF : `aebf7186d5de891c2e8a67476ce7d55122752f2b` ;
-- run CI : `36305289852` — **SUCCESS** ;
+- branche active : `fix/cloud-weight-ux-visual-v6-20260927` ;
+- base fonctionnelle précédente : V5 CI validée au SHA `9d6db7547d1bb0042f00f84804364a3304f2e990` ;
+- dernier SHA applicatif V6 CI validé avant ce HANDOFF : `e85470c1d2671477b970cd0cd98df0bd90ec3146` ;
+- run CI : `36313670173` — **SUCCESS** ;
+- artifact de ce SHA : `cloud-weight-lab-e85470c1d2671477b970cd0cd98df0bd90ec3146` ;
 - `main` non modifié ;
-- autres apps hors chantier ;
+- autres applications du monorepo hors chantier ;
 - conteneur Windows : `E:\_Project\IOS APP\ios-godot-lab` ;
 - worktree principal : `E:\_Project\IOS APP\ios-godot-lab\main` ;
-- worktree V5 prévu : `E:\_Project\IOS APP\ios-godot-lab\worktrees\cloud-weight-diagnostics-v5`.
+- worktree V6 prévu : `E:\_Project\IOS APP\ios-godot-lab\worktrees\cloud-weight-ux-visual-v6`.
 
-Toujours re-vérifier branche, HEAD, status local et CI exact-SHA avant toute modification ou installation. Le commit contenant ce HANDOFF est postérieur au SHA applicatif ci-dessus : il doit lui aussi avoir une CI complète verte et un artifact exact-SHA avant test matériel.
+Toujours re-vérifier branche, HEAD, status local et CI exact-SHA avant installation. Le commit contenant ce HANDOFF est postérieur au SHA applicatif ci-dessus : **il doit lui aussi avoir une CI complète verte et un artifact exact-SHA avant test matériel**.
 
 ## Historique matériel — source de vérité
 
-### V1
+- **V1 rejetée** : gros bounding box global, pas de vrai détourage multi-régions.
+- **V2 rejetée** : UCloudNet détourait les nuages mais produisait des faux positifs hors ciel.
+- **V3 validée pour le garde ciel** : les objets hors ciel ne sont plus détectés comme nuages ; latence/instabilité encore mauvaises.
+- **V4 testée** : stabilisation améliorée mais encore latente et difficile à lire.
+- **V5 testée** : impression d'amélioration, mais l'app restait portrait-only, UI diagnostic trop présente et workflow `COPIER DIAG` rejeté par l'utilisateur.
 
-Rejetée : gros bounding box global sur stratocumulus, pas de vrai détourage multi-régions.
+Observations utilisateur les plus récentes à préserver :
 
-### V2
+- le garde ciel fonctionne suffisamment bien pour ne plus détecter normalement murs/sol/autres objets comme nuages ;
+- la latence et la stabilité restent à mesurer/optimiser sur appareil ;
+- l'interface doit rester très discrète ;
+- les régions/types de nuages doivent être différenciables visuellement ;
+- l'utilisateur veut récupérer télémétrie + captures par PowerShell, pas copier/coller du texte depuis l'app ;
+- le dépôt étant public, aucune donnée diagnostic de l'iPhone ne doit être envoyée automatiquement vers GitHub/Internet.
 
-Rejetée : UCloudNet détoure des nuages mais produit beaucoup de faux positifs hors ciel.
+## Architecture V6
 
-### V3
+### Segmentation
 
-**VALIDÉ SUR IPHONE** pour le garde ciel : murs/objets hors ciel ne sont plus détectés comme nuages.
-
-Limites observées : calcul lent, masque/labels/masse instables, lecture difficile.
-
-### V4
-
-Testée physiquement après installation du build V4 distribué depuis le chantier précédent.
-
-Retour utilisateur :
-
-- **AMÉLIORATION** : stabilité visuelle un peu meilleure ;
-- **BUG/LIMITE** : latence encore visible ;
-- **BUG/LIMITE** : mise à jour perçue comme insuffisamment temps réel ;
-- **BUG/LIMITE** : stabilité encore insuffisante ;
-- besoin explicite de ne plus travailler à l'aveugle et d'obtenir une télémétrie exploitable ;
-- question utilisateur sur le fonctionnement lorsque l'iPhone est tourné.
-
-## Orientation — état réel
-
-V4/V5 restent **portrait uniquement** :
-
-- `project.yml` ne déclare que `UIInterfaceOrientationPortrait` ;
-- la preview force `.portrait` ;
-- le prétraitement caméra applique une orientation fixe `.right` ;
-- paysage non validé et non annoncé comme supporté.
-
-En V5, l'orientation physique est seulement **mesurée dans la télémétrie** (`portrait`, `landscapeLeft`, etc.). Ne pas présenter cela comme une correction du paysage.
-
-Pour une future correction propre, utiliser les API Apple actuelles (`AVCaptureDevice.RotationCoordinator` / `AVCaptureConnection.videoRotationAngle`) et adapter aussi le canvas d'analyse / modèle / overlay ; ne pas corriger uniquement la preview.
-
-## Architecture conservée
+La logique validée V3/V4 est conservée :
 
 ```text
-AVFoundation 720p preview
-        |
-SkyWater-Seg / SegFormer MiT-B2 384×384
-        +
-UCloudNet k=2 daytime 304×544
-        |
+caméra AVFoundation
+    |
+SkyWater SegFormer MiT-B2 384×384
+    +
+UCloudNet k=2
+    |
 cloud = UCloudNet >= 0.52 ET sky >= 0.55
 si ciel confirmé < 5 % => zéro nuage
-        |
+    |
 composantes connexes
-        |
-tracking V4 + lissage géométrie/masse + IDs persistants
-        |
-masque affiché stabilisé sur fenêtre courte
-        |
-SwiftUI
+    |
+tracking temporel V4
+    |
+overlay + labels compacts V6
 ```
 
-Les modèles/seuils V3 sont volontairement conservés pour ne pas casser le filtrage hors-ciel déjà validé.
+V6 embarque **deux variantes Core ML UCloudNet construites à partir des mêmes poids** :
 
-## Changements V5 — diagnostics et latence
+- portrait : `CloudSegmentation.mlmodelc`, entrée 304×544 ;
+- paysage : `CloudSegmentationLandscape.mlmodelc`, entrée 544×304 ;
+- garde ciel : `SkySegmentation.mlmodelc`, 384×384.
 
-Version : `0.5.0` / build `5`.
+Le but du second UCloudNet n'est pas de changer le modèle scientifique, mais d'éviter de déformer artificiellement le canvas lorsqu'on tourne l'iPhone.
 
-### Cadence
+### Rotation
 
-- intervalle minimal d'analyse : `0.18 s` → `0.10 s` ;
-- plafond applicatif théorique : ~5,6 Hz → 10 Hz ;
-- ce changement n'impose pas 10 Hz : le débit réel reste limité par le coût des deux modèles ;
-- `AVCaptureVideoDataOutput.alwaysDiscardsLateVideoFrames = true` reste actif pour éviter une file non bornée.
+- `UISupportedInterfaceOrientations` autorise portrait, landscape left et landscape right ;
+- preview et sortie vidéo utilisent `AVCaptureDevice.RotationCoordinator` / `videoRotationAngle` ;
+- le choix portrait/paysage de l'analyse se fait selon les dimensions réellement fournies après rotation ;
+- le masque, les centroïdes et les labels doivent être physiquement vérifiés dans les trois orientations avant de considérer cette partie validée.
 
-### Mesures par étape
+### UI / couleurs
 
-`CloudAnalyzer` mesure maintenant séparément :
+`CameraScreenV6.swift` est l'écran actif.
 
-- prétraitement (`CVPixelBuffer` + conversion RGB tensor) ;
-- inférence SegFormer ciel ;
-- inférence UCloudNet ;
-- post-traitement (resampling, gate, cleanup, composantes, observations, overlay) ;
-- couverture ciel.
+- UI réduite à de petites capsules ;
+- aucun bouton `COPIER DIAG` ;
+- en haut : nom app, Hz/ms, bouton API ;
+- en bas : masse totale, nombre de nuages, couverture ciel/nuage ;
+- labels très compacts avec ID stable + type + masse ;
+- couleurs sémantiques : cumulus cyan, stratocumulus orange, stratus violet, cirrus vert, inconnu blanc ;
+- `CloudOverlayStabilizer` conserve maintenant la couleur courante au lieu de recréer systématiquement un masque cyan.
 
-`CloudTelemetry` conserve aussi :
+La classification de type reste heuristique à partir de couverture, aspect ratio, luminosité/saturation. **Ne pas présenter le type de nuage comme une classification scientifique validée.**
 
-- pipeline total ;
-- Hz effectifs ;
-- variation brute du masque ;
-- couverture nuage ;
-- brut → stable ;
-- frames `didDrop` ;
-- throttle applicatif ;
-- état thermique ;
-- orientation physique.
+## Diagnostic local V6
 
-### Historique borné et confidentialité
+### Principe de confidentialité
 
-- maximum `90` analyses en mémoire ;
-- seulement valeurs numériques ;
-- **aucune image** ;
-- **aucun frame/pixel brut exporté** ;
-- **aucune localisation** ;
-- **aucun UDID / identifiant appareil** ;
-- **aucun upload automatique** ;
-- OSLog local seulement ;
-- rapport généré localement et copié volontairement par l'utilisateur.
+Aucun diagnostic n'est uploadé automatiquement vers GitHub, un serveur externe ou ChatGPT.
 
-Le HUD V5 possède un bouton **COPIER DIAG**. Le texte commence par `CLOUD_WEIGHT_DIAG_V5` et contient moyennes/p95 + les 20 dernières mesures. L'utilisateur peut le coller dans le chat pour analyse.
+Les données restent localement sur l'iPhone et sont exposées uniquement par une petite API HTTP locale sur le LAN :
 
-## Modèles épinglés
+- port : `8765` ;
+- Bonjour : `_cloudweight._tcp` ;
+- `/api/v1/health` est public mais ne contient que l'identité/version/état d'appairage ;
+- les endpoints télémétrie/captures exigent un jeton Bearer ;
+- l'appairage est explicitement armé depuis le petit bouton `API` de l'app ;
+- le jeton est conservé côté Windows sous `%LOCALAPPDATA%\CloudWeightLab\diagnostics-session.json`, jamais dans Git ;
+- les captures peuvent contenir ce que voit la caméra : **ne jamais les publier automatiquement dans le repo public**.
 
-### UCloudNet
+### Stockage borné iPhone
 
-- `Att100/UCloudNet` ;
-- commit `799f25917361663a1ce2cf210c14a01c1ae45f15` ;
-- poids `ucloudnet_k_2_aux_lr_decay_d_epochs_100.pdparam` ;
-- blob Git `12bc7b57460e1820bc303c7513c8f2eee9b4a47f` ;
-- Core ML `CloudSegmentation.mlmodelc`.
+`CloudDiagnosticsStore.swift` :
 
-### SkyWater-Seg
+- historique télémétrie max : 180 mesures ;
+- snapshots max : 12 ;
+- intervalle snapshot : environ 2 s uniquement pendant une session appairée ;
+- taille max : 640 px ;
+- JPEG qualité ~0,45 ;
+- expiration automatique : environ 10 min ;
+- stockage temporaire ;
+- compression JPEG exécutée sur une queue utility séparée afin de ne pas bloquer volontairement l'analyse IA.
 
-- `Realcat/skywater_seg` / `Vincentqyw/skywater_seg` ;
-- SegFormer MiT-B2 384×384 ;
-- révision `a45ff48a4f924057e9fd947ec736b4098b06e337` ;
-- SHA-256 `bba260c601533e4d34c7891cd055b051c2cd5fd2c22084a35d902bfb43e31341` ;
-- Core ML `SkySegmentation.mlmodelc`.
+### Récupération Windows
 
-## Validation CI V5 applicative
+Script :
 
-SHA : `aebf7186d5de891c2e8a67476ce7d55122752f2b`
+```powershell
+.\apps\cloud-weight-lab\PULL_CLOUD_WEIGHT_DIAG.ps1 -OpenFolder
+```
 
-Run : `36305289852` — **SUCCESS**.
+Fonctionnement :
 
-Validé :
+1. réutilise une session locale valide si disponible ;
+2. sinon cherche l'API Cloud Weight sur le LAN local ;
+3. demande à l'utilisateur de toucher le petit bouton `API` sur l'iPhone ;
+4. appaire et stocke le jeton uniquement dans `%LOCALAPPDATA%` ;
+5. récupère `status.json`, `telemetry.json`, `snapshots.json` et les JPEG temporaires ;
+6. écrit le résultat sous `artifacts\cloud-weight-lab\diagnostics\<timestamp>-<build>`.
+
+Option utile après récupération :
+
+```powershell
+.\apps\cloud-weight-lab\PULL_CLOUD_WEIGHT_DIAG.ps1 -ClearRemoteSnapshots -OpenFolder
+```
+
+La récupération Windows supprime donc le besoin de recopier manuellement les métriques depuis l'iPhone. Elle **ne donne pas automatiquement accès aux fichiers à ChatGPT** : si une analyse visuelle est nécessaire, fournir le dossier/les JPEG récupérés dans le chat.
+
+## Version V6
+
+- version app : `0.6.0` ;
+- build : `6` ;
+- script IPA `UPDATE_CLOUD_WEIGHT_LAB.ps1` vise `fix/cloud-weight-ux-visual-v6-20260927` ;
+- workflow : `.github/workflows/cloud-weight-lab-build.yml`.
+
+## Validation CI V6
+
+### BUILD CI VALIDÉ — SHA applicatif `e85470c1d2671477b970cd0cd98df0bd90ec3146`
+
+Run : `36313670173` — **SUCCESS**.
+
+Validé par ce run :
 
 - checkout exact SHA ;
-- génération/vérification des deux modèles Core ML ;
-- XcodeGen ;
-- compilation Swift app + cible XCTest via `build-for-testing` ;
-- compilation du profiling V5 et de l'UI `COPIER DIAG` ;
+- génération UCloudNet portrait ;
+- génération UCloudNet paysage ;
+- génération du garde ciel SkyWater ;
+- génération XcodeGen ;
+- compilation Swift de l'app et de la cible XCTest via `build-for-testing` ;
+- compilation de `CameraScreenV6`, API locale, stockage borné, rotation coordinator et télémétrie ;
 - build iPhone Release non signé ;
-- vérification bundle identifier / permission caméra / version ;
-- présence des deux `.mlmodelc` ;
+- vérification du contrat bundle ;
 - packaging IPA exact-SHA ;
 - upload artifact exact-SHA.
 
-Attention : `build-for-testing` compile la cible XCTest mais n'exécute pas les tests unitaires.
+Important : `build-for-testing` compile la cible XCTest mais **n'exécute pas les tests**. Ne pas dire « tests XCTest passés ».
 
-## NON VALIDÉ PHYSIQUEMENT EN V5
+## NON VALIDÉ PHYSIQUEMENT EN V6
 
-À tester sur iPhone 13 mini :
+À ce stade, ne pas annoncer comme validé sur iPhone :
 
-1. amélioration de réactivité avec plafond 10 Hz ;
-2. stabilité réelle du masque et des labels ;
-3. coût réel `PREP / CIEL AI / NUAGE AI / POST` ;
-4. `Δ MASQUE` téléphone fixe ;
-5. `DROP/THR` ;
-6. état thermique sur 1–2 min ;
-7. conservation du garde hors-ciel ;
-8. orientation : seulement observer/logguer ; le paysage n'est pas supporté en V5.
+- rotation réelle portrait → paysage gauche/droite ;
+- alignement preview / masque / labels après rotation ;
+- qualité réelle du modèle paysage ;
+- couleurs et stabilité visuelle des différents nuages ;
+- API LAN et autorisation Réseau local sur l'iPhone réel ;
+- appairage PowerShell ;
+- récupération JSON/JPEG ;
+- expiration/nettoyage réel des snapshots ;
+- impact perf des snapshots lorsque l'API est appairée ;
+- latence/Hz/stabilité de V6 sur iPhone 13 mini.
 
-## Lecture du rapport V5
+## Test matériel prioritaire V6
 
-Quelques diagnostics probables :
+1. installer l'IPA exact-SHA finale ;
+2. au premier lancement, autoriser caméra et réseau local si iOS le demande ;
+3. vérifier une scène sans ciel : aucune régression de faux positifs ;
+4. viser des nuages en portrait et observer UI/couleurs/labels ;
+5. tourner en paysage gauche puis droite : vérifier rotation + alignement du masque ;
+6. laisser l'app viser une scène nuageuse environ 20–30 s ;
+7. depuis Windows, lancer `PULL_CLOUD_WEIGHT_DIAG.ps1 -OpenFolder` ;
+8. quand le script le demande, toucher `API` sur l'iPhone ;
+9. vérifier que JSON + JPEG sont récupérés ;
+10. utiliser ces données pour l'optimisation suivante au lieu de modifier les seuils à l'aveugle.
 
-- `sky_ms_avg` dominant : optimiser fréquence/coût du garde ciel ;
-- `preprocess_ms_avg` élevé : remplacer/optimiser la boucle Swift RGB/tensor ;
-- `cloud_ms_avg` dominant : alléger UCloudNet / résolution / cadence ;
-- pipeline bas mais `mask_delta_pct_p95` élevé téléphone fixe : problème de stabilité sémantique/seuils, ajouter hystérésis/probabilité temporelle ;
-- beaucoup de `drop_total` : pipeline trop lent par rapport au flux caméra ;
-- beaucoup de `throttle_total` mais peu de drops : limite applicative encore dominante ;
-- thermique `serious`/`critical` : réduire duty cycle/coût avant d'augmenter encore la cadence.
+## Pipeline normal Windows / IPA
 
-Ne modifier modèles, seuils ou résolution qu'après lecture d'un vrai rapport iPhone V5.
-
-## Pipeline Windows
-
-Workflow : `.github/workflows/cloud-weight-lab-build.yml`.
-
-Script normal :
+Depuis le worktree V6 :
 
 ```powershell
 .\apps\cloud-weight-lab\UPDATE_CLOUD_WEIGHT_LAB.ps1 -OpenFolder
 ```
 
-Branche attendue par le script : `fix/cloud-weight-diagnostics-v5-20260927`.
-
-Artifact : `cloud-weight-lab-<SHA>` avec IPA, SHA-256 et `BUILD-METADATA.json`.
-
-Destination Windows :
+Le script vérifie branche, HEAD, run exact-SHA, metadata et SHA-256 avant copie sous :
 
 `E:\_Project\IOS APP\ios-godot-lab\artifacts\cloud-weight-lab\<SHA>`
 
+Puis installation via iLoader.
+
 ## Prochaine étape exacte
 
-1. vérifier la CI du HEAD final contenant ce HANDOFF ;
-2. créer/synchroniser `worktrees\cloud-weight-diagnostics-v5` ;
-3. récupérer l'IPA exact-SHA avec le script existant ;
+1. valider la CI complète du commit final contenant ce HANDOFF ;
+2. vérifier que la branche pointe exactement sur ce SHA ;
+3. récupérer l'IPA exact-SHA via le script Windows ;
 4. installer avec iLoader ;
-5. viser le même nuage/scène, d'abord téléphone fixe 15–30 s ;
-6. ouvrir le HUD et appuyer sur **COPIER DIAG** ;
-7. coller le rapport complet dans le chat ;
-8. décider de l'optimisation suivante à partir des timings réels ;
-9. traiter le paysage comme un chantier séparé une fois le chemin orientation + modèle/overlay correctement défini.
+5. réaliser le protocole V6 ci-dessus ;
+6. récupérer les diagnostics via PowerShell ;
+7. analyser les mesures/captures avant toute optimisation de seuil, modèle ou cadence.
 
 ## À ne pas modifier
 
 - `main` sans accord explicite ;
-- V1/V2/V3/V4, conservées comme références ;
-- apps/watch-sensor-lab ;
-- apps/workflows hors Cloud Weight Lab ;
-- modèles/seuils validés V3 avant lecture de la télémétrie V5.
+- V1–V5, conservées comme références ;
+- `apps/watch-sensor-lab` et autres apps ;
+- garde ciel validé sans données matérielles justifiant une modification ;
+- ne jamais automatiser l'upload des captures/tokens vers le repo public.

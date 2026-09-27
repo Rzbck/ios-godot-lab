@@ -4,62 +4,50 @@
 
 Application iPhone temps réel qui segmente les nuages, suit des régions persistantes et estime la masse d'eau/glace condensée.
 
-V12 part des problèmes réellement observés sur la session crépuscule V10 et doit :
+V12 traite les problèmes réellement observés au crépuscule et dans le workflow diagnostic :
 
-- ne plus perdre les nuages visibles quand la couleur du ciel change au crépuscule / basse lumière ;
-- ne plus utiliser la seule probabilité ADE20K `sky` comme veto absolu ;
-- exploiter les classes sémantiques ADE20K pour bloquer arbres/bâtiments/personnes/plantes/murs ;
-- stabiliser les décisions du garde ciel dans le temps ;
-- enrichir la télémétrie pour expliquer pourquoi une zone est acceptée/refusée ;
-- améliorer basse lumière et performances sans casser les comportements déjà validés ;
-- rendre la synchronisation diagnostic simple, persistante et robuste sans bouton API à chaque session.
+- conserver les nuages visibles lorsque la couleur/luminance du ciel change ;
+- ne plus utiliser `sky_probability` ADE20K comme veto absolu ;
+- utiliser ADE20K comme couche sémantique anti-faux-positifs (arbres, bâtiments, personnes, plantes, murs) ;
+- stabiliser le garde ciel dans le temps ;
+- enrichir la télémétrie pour expliquer chaque décision ;
+- gérer basse lumière sans casser le jour ;
+- paralléliser intelligemment SegFormer/UCloudNet et mesurer le gain réel ;
+- rendre la synchro Windows automatique, persistante, reprenable et liée au bon build.
 
-## Dépôt / branche / base
+## Dépôt / branche / état Git
 
 - dépôt : `Rzbck/ios-godot-lab`
 - app : `apps/cloud-weight-lab`
-- branche V12 : `fix/cloud-weight-twilight-autosync-v12-20260927`
+- branche : `fix/cloud-weight-twilight-autosync-v12-20260927`
 - base V12 : V11 final `c69a673e9dc00355ae744a651341ae5379c9029f`
-- checkpoint code V12 avant ce HANDOFF : `9757be7a483d4dae8c21bac8310b5cb714268514`
-- worktree Windows prévu : `E:\_Project\IOS APP\ios-godot-lab\worktrees\cloud-weight-twilight-autosync-v12`
+- checkpoint code V12 actuel : `c1fa3ae023bbd386e6494245e5e33939a2d741a7`
+- HEAD juste avant la présente correction documentaire : `9089dfbf3001b3047bb07a1662a05e164b468ae6` (docs seulement, parent = checkpoint code ci-dessus)
+- worktree Windows attendu : `E:\_Project\IOS APP\ios-godot-lab\worktrees\cloud-weight-twilight-autosync-v12`
 - `main` reste hors chantier.
 
-IMPORTANT : le commit contenant ce HANDOFF est postérieur au checkpoint code ci-dessus. À la reprise, vérifier le HEAD réel de la branche et comparer avec `9757be7...` avant toute modification.
+À la reprise : vérifier le HEAD réel de la branche, le worktree et `git status` avant toute modification. Le commit contenant ce HANDOFF est nécessairement postérieur au checkpoint code.
 
 ## Source matérielle du chantier
 
-Le fichier/session crépuscule analysé provenait encore du build V10 `1a955d01632557f3247bb49c858f8c96f3aeaf27`, pas de V11.
+La session crépuscule analysée provenait du build V10 `1a955d01632557f3247bb49c858f8c96f3aeaf27`, pas de V11/V12.
 
-Observation visuelle + télémétrie :
+Observation image/MP4 + télémétrie :
 
-- les nuages gris/blancs restent nettement visibles à l'œil au crépuscule ;
-- ADE20K peut pourtant faire tomber `skyCoverage` vers 0–3 % ;
-- le code V10/V11 arrêtait alors UCloudNet ou rejetait ses pixels car il exigeait `skyProbability >= 0.55` ;
-- quelques instants plus tard la même scène pouvait repasser proche de 100 % de ciel ;
-- cela créait des `sky_enter` / `sky_exit` et `mask_jump` très fréquents ;
-- ce passage n'était pas principalement un problème de rotation : les échecs observés existaient en paysage stable.
+- les gros nuages gris/blancs restaient visiblement présents ;
+- ADE20K pouvait pourtant faire tomber le ciel brut vers ~0–3 % ;
+- l'ancien garde coupait alors UCloudNet ou rejetait ses pixels car il exigeait `skyProbability >= 0.55` ;
+- quelques instants plus tard la même scène pouvait remonter proche de 100 % de ciel ;
+- cela provoquait `sky_enter` / `sky_exit` / `mask_jump` très fréquents ;
+- le passage problématique existait avec orientation paysage stable : ce n'était pas principalement un bug de rotation.
 
-Conclusion : la cause racine est le garde ciel trop brutal, pas l'absence de nuages dans l'image.
+Cause racine retenue : garde ciel trop brutal pour crépuscule/basse lumière.
 
-## V12 — changements déjà présents sur la branche
-
-La branche est 9 commits devant V11 au checkpoint `9757be7...`.
-
-Fichiers réellement modifiés/ajoutés par rapport à V11 :
-
-- `Tests/CloudGateLogicTests.swift` ajouté ;
-- `Tests/SceneSanityGateTests.swift` modifié ;
-- `iphone/Sources/CameraService.swift` modifié ;
-- `iphone/Sources/CloudAnalyzer.swift` modifié ;
-- `iphone/Sources/CloudGateLogic.swift` ajouté ;
-- `iphone/Sources/CloudTelemetry.swift` modifié ;
-- `iphone/Sources/DiagnosticsKeychain.swift` ajouté ;
-- `iphone/Sources/SceneSanityGate.swift` modifié ;
-- `tools/build_sky_gate_coreml.py` modifié.
+## V12 — changements réellement présents au checkpoint code `c1fa3ae...`
 
 ### Garde sémantique ADE20K
 
-La conversion Core ML de SegFormer expose maintenant :
+Le SegFormer B0 ADE20K converti Core ML expose maintenant :
 
 - `sky_probability`
 - `blocker_probability`
@@ -69,136 +57,173 @@ La conversion Core ML de SegFormer expose maintenant :
 - `plant_probability`
 - `wall_probability`
 
-Le but est de conserver UCloudNet comme détecteur nuage, mais d'utiliser ADE20K comme contexte sémantique : une probabilité ciel faible ne doit plus suffire à tuer un nuage si la zone n'est pas clairement un obstacle sémantique.
+UCloudNet reste le détecteur de nuages. ADE20K devient une couche de contexte sémantique : une faible probabilité `sky` ne suffit plus à elle seule à tuer un nuage si la zone n'est pas clairement un obstacle.
 
-`CloudGateLogic.swift` introduit la logique de garde/hystérésis nécessaire pour réduire le flapping ciel/pas-ciel et gérer le crépuscule.
+`CloudGateLogic.swift` ajoute l'hystérésis et la logique crépuscule nécessaires pour éviter le flapping ciel/pas-ciel.
+
+### Parallélisme
+
+`CloudAnalyzer.swift` possède deux files dédiées :
+
+- `cloudweight.inference.sky`
+- `cloudweight.inference.cloud`
+
+SegFormer et UCloudNet sont lancés en parallèle puis synchronisés. `ParallelInferenceResults` protège les résultats avec un `NSLock` pour éviter les mutations concurrentes non sûres.
+
+Ne pas annoncer de gain matériel avant mesure iPhone.
 
 ### Basse lumière
 
-`SceneSanityGate.swift` et `CameraService.swift` ont commencé à être adaptés pour la basse lumière. La stratégie recherchée est :
-
-- ne pas rejeter un crépuscule exploitable comme une vraie nuit noire ;
-- conserver des informations exposition/ISO/luminance dans la télémétrie ;
-- utiliser les capacités caméra iOS disponibles quand elles existent sans dégrader les scènes normales.
+`SceneSanityGate.swift` / `CameraService.swift` ont été adaptés pour distinguer crépuscule exploitable et scène réellement trop sombre. La télémétrie conserve luminance, ISO, exposition, clipping/glare et état low-light. Toute capacité caméra basse lumière doit rester conditionnelle au support réel du device.
 
 ### Télémétrie
 
-`CloudTelemetry.swift` a été étendu pour rendre le garde V12 observable. À la reprise, vérifier exactement les champs présents avant d'en ajouter d'autres. La télémétrie finale doit permettre de diagnostiquer au minimum :
+V12 étend la télémétrie afin de rendre le garde observable : ciel brut/effectif, blocker sémantique, état/reason du garde, low-light, timings sky/cloud/wall, overlap parallèle, pipeline, cadence, dropped/throttled frames, thermique, orientation, exposition/ISO/luminance/glare, plus les métriques géométriques/masse V11 dans les détections persistantes.
 
-- ciel brut vs décision de ciel effective/stabilisée ;
-- blocker sémantique et raison de rejet/acceptation ;
-- état basse lumière ;
-- ISO / exposition / luminance / clipping / glare ;
-- timings preprocess / sky / cloud / post / pipeline ;
-- cadence, dropped/throttled frames, thermique ;
-- orientation et géométrie/métriques de masse V11.
+### Sync/API — DÉJÀ IMPLÉMENTÉE dans le code actuel
 
-## CI V12 — ÉTAT ACTUEL
+Contrairement au premier brouillon de HANDOFF, ces changements sont bien présents :
 
-Checkpoint exact : `9757be7a483d4dae8c21bac8310b5cb714268514`.
+- `DiagnosticsKeychain.swift` existe ;
+- `CloudDiagnosticsAPI` charge/sauvegarde un bearer token persistant dans le Keychain ;
+- première connexion locale : claim automatique, sans bouton physique ;
+- redémarrage app : le token est rechargé ;
+- API v3 annonce `persistent_keychain_first_claim` ;
+- le bouton `API` a été retiré de `CameraScreenV6` et remplacé par un indicateur non interactif ;
+- `SYNC_CLOUD_WEIGHT_SESSION.ps1` réutilise le token PC, redécouvre l'IP si nécessaire, et tente l'appairage automatique ;
+- sélection par défaut : dernière session terminée du build actuellement installé ;
+- `-AnyBuild`, `-SessionId`, `-AllSessions` restent disponibles ;
+- téléchargements : `.part`, reprise par taille, retries, timeout 60 s ;
+- parallélisme par défaut ramené à 3, `RetryCount=4` ;
+- après téléchargement d'une session terminée, le script valide les nombres telemetry/events/visual contre le manifest ;
+- `SYNC-REPORT.json` est produit ;
+- MP4 construit seulement si les frames référencées sont réellement présentes.
+
+Ces changements sont **code présents mais pas encore validés physiquement**, car V12 ne compile pas encore complètement.
+
+## Versioning V12 — déjà présent
+
+- `BuildInfo.swift` : `0.12.0`
+- `iphone/project.yml` : `0.12.0`, build `12`
+- `UPDATE_CLOUD_WEIGHT_LAB.ps1` cible la branche V12
+- workflow stamp/verify/package a été adapté à V12
+
+Toujours vérifier ces fichiers contre le HEAD réel avant installation.
+
+## CI V12 — dernier résultat connu
+
+Checkpoint code exact : `c1fa3ae023bbd386e6494245e5e33939a2d741a7`.
 
 GitHub Actions :
 
-- run : `36341003690` (#102)
-- job : `108680988750`
+- run : `36347243683` (#103)
+- job : `108698693276`
 - conclusion : **FAILURE**
+- étape : `Compile app and unit tests for simulator` (`build-for-testing`)
 
-Ce qui a réussi :
+Réussis avant l'échec :
 
 - checkout exact SHA ;
-- toolchain ;
-- Python/XcodeGen ;
-- téléchargement/conversion des modèles ;
-- nouveau SegFormer ADE20K multi-sorties ;
-- validation conversion Core ML : max abs error `0.020121` ;
+- toolchain / Python / XcodeGen ;
+- téléchargement et conversion des 3 modèles ;
+- SegFormer ADE20K multi-sorties ;
 - génération du projet Xcode.
 
-Ce qui a échoué :
-
-- étape `Compile app and unit tests for simulator` (`build-for-testing`).
-
-Erreurs Swift exactes :
+Blocage Swift exact encore présent au checkpoint :
 
 ```text
-CloudAnalyzer.swift:115:32: error: immutable value 'self.portraitCloudModel' may only be initialized once
-CloudAnalyzer.swift:116:33: error: immutable value 'self.landscapeCloudModel' may only be initialized once
+CloudAnalyzer.swift:126:32: error: immutable value 'self.portraitCloudModel' may only be initialized once
+CloudAnalyzer.swift:127:33: error: immutable value 'self.landscapeCloudModel' may only be initialized once
 ```
 
-Les propriétés concernées sont actuellement déclarées :
+Les propriétés sont encore déclarées :
 
 ```swift
 private let portraitCloudModel: MLModel?
 private let landscapeCloudModel: MLModel?
 ```
 
-Le code les initialise puis tente de leur réassigner `nil` dans un chemin d'erreur. La prochaine correction doit être minimale : soit rendre ces deux propriétés mutables, soit restructurer proprement l'init sans changer le comportement.
+et l'initializer leur affecte les modèles dans le `do`, puis tente de leur réassigner `nil` dans le `catch`.
 
-Conséquences :
+Le log a aussi signalé auparavant des warnings Swift concurrency sur mutation de résultats capturés ; le checkpoint `c1fa3ae...` introduit `ParallelInferenceResults` avec lock pour cette partie. Ne pas supposer que ces warnings sont résolus tant qu'une nouvelle CI n'est pas passée jusque-là.
 
-- pas de build device V12 ;
-- pas de vérification bundle finale ;
-- pas d'IPA V12 ;
-- pas d'artifact V12 ;
+Conséquences actuelles :
+
+- aucun build device V12 validé ;
+- aucune vérification bundle V12 finale ;
+- aucune IPA/artifact V12 validé ;
 - aucun test matériel V12 ;
-- XCTest non exécutés ; le workflow utilise seulement `build-for-testing` quand il atteint cette étape.
-
-## Travail V12 encore NON FAIT
-
-Ne pas croire les anciens messages : au checkpoint réel, ces changements ne sont pas encore présents dans le diff V12 :
-
-- `CloudDiagnosticsAPI.swift` n'est pas encore modifié pour utiliser le Keychain ;
-- `DiagnosticsKeychain.swift` existe mais n'est pas encore câblé au flux API ;
-- le bouton `API` existe encore dans `CameraScreenV6.swift` ;
-- `SYNC_CLOUD_WEIGHT_SESSION.ps1` n'a pas encore le workflow autosync final ;
-- il peut encore demander l'appairage manuel si le token sauvegardé PC n'est plus valide ;
-- il sélectionne encore la dernière session terminée globale, ce qui a déjà récupéré une ancienne V10 au lieu du build courant ;
-- son parallélisme par défaut reste 8, ce qui a déjà provoqué un timeout réseau sur une grosse session ;
-- `UPDATE_CLOUD_WEIGHT_LAB.ps1` vise encore V11 ;
-- `BuildInfo.swift`, `project.yml` et le workflow sont encore en `0.11.0` / build `11` ;
-- le workflow stamp/package/metadata reste V11 ;
-- le HANDOFF V12 est la première mise à jour documentaire de cette branche.
+- XCTest non exécutés. Le workflow utilise `build-for-testing`, donc la cible de tests est seulement compilée lorsqu'il atteint cette étape.
 
 ## Prochaine étape EXACTE
 
-1. Vérifier le HEAD réel de `fix/cloud-weight-twilight-autosync-v12-20260927` et le diff par rapport au checkpoint `9757be7...`.
-2. Corriger uniquement les deux erreurs de mutabilité `portraitCloudModel` / `landscapeCloudModel` dans `CloudAnalyzer.swift`.
-3. Pousser et attendre la CI exact-SHA. Ne pas continuer de gros refactor tant que `build-for-testing` n'est pas vert.
-4. Si la compilation casse encore, récupérer les erreurs Xcode exactes et corriger uniquement celles-ci.
-5. Quand le cœur V12 compile :
-   - câbler `DiagnosticsKeychain` dans `CloudDiagnosticsAPI` pour un token persistant ;
-   - supprimer le besoin de presser `API` à chaque sync et retirer/masquer ce bouton de l'UI normale ;
-   - rendre le script Windows auto-discovery + auto-auth ;
-   - sélectionner par défaut la dernière session terminée du **build installé/courant**, pas une ancienne version ;
-   - rendre les téléchargements reprenables/robustes avec retries et parallélisme raisonnable (2–4 par défaut plutôt que 8 si nécessaire) ;
-   - conserver `-SessionId` / `-AllSessions` pour contrôle manuel.
-6. Versionner V12 partout : `0.12.0`, build `12`, BuildInfo, `project.yml`, workflow stamp/verify/BUILD-METADATA, UPDATE script branche V12.
-7. Faire un dernier build exact-SHA et vérifier l'artifact exact.
-8. Installer uniquement cet IPA exact-SHA avec le workflow existant + iLoader.
-9. Test matériel jour + crépuscule/basse lumière : ciel bleu, nuages gris, arbre devant ciel, bâtiment/mur, main/peau, glare/soleil/lampes, portrait/paysage, inclinaison CoreMotion.
-10. Synchroniser la vraie session V12 puis analyser **MP4/images + telemetry + events + visual index + manifest**, pas seulement les chiffres.
+1. Vérifier HEAD/worktree/status et lire ce HANDOFF.
+2. Vérifier le dernier run CI exact-SHA, car le commit documentaire du HANDOFF peut avoir déclenché un run plus récent sans changer le code.
+3. Corriger **uniquement** le problème d'initialisation de `portraitCloudModel` / `landscapeCloudModel` dans `CloudAnalyzer.init()` (solution propre : initialisation locale unique puis affectation finale, ou autre correction minimale équivalente).
+4. Pousser cette correction seule et attendre la CI exact-SHA complète.
+5. Si elle échoue, lire les erreurs Xcode exactes et corriger uniquement celles-ci. Pas de gros refactor tant que CI rouge.
+6. Quand CI complète SUCCESS : vérifier chaque étape, artifact exact-SHA et métadonnées.
+7. Depuis le worktree V12, utiliser le workflow existant `UPDATE_CLOUD_WEIGHT_LAB.ps1`, puis iLoader.
+8. Test matériel V12 :
+   - jour/ciel bleu ;
+   - nuages gris/blancs ;
+   - crépuscule/basse lumière ;
+   - arbre devant ciel ;
+   - bâtiment/mur ;
+   - personne/main/peau ;
+   - soleil/glare/lampes ;
+   - portrait/paysage ;
+   - inclinaisons CoreMotion avec même nuage ;
+   - session assez longue pour observer thermique/cadence.
+9. Tester la synchro réelle sans bouton API, fermeture/réouverture app, changement d'IP éventuel, récupération correcte du build courant et reprise après interruption réseau.
+10. Analyser réellement le MP4/images avec telemetry + events + visual index + manifest + `SYNC-REPORT.json` avant de retoucher les seuils.
 
-## Performance / parallélisme
+## Fichiers diagnostic à partager après test
 
-Baseline matérielle connue V10 : environ 31–35 ms de pipeline et 25–30 Hz après suppression du throttle fixe ; thermique `fair` après ~108 s sur une session testée.
+Normalement :
 
-V12 veut paralléliser intelligemment le travail sémantique et nuage, mais ne pas ajouter un gros modèle supplémentaire sans mesure. Le nouveau SegFormer ADE20K fournit déjà une couche sémantique riche ; mesurer d'abord latence, concurrence Core ML, chauffe, dropped frames et stabilité réelle sur iPhone.
+- `manifest.json`
+- `telemetry.ndjson`
+- `events.ndjson`
+- `visual/visual.ndjson`
+- `SYNC-REPORT.json`
+- `diagnostic-preview.mp4`
 
-Ne jamais annoncer un gain de performance avant test matériel.
+Pas besoin du dossier JPEG si le MP4 a été créé et validé.
+
+## Performance
+
+Baseline matérielle V10 connue : pipeline typique ~31–35 ms, environ 25–30 Hz ; thermique passé `nominal -> fair` après ~108 s sur une session testée.
+
+V12 ajoute la concurrence SegFormer/UCloudNet. Mesurer sur iPhone :
+
+- `skyInferenceMilliseconds`
+- `cloudInferenceMilliseconds`
+- `inferenceWallMilliseconds`
+- overlap parallèle
+- pipeline total / P95
+- effective Hz
+- dropped/throttled frames
+- thermal state
+
+Ne jamais annoncer un gain avant hardware.
 
 ## Estimation de masse
 
-Conserver l'estimateur angle-aware V11 et son incertitude. Une seule caméra RGB ne mesure pas directement la distance, l'altitude de base, la profondeur 3D ou le contenu en eau/glace.
+Conserver l'estimateur angle-aware V11 : FOV caméra + CoreMotion + taille angulaire + priors altitude/profondeur/LWC avec fourchette d'incertitude.
 
-Après validation V12 du garde + CoreMotion, la vraie prochaine amélioration de précision est un contexte météo optionnel : température/point de rosée, cloud base/ceilomètre ou données météo pertinentes pour resserrer la distance/altitude. Ne jamais présenter la masse comme une pesée exacte.
+Une caméra RGB seule ne fournit toujours pas directement distance, altitude de base, profondeur 3D ou contenu en eau/glace. Après stabilisation/validation V12, la prochaine amélioration scientifique importante sera un contexte météo optionnel : température/point de rosée, cloud-base/ceilomètre ou données météo pertinentes pour resserrer la distance/altitude.
+
+Ne jamais présenter la masse comme une pesée exacte.
 
 ## À ne pas modifier
 
 - `main` ;
-- les autres apps du dépôt ;
+- les autres apps ;
 - le recorder local persistant validé ;
 - le workflow exact-SHA / iLoader ;
-- les seuils/modeles au hasard sans comparaison avant/après ;
-- aucune release/merge main sans accord explicite utilisateur.
+- les seuils/modèles au hasard sans données avant/après ;
+- aucune release / merge main sans accord explicite utilisateur.
 
 ## Critères de sortie V12
 
@@ -206,11 +231,11 @@ V12 n'est prête que lorsque :
 
 - CI exact-SHA complète SUCCESS ;
 - IPA exact-SHA récupérable ;
-- sync ne demande plus le bouton API à chaque fois ;
-- sync choisit la bonne version/session ;
-- téléchargement long reprend après interruption et ne timeoute pas facilement ;
-- télémétrie explique les décisions du garde ;
-- crépuscule conserve les nuages visuellement évidents sans réintroduire arbres/bâtiments/personnes ;
-- stabilité type/masse V11 et géométrie CoreMotion ne régressent pas ;
-- performance/thermique sont mesurées sur iPhone ;
-- validation matérielle explicitement distincte de la CI.
+- sync sans bouton API réellement validée ;
+- bonne session/build sélectionnée ;
+- téléchargement long/reprise validés ;
+- telemetry complète et cohérente ;
+- crépuscule conserve les nuages évidents sans réintroduire arbres/bâtiments/personnes ;
+- stabilité type/masse V11 et géométrie CoreMotion sans régression ;
+- performance/thermique mesurées sur iPhone ;
+- validation matérielle explicitement séparée de la CI.

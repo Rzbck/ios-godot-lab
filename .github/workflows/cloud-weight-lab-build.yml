@@ -53,6 +53,13 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           python3 --version
 
+      - name: Set up Python 3.13
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: 'apps/cloud-weight-lab/tools/build_ucloudnet_coreml.py'
+
       - name: Install pinned XcodeGen
         shell: bash
         run: |
@@ -78,6 +85,7 @@ jobs:
           WEIGHTS="$RUNNER_TEMP/ucloudnet-day.pdparam"
           MODEL="$GITHUB_WORKSPACE/$APP_DIR/iphone/Models/CloudSegmentation.mlpackage"
 
+          python3 --version
           python3 -m venv "$VENV"
           source "$VENV/bin/activate"
           python -m pip install --disable-pip-version-check --upgrade pip

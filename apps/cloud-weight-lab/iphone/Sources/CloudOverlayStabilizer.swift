@@ -39,6 +39,7 @@ final class CloudOverlayStabilizer {
             history.removeAll(keepingCapacity: true)
             width = image.width
             height = image.height
+            lastOutput = nil
         }
 
         if let previous = history.last,
@@ -58,7 +59,13 @@ final class CloudOverlayStabilizer {
             displayMask = majorityMask(history)
         }
 
-        let output = makeOverlay(mask: displayMask, width: width, height: height)
+        let output = makeOverlay(
+            mask: displayMask,
+            currentImage: image,
+            previousImage: lastOutput,
+            width: width,
+            height: height
+        )
         lastOutput = output ?? image
         return lastOutput
     }
@@ -108,13 +115,62 @@ final class CloudOverlayStabilizer {
         return result
     }
 
-    private func makeOverlay(mask: [UInt8], width: Int, height: Int) -> CGImage? {
+    private func rgbaBytes(_ image: CGImage?) -> (bytes: CFData, pointer: UnsafePointer<UInt8>, row: Int, pixel: Int)? {
+        guard let image,
+              image.bitsPerPixel >= 32,
+              let data = image.dataProvider?.data,
+              let pointer = CFDataGetBytePtr(data) else {
+            return nil
+        }
+        return (
+            data,
+            pointer,
+            image.bytesPerRow,
+            max(1, image.bitsPerPixel / 8)
+        )
+    }
+
+    private func makeOverlay(
+        mask: [UInt8],
+        currentImage: CGImage,
+        previousImage: CGImage?,
+        width: Int,
+        height: Int
+    ) -> CGImage? {
         guard width > 0, height > 0, mask.count == width * height else { return nil }
         var rgba = [UInt8](repeating: 0, count: width * height * 4)
+        let current = rgbaBytes(currentImage)
+        let previous = rgbaBytes(previousImage)
 
         func isCloud(_ x: Int, _ y: Int) -> Bool {
             guard x >= 0, x < width, y >= 0, y < height else { return false }
             return mask[y * width + x] != 0
+        }
+
+        func sourceColor(_ x: Int, _ y: Int) -> (UInt8, UInt8, UInt8) {
+            if let current {
+                let offset = y * current.row + x * current.pixel
+                let alpha = current.pointer[offset + min(3, current.pixel - 1)]
+                if alpha > 0 {
+                    return (
+                        current.pointer[offset],
+                        current.pointer[offset + min(1, current.pixel - 1)],
+                        current.pointer[offset + min(2, current.pixel - 1)]
+                    )
+                }
+            }
+            if let previous {
+                let offset = y * previous.row + x * previous.pixel
+                let alpha = previous.pointer[offset + min(3, previous.pixel - 1)]
+                if alpha > 0 {
+                    return (
+                        previous.pointer[offset],
+                        previous.pointer[offset + min(1, previous.pixel - 1)],
+                        previous.pointer[offset + min(2, previous.pixel - 1)]
+                    )
+                }
+            }
+            return (245, 245, 245)
         }
 
         for y in 0..<height {
@@ -125,10 +181,11 @@ final class CloudOverlayStabilizer {
                     || !isCloud(x, y - 1)
                     || !isCloud(x, y + 1)
                 let offset = (y * width + x) * 4
-                rgba[offset] = 110
-                rgba[offset + 1] = 225
-                rgba[offset + 2] = 255
-                rgba[offset + 3] = boundary ? 235 : 44
+                let color = sourceColor(x, y)
+                rgba[offset] = color.0
+                rgba[offset + 1] = color.1
+                rgba[offset + 2] = color.2
+                rgba[offset + 3] = boundary ? 238 : 28
             }
         }
 

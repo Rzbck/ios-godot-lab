@@ -30,8 +30,8 @@ env:
   XCODEGEN_SHA256: '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806'
   UCLOUDNET_COMMIT: '799f25917361663a1ce2cf210c14a01c1ae45f15'
   UCLOUDNET_WEIGHT_BLOB: '12bc7b57460e1820bc303c7513c8f2eee9b4a47f'
-  SKYWATER_REVISION: 'a45ff48a4f924057e9fd947ec736b4098b06e337'
-  SKYWATER_SHA256: 'bba260c601533e4d34c7891cd055b051c2cd5fd2c22084a35d902bfb43e31341'
+  ADE20K_SEGFORMER_REVISION: '489d5cd81a0b59fab9b7ea758d3548ebe99677da'
+  ADE20K_SEGFORMER_SHA256: '6ae39addd01de6b1b8bde2cf677d43a5cd733424b8d186de3f95d1c51fee23f9'
 
 jobs:
   build:
@@ -84,11 +84,14 @@ jobs:
 
       - name: Build pinned Core ML models
         shell: bash
+        env:
+          HF_HUB_DISABLE_XET: '1'
         run: |
           set -euo pipefail
           VENV="$RUNNER_TEMP/cloudweight-ml"
           UCLOUD_WEIGHTS="$RUNNER_TEMP/ucloudnet-day.pdparam"
-          SKY_WEIGHTS="$RUNNER_TEMP/skywater-model.safetensors"
+          ADE_CONFIG="$RUNNER_TEMP/segformer-b0-ade-config.json"
+          ADE_WEIGHTS="$RUNNER_TEMP/segformer-b0-ade.safetensors"
           CLOUD_MODEL="$GITHUB_WORKSPACE/$APP_DIR/iphone/Models/CloudSegmentation.mlpackage"
           CLOUD_LANDSCAPE_MODEL="$GITHUB_WORKSPACE/$APP_DIR/iphone/Models/CloudSegmentationLandscape.mlpackage"
           SKY_MODEL="$GITHUB_WORKSPACE/$APP_DIR/iphone/Models/SkySegmentation.mlpackage"
@@ -100,7 +103,8 @@ jobs:
             'torch==2.7.0' \
             'coremltools==9.0' \
             'segmentation-models-pytorch==0.5.0' \
-            'safetensors==0.6.2'
+            'safetensors==0.6.2' \
+            'transformers==4.55.4'
 
           curl --fail --location --retry 3 --retry-delay 2 \
             "https://raw.githubusercontent.com/Att100/UCloudNet/${UCLOUDNET_COMMIT}/weights/ucloudnet_k_2_aux_lr_decay_d_epochs_100.pdparam" \
@@ -108,9 +112,15 @@ jobs:
           test "$(git hash-object "$UCLOUD_WEIGHTS")" = "$UCLOUDNET_WEIGHT_BLOB"
 
           curl --fail --location --retry 3 --retry-delay 2 \
-            "https://huggingface.co/Realcat/skywater_seg/resolve/${SKYWATER_REVISION}/model.safetensors?download=true" \
-            --output "$SKY_WEIGHTS"
-          echo "${SKYWATER_SHA256}  ${SKY_WEIGHTS}" | shasum -a 256 -c -
+            "https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512/raw/${ADE20K_SEGFORMER_REVISION}/config.json" \
+            --output "$ADE_CONFIG"
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512/resolve/${ADE20K_SEGFORMER_REVISION}/model.safetensors?download=true" \
+            --output "$ADE_WEIGHTS"
+          echo "${ADE20K_SEGFORMER_SHA256}  ${ADE_WEIGHTS}" | shasum -a 256 -c -
+          grep -Fq '"2": "sky"' "$ADE_CONFIG"
+          grep -Fq '"4": "tree"' "$ADE_CONFIG"
+          grep -Fq '"12": "person"' "$ADE_CONFIG"
 
           python "$APP_DIR/tools/build_ucloudnet_coreml.py" \
             --weights "$UCLOUD_WEIGHTS" \
@@ -119,7 +129,8 @@ jobs:
             --weights "$UCLOUD_WEIGHTS" \
             --output "$CLOUD_LANDSCAPE_MODEL"
           python "$APP_DIR/tools/build_sky_gate_coreml.py" \
-            --weights "$SKY_WEIGHTS" \
+            --config "$ADE_CONFIG" \
+            --weights "$ADE_WEIGHTS" \
             --output "$SKY_MODEL"
 
           test -f "$CLOUD_MODEL/Manifest.json"
@@ -133,7 +144,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:12}"
           cat > "$APP_DIR/iphone/Sources/BuildInfo.swift" <<EOF
           enum BuildInfo {
-              static let version = "0.6.0"
+              static let version = "0.9.0"
               static let gitSHA = "$SHORT_SHA"
           }
           EOF
@@ -195,7 +206,7 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$APP_PATH/Info.plist" >/dev/null
           /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$APP_PATH/Info.plist" >/dev/null
           grep -Fq "${GITHUB_SHA:0:12}" "$APP_DIR/iphone/Sources/BuildInfo.swift"
-          grep -Fq '0.6.0' "$APP_DIR/iphone/Sources/BuildInfo.swift"
+          grep -Fq '0.9.0' "$APP_DIR/iphone/Sources/BuildInfo.swift"
           test -n "$(find "$APP_PATH" -type d -name 'CloudSegmentation.mlmodelc' -print -quit)"
           test -n "$(find "$APP_PATH" -type d -name 'CloudSegmentationLandscape.mlmodelc' -print -quit)"
           test -n "$(find "$APP_PATH" -type d -name 'SkySegmentation.mlmodelc' -print -quit)"
@@ -217,17 +228,18 @@ jobs:
           cat > "$OUT/BUILD-METADATA.json" <<EOF
           {
             "app": "Cloud Weight Lab",
-            "version": "0.6.0",
+            "version": "0.9.0",
             "sha": "$GITHUB_SHA",
             "bundle_id": "com.rzbck.cloudweightlab",
             "artifact": "$IPA",
             "segmentation_engine": "ucloudnet-k2-day-coreml-v2-portrait-landscape",
-            "sky_gate_engine": "skywater-segformer-b2-coreml-v3",
-            "stabilization_engine": "centroid-iou-temporal-v4-color-preserving-v6",
-            "telemetry": "paired-local-http-api-bounded-snapshots-v6",
+            "sky_gate_engine": "nvidia-segformer-b0-ade20k-sky-coreml-v9",
+            "stabilization_engine": "global-centroid-iou-velocity-temporal-v8",
+            "telemetry": "paired-local-http-api-live-preroll-v9",
             "orientation_support": "portrait-landscape-rotation-coordinator-v6",
             "ucloudnet_source_commit": "$UCLOUDNET_COMMIT",
-            "skywater_source_revision": "$SKYWATER_REVISION",
+            "sky_gate_source_revision": "$ADE20K_SEGFORMER_REVISION",
+            "sky_gate_license": "NVIDIA Source Code License for SegFormer - non-commercial research/evaluation only",
             "device_validation": false
           }
           EOF

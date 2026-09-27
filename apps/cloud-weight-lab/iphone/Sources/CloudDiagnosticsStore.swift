@@ -59,7 +59,7 @@ final class CloudDiagnosticsStore {
     private let imageQueue = DispatchQueue(label: "cloudweight.diagnostics.images", qos: .utility)
     private let fileManager = FileManager.default
     private let maxTelemetryRecords = 900
-    private let maxSnapshots = 48
+    private let maxSnapshots = 80
     private let snapshotLifetime: TimeInterval = 10 * 60
     private let snapshotInterval: CFTimeInterval = 0.25
     private let maxSnapshotDimension = 480
@@ -69,7 +69,9 @@ final class CloudDiagnosticsStore {
     private var latestDetections: [DetectionRecord] = []
     private var telemetryRecords: [TelemetryRecord] = []
     private var snapshots: [SnapshotRecord] = []
-    private var captureEnabled = false
+    // V9 keeps a small local pre-roll from app start. The API still requires
+    // explicit pairing before any frame can leave the phone.
+    private var captureEnabled = true
     private var snapshotCaptureInFlight = false
     private var lastSnapshotTime: CFTimeInterval = 0
 
@@ -77,7 +79,7 @@ final class CloudDiagnosticsStore {
 
     init() {
         directory = fileManager.temporaryDirectory
-            .appendingPathComponent("CloudWeightDiagnosticsV8", isDirectory: true)
+            .appendingPathComponent("CloudWeightDiagnosticsV9", isDirectory: true)
         try? fileManager.createDirectory(
             at: directory,
             withIntermediateDirectories: true

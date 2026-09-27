@@ -6,8 +6,16 @@ import coremltools as ct
 import numpy as np
 import torch
 import torch.nn as nn
-import segmentation_models_pytorch as smp
+import torch.nn.functional as F
 from safetensors.torch import load_file
+from transformers import SegformerConfig, SegformerForSemanticSegmentation
+
+
+SKY_CLASS_INDEX = 2
+INPUT_SIZE = 384
+SOURCE_REPOSITORY = "https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512"
+SOURCE_REVISION = "489d5cd81a0b59fab9b7ea758d3548ebe99677da"
+SOURCE_WEIGHTS_SHA256 = "6ae39addd01de6b1b8bde2cf677d43a5cd733424b8d186de3f95d1c51fee23f9"
 
 
 class SkyProbabilityModel(nn.Module):
@@ -25,23 +33,34 @@ class SkyProbabilityModel(nn.Module):
 
     def forward(self, image):
         normalized = (image - self.mean) / self.std
-        logits = self.model(normalized)
+        logits = self.model(pixel_values=normalized, return_dict=False)[0]
         probabilities = torch.softmax(logits, dim=1)
-        return probabilities[:, 1:2, :, :]
+        sky = probabilities[:, SKY_CLASS_INDEX : SKY_CLASS_INDEX + 1, :, :]
+        return F.interpolate(
+            sky,
+            size=(INPUT_SIZE, INPUT_SIZE),
+            mode="bilinear",
+            align_corners=False,
+        )
 
 
-def load_weights(model: nn.Module, path: Path) -> None:
-    state = load_file(str(path))
-    converted = {}
-    for key, value in state.items():
-        target_key = key[len("_model.") :] if key.startswith("_model.") else key
-        converted[target_key] = value
+def load_model(config_path: Path, weights_path: Path) -> nn.Module:
+    config = SegformerConfig.from_json_file(str(config_path))
+    if int(config.num_labels) != 150:
+        raise RuntimeError(f"Expected 150 ADE20K classes, got {config.num_labels}")
+    if str(config.id2label.get(SKY_CLASS_INDEX, "")).strip().lower() != "sky":
+        raise RuntimeError(
+            f"ADE20K class {SKY_CLASS_INDEX} is not sky: {config.id2label.get(SKY_CLASS_INDEX)!r}"
+        )
 
-    missing, unexpected = model.load_state_dict(converted, strict=False)
+    model = SegformerForSemanticSegmentation(config)
+    state = load_file(str(weights_path))
+    missing, unexpected = model.load_state_dict(state, strict=False)
     if missing:
-        raise KeyError("Missing SkyWater parameters: " + ", ".join(sorted(missing)))
+        raise KeyError("Missing SegFormer parameters: " + ", ".join(sorted(missing)))
     if unexpected:
-        raise KeyError("Unexpected SkyWater parameters: " + ", ".join(sorted(unexpected)))
+        raise KeyError("Unexpected SegFormer parameters: " + ", ".join(sorted(unexpected)))
+    return model.eval()
 
 
 def rename_mlprogram_io(mlmodel: ct.models.MLModel) -> ct.models.MLModel:
@@ -70,57 +89,48 @@ def rename_mlprogram_io(mlmodel: ct.models.MLModel) -> ct.models.MLModel:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--weights", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
 
     torch.manual_seed(0)
-    model = smp.Segformer(
-        encoder_name="mit_b2",
-        encoder_weights=None,
-        in_channels=3,
-        classes=4,
-    )
-    load_weights(model, args.weights)
-    model.eval()
-
+    model = load_model(args.config, args.weights)
     wrapped = SkyProbabilityModel(model).eval()
-    example = torch.full((1, 3, 384, 384), 0.5, dtype=torch.float32)
+    example = torch.full((1, 3, INPUT_SIZE, INPUT_SIZE), 0.5, dtype=torch.float32)
 
     with torch.no_grad():
         reference = wrapped(example)
-        if tuple(reference.shape) != (1, 1, 384, 384):
+        if tuple(reference.shape) != (1, 1, INPUT_SIZE, INPUT_SIZE):
             raise RuntimeError(f"Unexpected sky model output shape: {tuple(reference.shape)}")
         if not torch.isfinite(reference).all():
             raise RuntimeError("Sky model produced non-finite probabilities")
+        if float(reference.min()) < 0 or float(reference.max()) > 1:
+            raise RuntimeError("Sky model produced probabilities outside [0, 1]")
 
-    exported = torch.export.export(wrapped, (example,), strict=False).run_decompositions({})
-    if exported.dialect not in ("ATEN", "EDGE"):
-        raise RuntimeError(f"Unexpected torch.export dialect: {exported.dialect}")
-
+    traced = torch.jit.trace(wrapped, example, strict=False)
     mlmodel = ct.convert(
-        exported,
+        traced,
+        inputs=[ct.TensorType(name="image_tensor", shape=example.shape, dtype=np.float32)],
         convert_to="mlprogram",
         minimum_deployment_target=ct.target.iOS17,
         compute_precision=ct.precision.FLOAT16,
     )
     mlmodel = rename_mlprogram_io(mlmodel)
 
-    mlmodel.author = "Vincent Qin / SkyWater-Seg; iOS conversion for Cloud Weight Lab"
+    mlmodel.author = "NVIDIA SegFormer / ADE20K; iOS conversion for Cloud Weight Lab"
     mlmodel.short_description = (
-        "Sky-vs-background semantic gate used before UCloudNet cloud segmentation."
+        "Generic ADE20K semantic sky gate used before UCloudNet cloud segmentation."
     )
-    mlmodel.user_defined_metadata["source_repository"] = (
-        "https://huggingface.co/Realcat/skywater_seg"
+    mlmodel.user_defined_metadata["source_repository"] = SOURCE_REPOSITORY
+    mlmodel.user_defined_metadata["source_revision"] = SOURCE_REVISION
+    mlmodel.user_defined_metadata["source_weights_sha256"] = SOURCE_WEIGHTS_SHA256
+    mlmodel.user_defined_metadata["license"] = (
+        "NVIDIA Source Code License for SegFormer; non-commercial research/evaluation only"
     )
-    mlmodel.user_defined_metadata["source_revision"] = (
-        "a45ff48a4f924057e9fd947ec736b4098b06e337"
-    )
-    mlmodel.user_defined_metadata["source_weights_sha256"] = (
-        "bba260c601533e4d34c7891cd055b051c2cd5fd2c22084a35d902bfb43e31341"
-    )
-    mlmodel.user_defined_metadata["license"] = "MIT"
-    mlmodel.user_defined_metadata["capture"] = "torch.export"
+    mlmodel.user_defined_metadata["dataset"] = "ADE20K / scene_parse_150"
+    mlmodel.user_defined_metadata["sky_class_index"] = str(SKY_CLASS_INDEX)
+    mlmodel.user_defined_metadata["capture"] = "torch.jit.trace"
 
     prediction = mlmodel.predict({"image_tensor": example.numpy()})
     converted = np.asarray(prediction["sky_probability"], dtype=np.float32)
@@ -136,12 +146,11 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.output.exists():
         import shutil
-
         shutil.rmtree(args.output)
     mlmodel.save(str(args.output))
 
     spec = mlmodel.get_spec()
-    print("Sky Core ML model generated:", args.output)
+    print("ADE20K sky Core ML model generated:", args.output)
     print("Input:", spec.description.input[0].name, spec.description.input[0].type)
     print("Output:", spec.description.output[0].name, spec.description.output[0].type)
     print("Validation max abs error:", f"{max_error:.6f}")

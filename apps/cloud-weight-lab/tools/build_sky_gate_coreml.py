@@ -3,9 +3,9 @@ import argparse
 from pathlib import Path
 
 import coremltools as ct
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import segmentation_models_pytorch as smp
 from safetensors.torch import load_file
 
@@ -44,6 +44,30 @@ def load_weights(model: nn.Module, path: Path) -> None:
         raise KeyError("Unexpected SkyWater parameters: " + ", ".join(sorted(unexpected)))
 
 
+def rename_mlprogram_io(mlmodel: ct.models.MLModel) -> ct.models.MLModel:
+    spec = mlmodel.get_spec()
+    if len(spec.description.input) != 1 or len(spec.description.output) != 1:
+        raise RuntimeError("Sky gate must expose exactly one input and one output")
+
+    old_input = spec.description.input[0].name
+    old_output = spec.description.output[0].name
+    ct.utils.rename_feature(
+        spec,
+        old_input,
+        "image_tensor",
+        rename_inputs=True,
+        rename_outputs=False,
+    )
+    ct.utils.rename_feature(
+        spec,
+        old_output,
+        "sky_probability",
+        rename_inputs=False,
+        rename_outputs=True,
+    )
+    return ct.models.MLModel(spec, weights_dir=mlmodel.weights_dir)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", required=True, type=Path)
@@ -64,30 +88,21 @@ def main() -> None:
     example = torch.full((1, 3, 384, 384), 0.5, dtype=torch.float32)
 
     with torch.no_grad():
-        output = wrapped(example)
-        if tuple(output.shape) != (1, 1, 384, 384):
-            raise RuntimeError(f"Unexpected sky model output shape: {tuple(output.shape)}")
-        if not torch.isfinite(output).all():
+        reference = wrapped(example)
+        if tuple(reference.shape) != (1, 1, 384, 384):
+            raise RuntimeError(f"Unexpected sky model output shape: {tuple(reference.shape)}")
+        if not torch.isfinite(reference).all():
             raise RuntimeError("Sky model produced non-finite probabilities")
 
-    traced = torch.jit.trace(wrapped, example, strict=True)
-    traced.eval()
+    exported = torch.export.export(wrapped, (example,), strict=False)
 
     mlmodel = ct.convert(
-        traced,
+        exported,
         convert_to="mlprogram",
         minimum_deployment_target=ct.target.iOS17,
         compute_precision=ct.precision.FLOAT16,
-        inputs=[
-            ct.ImageType(
-                name="image",
-                shape=example.shape,
-                scale=1.0 / 255.0,
-                color_layout=ct.colorlayout.RGB,
-            )
-        ],
-        outputs=[ct.TensorType(name="sky_probability")],
     )
+    mlmodel = rename_mlprogram_io(mlmodel)
 
     mlmodel.author = "Vincent Qin / SkyWater-Seg; iOS conversion for Cloud Weight Lab"
     mlmodel.short_description = (
@@ -103,6 +118,18 @@ def main() -> None:
         "bba260c601533e4d34c7891cd055b051c2cd5fd2c22084a35d902bfb43e31341"
     )
     mlmodel.user_defined_metadata["license"] = "MIT"
+    mlmodel.user_defined_metadata["capture"] = "torch.export"
+
+    prediction = mlmodel.predict({"image_tensor": example.numpy()})
+    converted = np.asarray(prediction["sky_probability"], dtype=np.float32)
+    reference_np = reference.detach().cpu().numpy().astype(np.float32)
+    if converted.shape != reference_np.shape:
+        raise RuntimeError(
+            f"Core ML sky output shape mismatch: {converted.shape} != {reference_np.shape}"
+        )
+    max_error = float(np.max(np.abs(converted - reference_np)))
+    if not np.isfinite(converted).all() or max_error > 0.08:
+        raise RuntimeError(f"Core ML sky conversion validation failed: max error {max_error:.5f}")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.output.exists():
@@ -113,8 +140,9 @@ def main() -> None:
 
     spec = mlmodel.get_spec()
     print("Sky Core ML model generated:", args.output)
-    print("Input:", spec.description.input[0].name)
-    print("Output:", spec.description.output[0].name)
+    print("Input:", spec.description.input[0].name, spec.description.input[0].type)
+    print("Output:", spec.description.output[0].name, spec.description.output[0].type)
+    print("Validation max abs error:", f"{max_error:.6f}")
 
 
 if __name__ == "__main__":

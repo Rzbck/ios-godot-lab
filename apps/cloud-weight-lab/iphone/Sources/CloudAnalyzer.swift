@@ -86,9 +86,15 @@ final class CloudAnalyzer {
                 width: skyInputSize,
                 height: skyInputSize
               ),
-              let skyProbabilitySquare = predictProbabilityMap(
+              let skyInputTensor = makeRGBTensor(
+                from: skyInputBuffer,
+                width: skyInputSize,
+                height: skyInputSize
+              ),
+              let skyProbabilitySquare = predictTensorProbabilityMap(
                 model: skyModel,
-                inputBuffer: skyInputBuffer,
+                inputTensor: skyInputTensor,
+                inputName: "image_tensor",
                 outputName: "sky_probability",
                 width: skyInputSize,
                 height: skyInputSize
@@ -113,7 +119,7 @@ final class CloudAnalyzer {
             return emptyAnalysis(fieldOfViewDegrees: fieldOfViewDegrees)
         }
 
-        guard let cloudProbabilityMap = predictProbabilityMap(
+        guard let cloudProbabilityMap = predictImageProbabilityMap(
             model: cloudModel,
             inputBuffer: cloudInputBuffer,
             outputName: "cloud_probability",
@@ -188,7 +194,7 @@ final class CloudAnalyzer {
         )
     }
 
-    private func predictProbabilityMap(
+    private func predictImageProbabilityMap(
         model: MLModel,
         inputBuffer: CVPixelBuffer,
         outputName: String,
@@ -199,6 +205,36 @@ final class CloudAnalyzer {
         do {
             provider = try MLDictionaryFeatureProvider(dictionary: [
                 "image": MLFeatureValue(pixelBuffer: inputBuffer)
+            ])
+        } catch {
+            return nil
+        }
+
+        let prediction: MLFeatureProvider
+        do {
+            prediction = try model.prediction(from: provider)
+        } catch {
+            return nil
+        }
+
+        guard let array = prediction.featureValue(for: outputName)?.multiArrayValue else {
+            return nil
+        }
+        return probabilityValues(from: array, width: width, height: height)
+    }
+
+    private func predictTensorProbabilityMap(
+        model: MLModel,
+        inputTensor: MLMultiArray,
+        inputName: String,
+        outputName: String,
+        width: Int,
+        height: Int
+    ) -> [Double]? {
+        let provider: MLDictionaryFeatureProvider
+        do {
+            provider = try MLDictionaryFeatureProvider(dictionary: [
+                inputName: MLFeatureValue(multiArray: inputTensor)
             ])
         } catch {
             return nil
@@ -251,6 +287,41 @@ final class CloudAnalyzer {
             colorSpace: CGColorSpaceCreateDeviceRGB()
         )
         return destination
+    }
+
+    private func makeRGBTensor(
+        from pixelBuffer: CVPixelBuffer,
+        width: Int,
+        height: Int
+    ) -> MLMultiArray? {
+        guard CVPixelBufferGetWidth(pixelBuffer) == width,
+              CVPixelBufferGetHeight(pixelBuffer) == height,
+              let array = try? MLMultiArray(
+                shape: [1, 3, NSNumber(value: height), NSNumber(value: width)],
+                dataType: .float32
+              ) else {
+            return nil
+        }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
+        let rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+        let tensor = array.dataPointer.bindMemory(to: Float.self, capacity: array.count)
+        let plane = width * height
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let pixel = y * width + x
+                let offset = y * rowBytes + x * 4
+                tensor[pixel] = Float(bytes[offset + 2]) / 255.0
+                tensor[plane + pixel] = Float(bytes[offset + 1]) / 255.0
+                tensor[2 * plane + pixel] = Float(bytes[offset]) / 255.0
+            }
+        }
+        return array
     }
 
     private func probabilityValues(

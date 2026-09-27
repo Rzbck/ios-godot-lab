@@ -94,7 +94,9 @@ def main() -> None:
         if not torch.isfinite(reference).all():
             raise RuntimeError("Sky model produced non-finite probabilities")
 
-    exported = torch.export.export(wrapped, (example,), strict=False)
+    exported = torch.export.export(wrapped, (example,), strict=False).run_decompositions({})
+    if exported.dialect not in ("ATEN", "EDGE"):
+        raise RuntimeError(f"Unexpected torch.export dialect: {exported.dialect}")
 
     mlmodel = ct.convert(
         exported,

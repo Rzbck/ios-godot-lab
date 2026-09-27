@@ -59,8 +59,10 @@ final class CloudAnalyzer {
         }
 
         do {
-            cloudModel = try MLModel(contentsOf: cloudURL, configuration: configuration)
-            skyModel = try MLModel(contentsOf: skyURL, configuration: configuration)
+            let loadedCloudModel = try MLModel(contentsOf: cloudURL, configuration: configuration)
+            let loadedSkyModel = try MLModel(contentsOf: skyURL, configuration: configuration)
+            cloudModel = loadedCloudModel
+            skyModel = loadedSkyModel
             loadError = nil
         } catch {
             cloudModel = nil
@@ -363,6 +365,9 @@ final class CloudAnalyzer {
             return pointer[index]
         case .int32:
             let pointer = array.dataPointer.bindMemory(to: Int32.self, capacity: array.count)
+            return Double(pointer[index])
+        case .int8:
+            let pointer = array.dataPointer.bindMemory(to: Int8.self, capacity: array.count)
             return Double(pointer[index])
         @unknown default:
             return 0

@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreImage
 import Foundation
 import ImageIO
+import QuartzCore
 import UniformTypeIdentifiers
 
 final class CloudDiagnosticsStore {
@@ -47,6 +48,7 @@ final class CloudDiagnosticsStore {
 
     private let lock = NSLock()
     private let context = CIContext(options: [.cacheIntermediates: false])
+    private let imageQueue = DispatchQueue(label: "cloudweight.diagnostics.images", qos: .utility)
     private let fileManager = FileManager.default
     private let maxTelemetryRecords = 180
     private let maxSnapshots = 12
@@ -117,8 +119,25 @@ final class CloudDiagnosticsStore {
         }
         lock.unlock()
 
-        guard shouldCapture,
-              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+        guard shouldCapture else { return }
+
+        imageQueue.async { [weak self] in
+            self?.writeSnapshot(
+                sampleBuffer: sampleBuffer,
+                overlayImage: overlayImage,
+                telemetry: telemetry,
+                detections: detections
+            )
+        }
+    }
+
+    private func writeSnapshot(
+        sampleBuffer: CMSampleBuffer,
+        overlayImage: CGImage?,
+        telemetry: CloudTelemetrySnapshot,
+        detections: [CloudDetection]
+    ) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),
               let jpeg = makeCompositeJPEG(
                 pixelBuffer: pixelBuffer,
                 overlayImage: overlayImage

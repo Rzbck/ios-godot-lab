@@ -30,6 +30,7 @@ final class CameraService: NSObject, ObservableObject {
     private var lastAnalysisTime = 0.0
     private var fieldOfViewDegrees = 65.0
     private var analysisInFlight = false
+    private var droppedFrames = 0
     private var throttledFrames = 0
 
     func requestAndStart() {
@@ -170,7 +171,9 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         let duration = CACurrentMediaTime() - analysisStarted
-        let skippedSincePreviousAnalysis = throttledFrames
+        let droppedSincePreviousAnalysis = droppedFrames
+        let throttledSincePreviousAnalysis = throttledFrames
+        droppedFrames = 0
         throttledFrames = 0
 
         let nextTelemetry = telemetryMonitor.snapshot(
@@ -178,7 +181,8 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             analysis: rawAnalysis,
             rawDetections: rawDetections.count,
             stabilizedDetections: stabilizedDetections.count,
-            throttledFrames: skippedSincePreviousAnalysis
+            droppedFrames: droppedSincePreviousAnalysis,
+            throttledFrames: throttledSincePreviousAnalysis
         )
 
         analysisInFlight = false
@@ -188,6 +192,14 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             self?.detections = stabilizedDetections
             self?.telemetry = nextTelemetry
         }
+    }
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didDrop sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        droppedFrames += 1
     }
 }
 

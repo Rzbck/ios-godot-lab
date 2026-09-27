@@ -4,7 +4,9 @@ param(
     [string]$HostAddress,
     [string]$SessionId,
     [switch]$AllSessions,
-    [ValidateRange(1, 24)][int]$ParallelDownloads = 8,
+    [switch]$AnyBuild,
+    [ValidateRange(1, 12)][int]$ParallelDownloads = 3,
+    [ValidateRange(1, 8)][int]$RetryCount = 4,
     [switch]$KeepFrames,
     [switch]$KeepRaw,
     [switch]$NoVideo,
@@ -38,13 +40,25 @@ function Invoke-ApiJson {
         [Parameter(Mandatory)][string]$Uri,
         [string]$Token,
         [ValidateSet('GET','POST')][string]$Method = 'GET',
-        [int]$TimeoutSec = 4
+        [int]$TimeoutSec = 5,
+        [int]$Attempts = 2
     )
+
     $Headers = @{}
     if (-not [string]::IsNullOrWhiteSpace($Token)) {
         $Headers.Authorization = "Bearer $Token"
     }
-    return Invoke-RestMethod -Uri $Uri -Method $Method -Headers $Headers -TimeoutSec $TimeoutSec
+
+    $LastError = $null
+    foreach ($Attempt in 1..[Math]::Max(1, $Attempts)) {
+        try {
+            return Invoke-RestMethod -Uri $Uri -Method $Method -Headers $Headers -TimeoutSec $TimeoutSec
+        } catch {
+            $LastError = $_
+            if ($Attempt -lt $Attempts) { Start-Sleep -Milliseconds (250 * $Attempt) }
+        }
+    }
+    throw $LastError
 }
 
 function Test-CloudWeightHost {
@@ -89,61 +103,84 @@ function Find-CloudWeightHost {
             try {
                 $Health = Invoke-RestMethod -Uri "http://${Address}:$using:Port/api/v1/health" -Method Get -TimeoutSec 1
                 if ([string]$Health.app -eq 'Cloud Weight Lab') {
-                    [pscustomobject]@{ Address = $Address; Build = [string]$Health.build }
+                    [pscustomobject]@{
+                        Address = $Address
+                        Build = [string]$Health.build
+                        Version = [string]$Health.version
+                    }
                 }
             } catch {}
         } -ThrottleLimit 64
     )
     if ($Hits.Count -eq 0) {
-        throw "API Cloud Weight introuvable. Ouvre l'app sur l'iPhone, connecte le même Wi-Fi et vérifie l'autorisation Réseau local."
+        throw "API Cloud Weight introuvable. Ouvre l'app sur l'iPhone, utilise le même Wi-Fi et vérifie l'autorisation Réseau local."
     }
     return $Hits[0]
 }
 
+function Save-ApiSession {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$BaseUrl,
+        [Parameter(Mandatory)][string]$Token,
+        [string]$Build
+    )
+    $Saved = [pscustomobject]@{
+        base_url = $BaseUrl
+        token = $Token
+        build = $Build
+        paired_at = (Get-Date).ToString('o')
+    }
+    $Saved | ConvertTo-Json | Set-Content -LiteralPath $Path -Encoding UTF8
+    return $Saved
+}
+
 function Get-OrCreateApiSession {
     $SessionPath = Get-ApiSessionPath
+    $Saved = $null
+
     if (Test-Path -LiteralPath $SessionPath) {
+        try { $Saved = Get-Content -LiteralPath $SessionPath -Raw | ConvertFrom-Json } catch {}
+    }
+
+    if ($null -ne $Saved -and -not [string]::IsNullOrWhiteSpace([string]$Saved.base_url)) {
         try {
-            $Saved = Get-Content -LiteralPath $SessionPath -Raw | ConvertFrom-Json
-            $null = Invoke-ApiJson -Uri "$($Saved.base_url)/api/v1/sessions" -Token ([string]$Saved.token) -TimeoutSec 2
-            Write-Host "Session API existante : $($Saved.base_url)" -ForegroundColor Green
-            return $Saved
-        } catch {
-            Remove-Item -LiteralPath $SessionPath -Force -ErrorAction SilentlyContinue
-        }
+            $Health = Invoke-RestMethod -Uri "$($Saved.base_url)/api/v1/health" -Method Get -TimeoutSec 2
+            $null = Invoke-ApiJson -Uri "$($Saved.base_url)/api/v1/sessions" -Token ([string]$Saved.token) -TimeoutSec 3 -Attempts 1
+            if ([string]$Health.app -eq 'Cloud Weight Lab') {
+                Write-Host "Connexion directe : $($Saved.base_url)" -ForegroundColor Green
+                return [pscustomobject]@{ Session = $Saved; Health = $Health }
+            }
+        } catch {}
     }
 
     $Found = Find-CloudWeightHost
     $BaseUrl = "http://$($Found.Address):$Port"
-    Write-Host "iPhone trouvé : $BaseUrl" -ForegroundColor Green
-    Write-Host "Touche une fois le petit bouton API dans Cloud Weight. J'attends 60 s…" -ForegroundColor Yellow
+    $Health = Invoke-RestMethod -Uri "$BaseUrl/api/v1/health" -Method Get -TimeoutSec 3
+    Write-Host "iPhone trouvé : $BaseUrl · build $($Health.build)" -ForegroundColor Green
 
-    $Deadline = (Get-Date).AddSeconds(60)
-    $PairResponse = $null
-    while ((Get-Date) -lt $Deadline) {
+    if ($null -ne $Saved -and -not [string]::IsNullOrWhiteSpace([string]$Saved.token)) {
         try {
-            $Health = Invoke-RestMethod -Uri "$BaseUrl/api/v1/health" -Method Get -TimeoutSec 2
-            if ([bool]$Health.pairing_armed) {
-                $PairResponse = Invoke-RestMethod -Uri "$BaseUrl/api/v1/pair" -Method Post -TimeoutSec 3
-                break
-            }
+            $null = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions" -Token ([string]$Saved.token) -TimeoutSec 3 -Attempts 1
+            $Refreshed = Save-ApiSession -Path $SessionPath -BaseUrl $BaseUrl -Token ([string]$Saved.token) -Build ([string]$Health.build)
+            Write-Host 'Jeton persistant réutilisé automatiquement.' -ForegroundColor Green
+            return [pscustomobject]@{ Session = $Refreshed; Health = $Health }
         } catch {}
-        Start-Sleep -Milliseconds 500
+    }
+
+    try {
+        $PairResponse = Invoke-ApiJson -Uri "$BaseUrl/api/v1/pair" -Method POST -TimeoutSec 4 -Attempts 2
+    } catch {
+        throw "Connexion automatique impossible. L'iPhone possède peut-être déjà un autre jeton persistant. Détail : $($_.Exception.Message)"
     }
 
     if ($null -eq $PairResponse -or [string]::IsNullOrWhiteSpace([string]$PairResponse.token)) {
-        throw 'Appairage non réalisé.'
+        throw 'La connexion automatique n’a retourné aucun jeton.'
     }
 
-    $Saved = [pscustomobject]@{
-        base_url = $BaseUrl
-        token = [string]$PairResponse.token
-        build = [string]$PairResponse.build
-        paired_at = (Get-Date).ToString('o')
-    }
-    $Saved | ConvertTo-Json | Set-Content -LiteralPath $SessionPath -Encoding UTF8
-    Write-Host 'Appairage local établi.' -ForegroundColor Green
-    return $Saved
+    $Created = Save-ApiSession -Path $SessionPath -BaseUrl $BaseUrl -Token ([string]$PairResponse.token) -Build ([string]$PairResponse.build)
+    Write-Host 'Première connexion automatique enregistrée. Plus aucun bouton API à presser.' -ForegroundColor Green
+    return [pscustomobject]@{ Session = $Created; Health = $Health }
 }
 
 function Merge-TelemetryChunks {
@@ -158,6 +195,12 @@ function Merge-TelemetryChunks {
         Get-Content -LiteralPath $Chunk.FullName | Add-Content -LiteralPath $Merged -Encoding UTF8
     }
     return $Merged
+}
+
+function Get-NdjsonLineCount {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+    return @(Get-Content -LiteralPath $Path | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
 }
 
 function Make-DiagnosticVideo {
@@ -179,12 +222,18 @@ function Make-DiagnosticVideo {
     )
     if ($Frames.Count -lt 2) { return $null }
 
+    $MissingFrames = @($Frames | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $OutDir ([string]$_.relativePath)))
+    })
+    if ($MissingFrames.Count -gt 0) {
+        throw "Le téléchargement visuel est incomplet : $($MissingFrames.Count) frame(s) référencée(s) manquent."
+    }
+
     $Concat = Join-Path $OutDir 'session.ffconcat'
     $Video = Join-Path $OutDir 'diagnostic-preview.mp4'
     $Lines = @('ffconcat version 1.0')
     for ($i = 0; $i -lt $Frames.Count; $i++) {
         $LocalPath = Join-Path $OutDir ([string]$Frames[$i].relativePath)
-        if (-not (Test-Path -LiteralPath $LocalPath)) { continue }
         $Escaped = $LocalPath.Replace("'", "''")
         $Lines += "file '$Escaped'"
         if ($i -lt $Frames.Count - 1) {
@@ -216,9 +265,9 @@ function Sync-OneSession {
     $OutDir = Join-Path $Root "artifacts\cloud-weight-lab\sessions\$Id"
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
-    $Manifest = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/manifest" -Token $Token -TimeoutSec 5
+    $Manifest = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/manifest" -Token $Token -TimeoutSec 8 -Attempts 3
     $Manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $OutDir 'manifest.json') -Encoding UTF8
-    $FilesPayload = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/files" -Token $Token -TimeoutSec 10
+    $FilesPayload = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/files" -Token $Token -TimeoutSec 15 -Attempts 3
     $Files = @($FilesPayload | ForEach-Object { $_ })
 
     Write-Host "`n=== SYNC CLOUD WEIGHT SESSION ===" -ForegroundColor Cyan
@@ -242,24 +291,89 @@ function Sync-OneSession {
         if (-not (Test-Path -LiteralPath $Parent)) {
             New-Item -ItemType Directory -Path $Parent -Force | Out-Null
         }
+
         if (Test-Path -LiteralPath $Destination) {
             $Existing = (Get-Item -LiteralPath $Destination).Length
             if ($Existing -eq $ExpectedBytes) { return }
         }
+
         $Escaped = [Uri]::EscapeDataString($Relative)
         $Uri = "$using:BaseUrl/api/v1/sessions/$using:Id/file?path=$Escaped"
-        Invoke-WebRequest -Uri $Uri -Headers $using:Headers -OutFile $Destination -TimeoutSec 30
-        $Actual = (Get-Item -LiteralPath $Destination).Length
-        if ($Actual -ne $ExpectedBytes) {
-            throw "Taille inattendue pour $Relative : $Actual != $ExpectedBytes"
+        $Part = "$Destination.part"
+        $Success = $false
+        $LastMessage = ''
+
+        foreach ($Attempt in 1..$using:RetryCount) {
+            Remove-Item -LiteralPath $Part -Force -ErrorAction SilentlyContinue
+            try {
+                Invoke-WebRequest -Uri $Uri -Headers $using:Headers -OutFile $Part -TimeoutSec 60
+                $Actual = (Get-Item -LiteralPath $Part).Length
+                if ($Actual -ne $ExpectedBytes) {
+                    throw "taille $Actual != $ExpectedBytes"
+                }
+                Move-Item -LiteralPath $Part -Destination $Destination -Force
+                $Success = $true
+                break
+            } catch {
+                $LastMessage = $_.Exception.Message
+                Remove-Item -LiteralPath $Part -Force -ErrorAction SilentlyContinue
+                if ($Attempt -lt $using:RetryCount) {
+                    Start-Sleep -Milliseconds (400 * $Attempt)
+                }
+            }
+        }
+
+        if (-not $Success) {
+            throw "Téléchargement impossible après $using:RetryCount tentative(s) : $Relative · $LastMessage"
         }
     } -ThrottleLimit $ParallelDownloads
 
     $MergedTelemetry = Merge-TelemetryChunks -OutDir $OutDir
-    $Video = $null
-    if (-not $NoVideo) {
-        $Video = Make-DiagnosticVideo -OutDir $OutDir
+    if ($null -eq $MergedTelemetry) { throw 'Aucune télémétrie fusionnable dans la session.' }
+
+    $TelemetryCount = Get-NdjsonLineCount -Path $MergedTelemetry
+    $EventsPath = Join-Path $OutDir 'events.ndjson'
+    $VisualPath = Join-Path $OutDir 'visual\visual.ndjson'
+    $EventCount = Get-NdjsonLineCount -Path $EventsPath
+    $VisualCount = Get-NdjsonLineCount -Path $VisualPath
+
+    $IsFinished = [string]$Manifest.state -ne 'recording'
+    if ($IsFinished) {
+        if ($TelemetryCount -ne [int]$Manifest.telemetryRecords) {
+            throw "Validation télémétrie échouée : $TelemetryCount != $($Manifest.telemetryRecords)."
+        }
+        if ($EventCount -ne [int]$Manifest.eventRecords) {
+            throw "Validation événements échouée : $EventCount != $($Manifest.eventRecords)."
+        }
+        if ($VisualCount -ne [int]$Manifest.visualFrames) {
+            throw "Validation visuelle échouée : $VisualCount != $($Manifest.visualFrames)."
+        }
     }
+
+    $Video = $null
+    if (-not $NoVideo) { $Video = Make-DiagnosticVideo -OutDir $OutDir }
+
+    $Report = [ordered]@{
+        sessionID = $Id
+        buildSHA = [string]$Manifest.buildSHA
+        appVersion = [string]$Manifest.appVersion
+        state = [string]$Manifest.state
+        syncedAt = (Get-Date).ToString('o')
+        expectedTelemetryRecords = [int]$Manifest.telemetryRecords
+        actualTelemetryRecords = $TelemetryCount
+        expectedEventRecords = [int]$Manifest.eventRecords
+        actualEventRecords = $EventCount
+        expectedVisualFrames = [int]$Manifest.visualFrames
+        actualVisualFrames = $VisualCount
+        remoteFileCount = $Files.Count
+        videoCreated = ($null -ne $Video)
+        complete = (-not $IsFinished) -or (
+            $TelemetryCount -eq [int]$Manifest.telemetryRecords -and
+            $EventCount -eq [int]$Manifest.eventRecords -and
+            $VisualCount -eq [int]$Manifest.visualFrames
+        )
+    }
+    $Report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OutDir 'SYNC-REPORT.json') -Encoding UTF8
 
     if ($null -ne $Video -and -not $KeepFrames) {
         Remove-Item -LiteralPath (Join-Path $OutDir 'visual\keyframes') -Recurse -Force -ErrorAction SilentlyContinue
@@ -269,35 +383,49 @@ function Sync-OneSession {
         Remove-Item -LiteralPath (Join-Path $OutDir 'telemetry') -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Write-Host "SYNC        = OK" -ForegroundColor Green
-    if ($null -ne $MergedTelemetry) { Write-Host "TELEMETRY   = $MergedTelemetry" -ForegroundColor Green }
+    Write-Host "SYNC        = OK + VALIDÉ" -ForegroundColor Green
+    Write-Host "TELEMETRY   = $TelemetryCount" -ForegroundColor Green
+    Write-Host "EVENTS      = $EventCount" -ForegroundColor Green
+    Write-Host "VISUAL      = $VisualCount" -ForegroundColor Green
     if ($null -ne $Video) { Write-Host "VIDEO       = $Video" -ForegroundColor Green }
+    Write-Host "REPORT      = $(Join-Path $OutDir 'SYNC-REPORT.json')" -ForegroundColor Green
 
     return $OutDir
 }
 
-$ApiSession = Get-OrCreateApiSession
+$Connection = Get-OrCreateApiSession
+$ApiSession = $Connection.Session
+$Health = $Connection.Health
 $BaseUrl = [string]$ApiSession.base_url
 $Token = [string]$ApiSession.token
+$CurrentBuild = [string]$Health.build
 $Root = Get-ContainerRoot
-$SessionsPayload = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions" -Token $Token -TimeoutSec 5
+
+$SessionsPayload = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions" -Token $Token -TimeoutSec 8 -Attempts 3
 $Sessions = @($SessionsPayload | ForEach-Object { $_ }) | Sort-Object {[double]$_.startedAt} -Descending
 if ($Sessions.Count -eq 0) { throw 'Aucune session Cloud Weight enregistrée sur cet iPhone.' }
 
 $Selected = @()
 if ($AllSessions) {
-    $Selected = $Sessions
+    $Selected = if ($AnyBuild) { $Sessions } else { @($Sessions | Where-Object { [string]$_.buildSHA -eq $CurrentBuild }) }
+    if ($Selected.Count -eq 0) { throw "Aucune session du build installé $CurrentBuild." }
 } elseif (-not [string]::IsNullOrWhiteSpace($SessionId)) {
     $Selected = @($Sessions | Where-Object { [string]$_.sessionID -eq $SessionId })
     if ($Selected.Count -eq 0) { throw "Session '$SessionId' introuvable." }
 } else {
-    $FinishedSessions = @($Sessions | Where-Object { [string]$_.state -ne 'recording' })
-    if ($FinishedSessions.Count -gt 0) {
-        $Selected = @($FinishedSessions[0])
-        Write-Host "Session terminée la plus récente sélectionnée : $($FinishedSessions[0].sessionID)" -ForegroundColor DarkCyan
+    $Candidates = if ($AnyBuild) { $Sessions } else { @($Sessions | Where-Object { [string]$_.buildSHA -eq $CurrentBuild }) }
+    if ($Candidates.Count -eq 0) {
+        $AvailableBuilds = @($Sessions | Select-Object -ExpandProperty buildSHA -Unique) -join ', '
+        throw "Aucune session correspondant au build actuellement installé $CurrentBuild. Builds présents : $AvailableBuilds"
+    }
+
+    $Finished = @($Candidates | Where-Object { [string]$_.state -ne 'recording' })
+    if ($Finished.Count -gt 0) {
+        $Selected = @($Finished[0])
+        Write-Host "Session du build courant sélectionnée : $($Finished[0].sessionID)" -ForegroundColor DarkCyan
     } else {
-        $Selected = @($Sessions[0])
-        Write-Host 'Aucune session terminée trouvée ; synchronisation de la session active.' -ForegroundColor Yellow
+        $Selected = @($Candidates[0])
+        Write-Host 'Pas encore de session terminée pour ce build ; synchronisation de la session active.' -ForegroundColor Yellow
     }
 }
 

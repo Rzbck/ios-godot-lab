@@ -218,7 +218,8 @@ function Sync-OneSession {
 
     $Manifest = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/manifest" -Token $Token -TimeoutSec 5
     $Manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $OutDir 'manifest.json') -Encoding UTF8
-    $Files = @(Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/files" -Token $Token -TimeoutSec 10)
+    $FilesPayload = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/files" -Token $Token -TimeoutSec 10
+    $Files = @($FilesPayload | ForEach-Object { $_ })
 
     Write-Host "`n=== SYNC CLOUD WEIGHT SESSION ===" -ForegroundColor Cyan
     Write-Host "SESSION     = $Id"
@@ -279,7 +280,8 @@ $ApiSession = Get-OrCreateApiSession
 $BaseUrl = [string]$ApiSession.base_url
 $Token = [string]$ApiSession.token
 $Root = Get-ContainerRoot
-$Sessions = @(Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions" -Token $Token -TimeoutSec 5 | Sort-Object {[double]$_.startedAt} -Descending)
+$SessionsPayload = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions" -Token $Token -TimeoutSec 5
+$Sessions = @($SessionsPayload | ForEach-Object { $_ }) | Sort-Object {[double]$_.startedAt} -Descending
 if ($Sessions.Count -eq 0) { throw 'Aucune session Cloud Weight enregistrée sur cet iPhone.' }
 
 $Selected = @()

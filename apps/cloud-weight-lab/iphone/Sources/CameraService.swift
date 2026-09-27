@@ -18,6 +18,7 @@ final class CameraService: NSObject, ObservableObject {
     @Published private(set) var analysis: CloudFrameAnalysis?
     @Published private(set) var detections: [CloudDetection] = []
     @Published private(set) var telemetry: CloudTelemetrySnapshot?
+    @Published private(set) var diagnosticReport = ""
 
     private let analyzer = CloudAnalyzer()
     private let estimator = CloudMassEstimator()
@@ -34,6 +35,9 @@ final class CameraService: NSObject, ObservableObject {
     private var throttledFrames = 0
 
     func requestAndStart() {
+        telemetryMonitor.reset()
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+
         guard analyzer.isReady else {
             status = .failed(analyzer.loadError ?? "Modèle de segmentation indisponible")
             return
@@ -62,6 +66,7 @@ final class CameraService: NSObject, ObservableObject {
     }
 
     func stop() {
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
         captureQueue.async { [weak self] in
             guard let self, self.session.isRunning else { return }
             self.session.stopRunning()
@@ -130,6 +135,19 @@ final class CameraService: NSObject, ObservableObject {
             self.status = .failed(message)
         }
     }
+
+    private func currentOrientationName() -> String {
+        switch UIDevice.current.orientation {
+        case .portrait: return "portrait"
+        case .portraitUpsideDown: return "portraitUpsideDown"
+        case .landscapeLeft: return "landscapeLeft"
+        case .landscapeRight: return "landscapeRight"
+        case .faceUp: return "faceUp"
+        case .faceDown: return "faceDown"
+        case .unknown: return "unknown"
+        @unknown default: return "unknown"
+        }
+    }
 }
 
 extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -176,14 +194,18 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         droppedFrames = 0
         throttledFrames = 0
 
+        let orientation = currentOrientationName()
         let nextTelemetry = telemetryMonitor.snapshot(
             analysisDurationSeconds: duration,
+            analyzerTiming: analyzer.lastTiming,
             analysis: rawAnalysis,
             rawDetections: rawDetections.count,
             stabilizedDetections: stabilizedDetections.count,
             droppedFrames: droppedSincePreviousAnalysis,
-            throttledFrames: throttledSincePreviousAnalysis
+            throttledFrames: throttledSincePreviousAnalysis,
+            orientation: orientation
         )
+        let nextReport = telemetryMonitor.makeReport(buildSHA: BuildInfo.gitSHA)
 
         analysisInFlight = false
 
@@ -191,6 +213,7 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             self?.analysis = displayAnalysis
             self?.detections = stabilizedDetections
             self?.telemetry = nextTelemetry
+            self?.diagnosticReport = nextReport
         }
     }
 

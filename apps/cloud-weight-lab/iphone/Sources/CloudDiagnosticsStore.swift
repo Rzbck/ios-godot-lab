@@ -14,6 +14,10 @@ final class CloudDiagnosticsStore {
         let coveragePercent: Double
         let centroidX: Double
         let centroidY: Double
+        let boundsX: Double
+        let boundsY: Double
+        let boundsWidth: Double
+        let boundsHeight: Double
         let midpointKilograms: Double
         let lowKilograms: Double
         let highKilograms: Double
@@ -22,6 +26,7 @@ final class CloudDiagnosticsStore {
     struct TelemetryRecord: Codable {
         let timestamp: TimeInterval
         let telemetry: CloudTelemetrySnapshot
+        let detections: [DetectionRecord]
     }
 
     struct SnapshotRecord: Codable {
@@ -44,30 +49,35 @@ final class CloudDiagnosticsStore {
         let detections: [DetectionRecord]
         let snapshotCount: Int
         let captureEnabled: Bool
+        let diagnosticFrameRateHz: Double
+        let diagnosticFrameCapacity: Int
+        let diagnosticMaxDimension: Int
     }
 
     private let lock = NSLock()
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let imageQueue = DispatchQueue(label: "cloudweight.diagnostics.images", qos: .utility)
     private let fileManager = FileManager.default
-    private let maxTelemetryRecords = 180
-    private let maxSnapshots = 12
+    private let maxTelemetryRecords = 900
+    private let maxSnapshots = 48
     private let snapshotLifetime: TimeInterval = 10 * 60
-    private let snapshotInterval: CFTimeInterval = 2.0
-    private let maxSnapshotDimension = 640
+    private let snapshotInterval: CFTimeInterval = 0.25
+    private let maxSnapshotDimension = 480
+    private let jpegQuality = 0.32
 
     private var latestTelemetry: CloudTelemetrySnapshot?
     private var latestDetections: [DetectionRecord] = []
     private var telemetryRecords: [TelemetryRecord] = []
     private var snapshots: [SnapshotRecord] = []
     private var captureEnabled = false
+    private var snapshotCaptureInFlight = false
     private var lastSnapshotTime: CFTimeInterval = 0
 
     private let directory: URL
 
     init() {
         directory = fileManager.temporaryDirectory
-            .appendingPathComponent("CloudWeightDiagnosticsV6", isDirectory: true)
+            .appendingPathComponent("CloudWeightDiagnosticsV8", isDirectory: true)
         try? fileManager.createDirectory(
             at: directory,
             withIntermediateDirectories: true
@@ -91,7 +101,8 @@ final class CloudDiagnosticsStore {
         let detectionRecords = detections.map(Self.detectionRecord)
         let telemetryRecord = TelemetryRecord(
             timestamp: Date().timeIntervalSince1970,
-            telemetry: telemetry
+            telemetry: telemetry,
+            detections: detectionRecords
         )
 
         lock.lock()
@@ -113,16 +124,25 @@ final class CloudDiagnosticsStore {
         let now = CACurrentMediaTime()
 
         lock.lock()
-        let shouldCapture = captureEnabled && now - lastSnapshotTime >= snapshotInterval
+        let shouldCapture = captureEnabled
+            && !snapshotCaptureInFlight
+            && now - lastSnapshotTime >= snapshotInterval
         if shouldCapture {
             lastSnapshotTime = now
+            snapshotCaptureInFlight = true
         }
         lock.unlock()
 
         guard shouldCapture else { return }
 
         imageQueue.async { [weak self] in
-            self?.writeSnapshot(
+            guard let self else { return }
+            defer {
+                self.lock.lock()
+                self.snapshotCaptureInFlight = false
+                self.lock.unlock()
+            }
+            self.writeSnapshot(
                 sampleBuffer: sampleBuffer,
                 overlayImage: overlayImage,
                 telemetry: telemetry,
@@ -184,16 +204,25 @@ final class CloudDiagnosticsStore {
             telemetry: latestTelemetry,
             detections: latestDetections,
             snapshotCount: snapshots.count,
-            captureEnabled: captureEnabled
+            captureEnabled: captureEnabled,
+            diagnosticFrameRateHz: 1.0 / snapshotInterval,
+            diagnosticFrameCapacity: maxSnapshots,
+            diagnosticMaxDimension: maxSnapshotDimension
         )
         lock.unlock()
         return encode(payload)
     }
 
-    func telemetryData(limit: Int) -> Data {
+    func telemetryData(limit: Int, after timestamp: TimeInterval?) -> Data {
         lock.lock()
         let safeLimit = min(max(1, limit), maxTelemetryRecords)
-        let payload = Array(telemetryRecords.suffix(safeLimit))
+        let filtered: [TelemetryRecord]
+        if let timestamp {
+            filtered = telemetryRecords.filter { $0.timestamp > timestamp }
+        } else {
+            filtered = telemetryRecords
+        }
+        let payload = Array(filtered.suffix(safeLimit))
         lock.unlock()
         return encode(payload)
     }
@@ -243,6 +272,10 @@ final class CloudDiagnosticsStore {
             coveragePercent: detection.observation.coverage * 100,
             centroidX: Double(detection.observation.centroid.x),
             centroidY: Double(detection.observation.centroid.y),
+            boundsX: Double(detection.observation.bounds.origin.x),
+            boundsY: Double(detection.observation.bounds.origin.y),
+            boundsWidth: Double(detection.observation.bounds.size.width),
+            boundsHeight: Double(detection.observation.bounds.size.height),
             midpointKilograms: detection.estimate.midpointKilograms,
             lowKilograms: detection.estimate.lowKilograms,
             highKilograms: detection.estimate.highKilograms
@@ -342,7 +375,7 @@ final class CloudDiagnosticsStore {
         CGImageDestinationAddImage(
             destination,
             composite,
-            [kCGImageDestinationLossyCompressionQuality: 0.45] as CFDictionary
+            [kCGImageDestinationLossyCompressionQuality: jpegQuality] as CFDictionary
         )
         guard CGImageDestinationFinalize(destination) else { return nil }
         return output as Data

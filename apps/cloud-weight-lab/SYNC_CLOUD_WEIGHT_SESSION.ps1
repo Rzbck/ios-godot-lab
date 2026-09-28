@@ -213,14 +213,26 @@ function Make-DiagnosticVideo {
         return $null
     }
 
-    $Frames = @(
+    $AllFrames = @(
         Get-Content -LiteralPath $VisualIndex |
             ForEach-Object {
                 if (-not [string]::IsNullOrWhiteSpace($_)) { $_ | ConvertFrom-Json }
             } |
             Sort-Object {[double]$_.timestamp}
     )
-    if ($Frames.Count -lt 2) { return $null }
+    if ($AllFrames.Count -lt 2) { return $null }
+
+    $Frames = @(
+        $AllFrames | Where-Object {
+            [string]$_.reason -in @('event', 'transition') `
+                -or [int]$_.cloudCount -gt 0 `
+                -or [double]$_.cloudCoveragePercent -ge 1.5
+        }
+    )
+
+    if ($Frames.Count -lt 2) {
+        $Frames = $AllFrames
+    }
 
     $MissingFrames = @($Frames | Where-Object {
         -not (Test-Path -LiteralPath (Join-Path $OutDir ([string]$_.relativePath)))
@@ -238,7 +250,9 @@ function Make-DiagnosticVideo {
         $Lines += "file '$Escaped'"
         if ($i -lt $Frames.Count - 1) {
             $Delta = [double]$Frames[$i + 1].timestamp - [double]$Frames[$i].timestamp
-            $Delta = [Math]::Min(2.0, [Math]::Max(0.04, $Delta))
+            # Diagnostic preview: preserve local motion, but do not spend
+            # seconds replaying idle gaps.
+            $Delta = [Math]::Min(0.75, [Math]::Max(0.04, $Delta))
             $Lines += ('duration ' + $Delta.ToString('0.000000', [System.Globalization.CultureInfo]::InvariantCulture))
         }
     }

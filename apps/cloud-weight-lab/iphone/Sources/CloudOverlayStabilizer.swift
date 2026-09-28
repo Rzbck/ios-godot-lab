@@ -11,10 +11,19 @@ final class CloudOverlayStabilizer {
     }
 
     func update(_ image: CGImage?, detections: [CloudDetection]) -> CGImage? {
-        guard let image, !detections.isEmpty else {
+        guard let image else {
             reset()
             return nil
         }
+
+        // Keep the raw segmentation visible for diagnostics even when the
+        // physical geometry rejects every mass estimate (for example a cloud
+        // image displayed on a monitor below the horizon).
+        guard !detections.isEmpty else {
+            reset()
+            return image
+        }
+
         guard let mask = alphaMask(from: image) else {
             reset()
             return nil

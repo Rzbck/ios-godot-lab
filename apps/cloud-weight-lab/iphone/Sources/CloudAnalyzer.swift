@@ -339,8 +339,14 @@ final class CloudAnalyzer {
             targetWidth: targetWidth,
             targetHeight: targetHeight
         )
-        let blocker = resample(
+        let expandedBlockerSquare = Self.maxFilterProbabilityMap(
             semanticSquare.blocker,
+            width: skyInputSize,
+            height: skyInputSize,
+            radius: 2
+        )
+        let blocker = resample(
+            expandedBlockerSquare,
             sourceWidth: skyInputSize,
             sourceHeight: skyInputSize,
             targetWidth: targetWidth,
@@ -694,6 +700,61 @@ final class CloudAnalyzer {
                 output[y * targetWidth + x] = source[sourceY * sourceWidth + sourceX]
             }
         }
+        return output
+    }
+
+    static func maxFilterProbabilityMap(
+        _ source: [Double],
+        width: Int,
+        height: Int,
+        radius: Int
+    ) -> [Double] {
+        guard width > 0,
+              height > 0,
+              source.count == width * height else {
+            return []
+        }
+        guard radius > 0 else { return source }
+
+        // Separable max filter: expands semantic blockers while keeping CPU
+        // cost low enough for the real-time pipeline.
+        var horizontal = [Double](repeating: 0, count: source.count)
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let firstX = max(0, x - radius)
+                let lastX = min(width - 1, x + radius)
+                var value = source[y * width + firstX]
+
+                if firstX < lastX {
+                    for nx in (firstX + 1)...lastX {
+                        value = max(value, source[y * width + nx])
+                    }
+                }
+
+                horizontal[y * width + x] = value
+            }
+        }
+
+        var output = [Double](repeating: 0, count: source.count)
+
+        for y in 0..<height {
+            let firstY = max(0, y - radius)
+            let lastY = min(height - 1, y + radius)
+
+            for x in 0..<width {
+                var value = horizontal[firstY * width + x]
+
+                if firstY < lastY {
+                    for ny in (firstY + 1)...lastY {
+                        value = max(value, horizontal[ny * width + x])
+                    }
+                }
+
+                output[y * width + x] = value
+            }
+        }
+
         return output
     }
 

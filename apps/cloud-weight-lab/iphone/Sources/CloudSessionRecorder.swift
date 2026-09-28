@@ -164,6 +164,8 @@ final class CloudSessionRecorder {
     private let baselineSnapshotInterval: TimeInterval = 1.0
     private let burstSnapshotInterval: TimeInterval = 0.25
     private let eventBurstDuration: TimeInterval = 2.5
+    private let minimumSemanticVisualCoveragePercent = 1.5
+    private let minimumVisualMaskChangePercent = 12.0
     private let maxSnapshotDimension = 640
     private let jpegQuality = 0.34
     private let maxSessionVisualBytes: Int64 = 320 * 1024 * 1024
@@ -323,6 +325,22 @@ final class CloudSessionRecorder {
             guard !session.visualCaptureStoppedForQuota else { return }
 
             let burst = timestamp <= session.burstUntil
+            let validatedCloud = !detections.isEmpty
+                || telemetry.trackingVisibleTracks > 0
+            let semanticCloud =
+                telemetry.cloudCoveragePercent >= self.minimumSemanticVisualCoveragePercent
+            let significantTransition =
+                telemetry.maskChangePercent >= self.minimumVisualMaskChangePercent
+
+            // No periodic black/idle frames. Keep only useful diagnostic
+            // moments: cloud mask, validated detection, transition or event.
+            guard burst
+                    || validatedCloud
+                    || semanticCloud
+                    || significantTransition else {
+                return
+            }
+
             let interval = burst ? self.burstSnapshotInterval : self.baselineSnapshotInterval
             guard timestamp - session.lastVisualTimestamp >= interval else { return }
             session.lastVisualTimestamp = timestamp
@@ -354,7 +372,17 @@ final class CloudSessionRecorder {
                 return
             }
 
-            let reason = burst ? "event" : "timeline"
+            let reason: String
+            if burst {
+                reason = "event"
+            } else if validatedCloud {
+                reason = "cloud"
+            } else if semanticCloud {
+                reason = "semantic"
+            } else {
+                reason = "transition"
+            }
+
             let milliseconds = Int(timestamp * 1_000)
             let folder = burst ? session.burstsDirectory : session.keyframesDirectory
             let fileName = "frame-\(milliseconds)-\(reason).jpg"

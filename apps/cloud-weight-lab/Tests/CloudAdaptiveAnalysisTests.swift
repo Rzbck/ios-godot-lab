@@ -2,25 +2,21 @@ import XCTest
 @testable import CloudWeightLab
 
 final class CloudAdaptiveAnalysisTests: XCTestCase {
-    func testAdaptiveGateKeepsWeakEdgesOnlyWhenStrongCloudCoreExists() {
+    func testDetailGateDoesNotRegrowWeakProbabilityBridges() {
         let gate = CloudSemanticGate()
         let count = 200
         let sky = Array(repeating: 0.85, count: count)
         let blocker = Array(repeating: 0.02, count: count)
 
-        for _ in 0..<2 {
-            _ = gate.makeMask(
-                cloudProbabilities: Array(repeating: 0.20, count: count),
-                skyProbabilities: sky,
-                blockerProbabilities: blocker,
-                classCoverage: .zero,
-                lowLight: false
-            )
-        }
-
         var cloud = Array(repeating: 0.20, count: count)
-        for index in 40..<160 {
-            cloud[index] = index >= 80 && index < 120 ? 0.88 : 0.56
+        for index in 40..<80 {
+            cloud[index] = 0.88
+        }
+        for index in 80..<120 {
+            cloud[index] = 0.50
+        }
+        for index in 120..<160 {
+            cloud[index] = 0.88
         }
 
         let result = gate.makeMask(
@@ -31,9 +27,10 @@ final class CloudAdaptiveAnalysisTests: XCTestCase {
             lowLight: false
         )
 
-        XCTAssertGreaterThan(result.metrics.cloudHighThreshold, result.metrics.cloudLowThreshold)
-        XCTAssertGreaterThan(result.mask.filter { $0 }.count, result.seedMask.filter { $0 }.count)
-        XCTAssertGreaterThan(result.seedMask.filter { $0 }.count, 0)
+        XCTAssertEqual(result.metrics.cloudLowThreshold, 0.52, accuracy: 0.0001)
+        XCTAssertEqual(result.mask, result.seedMask)
+        XCTAssertEqual(result.mask.filter { $0 }.count, 80)
+        XCTAssertTrue(result.mask[80..<120].allSatisfy { !$0 })
     }
 
     func testAdaptiveGateDoesNotAcceptCloudProbabilityWithoutSkyEvidence() {

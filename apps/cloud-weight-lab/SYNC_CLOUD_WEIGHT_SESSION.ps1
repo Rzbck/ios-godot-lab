@@ -224,9 +224,12 @@ function Make-DiagnosticVideo {
 
     $Frames = @(
         $AllFrames | Where-Object {
-            [string]$_.reason -in @('event', 'transition') `
+            [string]$_.reason -eq 'transition' `
                 -or [int]$_.cloudCount -gt 0 `
-                -or [double]$_.cloudCoveragePercent -ge 1.5
+                -or (
+                    [double]$_.cloudCoveragePercent -ge 1.5 `
+                    -and [double]$_.skyCoveragePercent -ge 5.0
+                )
         }
     )
 

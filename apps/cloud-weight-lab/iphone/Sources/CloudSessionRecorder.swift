@@ -329,13 +329,15 @@ final class CloudSessionRecorder {
                 || telemetry.trackingVisibleTracks > 0
             let semanticCloud =
                 telemetry.cloudCoveragePercent >= self.minimumSemanticVisualCoveragePercent
+                && telemetry.skyCoveragePercent >= 5.0
             let significantTransition =
                 telemetry.maskChangePercent >= self.minimumVisualMaskChangePercent
 
             // No periodic black/idle frames. Keep only useful diagnostic
             // moments: cloud mask, validated detection, transition or event.
-            guard burst
-                    || validatedCloud
+            // A burst increases capture cadence, but never creates frames on
+            // its own when the image contains no useful cloud diagnostic.
+            guard validatedCloud
                     || semanticCloud
                     || significantTransition else {
                 return

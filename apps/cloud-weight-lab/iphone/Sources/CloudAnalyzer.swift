@@ -343,7 +343,7 @@ final class CloudAnalyzer {
             semanticSquare.blocker,
             width: skyInputSize,
             height: skyInputSize,
-            radius: 2
+            radius: 1
         )
         let blocker = resample(
             expandedBlockerSquare,

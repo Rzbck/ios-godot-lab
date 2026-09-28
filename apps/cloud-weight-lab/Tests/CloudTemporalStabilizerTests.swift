@@ -102,12 +102,40 @@ final class CloudTemporalStabilizerTests: XCTestCase {
         XCTAssertEqual(stabilizer.lastStats.hiddenMissedTracks, 0)
     }
 
-    func testTwoMissesRemoveTrack() {
+    func testThreeMissesKeepTrackHiddenAndIdentityRecovers() throws {
+        let stabilizer = CloudTemporalStabilizer()
+
+        let first = try XCTUnwrap(
+            stabilizer.update(raw: [
+                detection(id: 0, x: 0.50, y: 0.45, mass: 220_000)
+            ]).first
+        )
+
+        _ = stabilizer.update(raw: [])
+        _ = stabilizer.update(raw: [])
+        let thirdMiss = stabilizer.update(raw: [])
+
+        XCTAssertTrue(thirdMiss.isEmpty)
+        XCTAssertEqual(stabilizer.lastStats.activeTracks, 1)
+
+        let recovered = try XCTUnwrap(
+            stabilizer.update(raw: [
+                detection(id: 99, x: 0.515, y: 0.455, mass: 225_000)
+            ]).first
+        )
+
+        XCTAssertEqual(recovered.id, first.id)
+    }
+
+    func testFourMissesRemoveTrack() {
         let stabilizer = CloudTemporalStabilizer()
 
         _ = stabilizer.update(raw: [
             detection(id: 0, x: 0.50, y: 0.45, mass: 220_000)
         ])
+
+        _ = stabilizer.update(raw: [])
+        _ = stabilizer.update(raw: [])
         _ = stabilizer.update(raw: [])
         _ = stabilizer.update(raw: [])
 

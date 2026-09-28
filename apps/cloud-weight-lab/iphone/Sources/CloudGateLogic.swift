@@ -10,6 +10,8 @@ struct CloudGateMetrics: Equatable {
     let plantCoveragePercent: Double
     let wallCoveragePercent: Double
     let semanticFallbackCoveragePercent: Double
+    let cloudLowThreshold: Double
+    let cloudHighThreshold: Double
     let skySceneActive: Bool
     let mode: String
 }
@@ -62,12 +64,13 @@ final class CloudSemanticGate {
         blockerProbabilities: [Double],
         classCoverage: CloudSemanticClassCoverage,
         lowLight: Bool
-    ) -> (mask: [Bool], metrics: CloudGateMetrics) {
+    ) -> (mask: [Bool], seedMask: [Bool], metrics: CloudGateMetrics) {
         let count = cloudProbabilities.count
         guard count > 0,
               skyProbabilities.count == count,
               blockerProbabilities.count == count else {
             return (
+                [],
                 [],
                 CloudGateMetrics(
                     strictSkyCoveragePercent: 0,
@@ -79,6 +82,8 @@ final class CloudSemanticGate {
                     plantCoveragePercent: 0,
                     wallCoveragePercent: 0,
                     semanticFallbackCoveragePercent: 0,
+                    cloudLowThreshold: lowLight ? 0.46 : 0.50,
+                    cloudHighThreshold: lowLight ? 0.60 : 0.64,
                     skySceneActive: false,
                     mode: "invalid"
                 )
@@ -126,29 +131,42 @@ final class CloudSemanticGate {
             }
         }
 
+        let thresholds = adaptiveCloudThresholds(
+            cloudProbabilities: cloudProbabilities,
+            skyProbabilities: skyProbabilities,
+            blockerProbabilities: blockerProbabilities,
+            relaxedSkyThreshold: relaxedSkyThreshold,
+            lowLight: lowLight
+        )
+
         var fallbackAccepted = 0
         var mask = [Bool](repeating: false, count: count)
+        var seedMask = [Bool](repeating: false, count: count)
+
         for index in 0..<count {
             let cloud = cloudProbabilities[index]
-            guard cloud >= 0.52 else { continue }
+            guard cloud >= thresholds.low else { continue }
 
             let blocker = blockerProbabilities[index]
             guard blocker < blockerThreshold else { continue }
 
             let sky = skyProbabilities[index]
-            if sky >= strictSkyThreshold {
-                mask[index] = true
-                continue
+            let strictAccepted = sky >= strictSkyThreshold
+            let relaxedAccepted = isSkySceneActive && sky >= relaxedSkyThreshold
+            let strongFallback = isSkySceneActive
+                && cloud >= strongCloudThreshold
+                && blocker < 0.30
+
+            guard strictAccepted || relaxedAccepted || strongFallback else { continue }
+
+            mask[index] = true
+
+            if !strictAccepted {
+                fallbackAccepted += 1
             }
 
-            guard isSkySceneActive else { continue }
-
-            if sky >= relaxedSkyThreshold {
-                mask[index] = true
-                fallbackAccepted += 1
-            } else if cloud >= strongCloudThreshold && blocker < 0.30 {
-                mask[index] = true
-                fallbackAccepted += 1
+            if cloud >= thresholds.high || strongFallback {
+                seedMask[index] = true
             }
         }
 
@@ -165,6 +183,7 @@ final class CloudSemanticGate {
 
         return (
             mask,
+            seedMask,
             CloudGateMetrics(
                 strictSkyCoveragePercent: strictSkyCoverage * 100,
                 relaxedSkyCoveragePercent: relaxedSkyCoverage * 100,
@@ -175,10 +194,79 @@ final class CloudSemanticGate {
                 plantCoveragePercent: classCoverage.plantPercent,
                 wallCoveragePercent: classCoverage.wallPercent,
                 semanticFallbackCoveragePercent: Double(fallbackAccepted) / Double(count) * 100,
+                cloudLowThreshold: thresholds.low,
+                cloudHighThreshold: thresholds.high,
                 skySceneActive: isSkySceneActive,
                 mode: mode
             )
         )
+    }
+
+    private func adaptiveCloudThresholds(
+        cloudProbabilities: [Double],
+        skyProbabilities: [Double],
+        blockerProbabilities: [Double],
+        relaxedSkyThreshold: Double,
+        lowLight: Bool
+    ) -> (low: Double, high: Double) {
+        let bins = 48
+        var histogram = [Int](repeating: 0, count: bins)
+        var sampleCount = 0
+
+        for index in cloudProbabilities.indices {
+            guard blockerProbabilities[index] < blockerThreshold else { continue }
+
+            let sky = skyProbabilities[index]
+            guard sky >= relaxedSkyThreshold || isSkySceneActive else { continue }
+
+            let value = cloudProbabilities[index].clamped(0...1)
+            let bin = min(bins - 1, Int(value * Double(bins)))
+            histogram[bin] += 1
+            sampleCount += 1
+        }
+
+        let baseLow = lowLight ? 0.46 : 0.50
+        let lowRange = lowLight ? 0.42...0.55 : 0.46...0.57
+
+        guard sampleCount >= max(32, cloudProbabilities.count / 100) else {
+            let low = baseLow
+            return (low, lowLight ? 0.60 : 0.64)
+        }
+
+        func quantile(_ fraction: Double) -> Double {
+            let target = max(1, Int(Double(sampleCount) * fraction))
+            var cumulative = 0
+            for bin in histogram.indices {
+                cumulative += histogram[bin]
+                if cumulative >= target {
+                    return (Double(bin) + 0.5) / Double(bins)
+                }
+            }
+            return 1
+        }
+
+        let q25 = quantile(0.25)
+        let q50 = quantile(0.50)
+        let q75 = quantile(0.75)
+        let spread = max(0.02, q75 - q25)
+
+        // UCloudNet is trained for both day and night scenes. Keep its full
+        // probability distribution instead of collapsing every scene at one
+        // hard threshold. The adjustment is deliberately bounded so semantic
+        // blockers remain the primary false-positive protection.
+        let medianAdjustment = (q50 - 0.50) * 0.10
+        let spreadAdjustment = (0.16 - spread).clamped(-0.10...0.10) * 0.10
+        let low = (baseLow + medianAdjustment + spreadAdjustment).clamped(lowRange)
+
+        // A high-confidence seed threshold drives hysteresis / region growth.
+        // Clear scenes stay conservative; overcast scenes keep weak cloud edges
+        // as long as they connect back to a strong UCloudNet core.
+        let minimumHigh = low + (lowLight ? 0.10 : 0.11)
+        let maximumHigh = lowLight ? 0.76 : 0.80
+        let high = max(minimumHigh, q75 - 0.04)
+            .clamped(minimumHigh...maximumHigh)
+
+        return (low, high)
     }
 
     private func fraction(_ values: [Double], predicate: (Double) -> Bool) -> Double {

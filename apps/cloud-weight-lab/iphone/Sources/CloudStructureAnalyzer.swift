@@ -11,6 +11,8 @@ struct CloudStructureRegion: Equatable {
     let maxY: Int
     let centroidX: Double
     let centroidY: Double
+    let normalizedWidth: Double
+    let normalizedHeight: Double
     let meanProbability: Double
     let probabilityStdDev: Double
     let highConfidenceFraction: Double
@@ -143,14 +145,9 @@ enum CloudStructureAnalyzer {
     }
 
     static func classify(_ region: CloudStructureRegion) -> CloudKind {
-        let aspectRatio = Double(region.pixelWidth) / Double(max(1, region.pixelHeight))
-        let normalizedWidth = min(1.0, Double(region.pixelWidth) * region.frameCoverage / max(region.frameCoverage, 0.000_001) / Double(max(1, region.area)) * Double(region.area) / Double(max(1, region.pixelHeight)))
-
-        // Derive normalized width directly from fill/coverage when possible:
-        // coverage / fill = normalized bounding-box area.
-        let normalizedBoxArea = region.frameCoverage / max(region.fillRatio, 0.000_1)
-        let normalizedHeight = sqrt(max(0.000_1, normalizedBoxArea / max(aspectRatio, 0.01)))
-        let boxWidth = min(1.0, normalizedHeight * aspectRatio)
+        let boxWidth = region.normalizedWidth.clamped(0...1)
+        let boxHeight = region.normalizedHeight.clamped(0...1)
+        let aspectRatio = boxWidth / max(boxHeight, 0.01)
 
         // WMO morphology translated into inexpensive image cues:
         // - Cirrus: narrow/fibrous/low-fill elements.
@@ -175,7 +172,7 @@ enum CloudStructureAnalyzer {
 
         let textureScore = region.brightnessStdDev * 1.7
             + region.probabilityStdDev * 1.35
-            + max(0, region.boundaryRatio - 1.0) * 0.13
+            + max(0.0, region.boundaryRatio - 1.0) * 0.13
 
         let cellularLayer = textureScore >= 0.24
             || region.boundaryRatio >= 1.42
@@ -211,8 +208,8 @@ enum CloudStructureAnalyzer {
         case .cirrus:
             return (
                 0.48
-                + min(0.22, max(0, region.boundaryRatio - 1.0) * 0.16)
-                + min(0.16, max(0, 0.65 - region.fillRatio) * 0.35)
+                + min(0.22, max(0.0, region.boundaryRatio - 1.0) * 0.16)
+                + min(0.16, max(0.0, 0.65 - region.fillRatio) * 0.35)
             ).clamped(0.35...0.88)
 
         case .cumulus:
@@ -231,7 +228,7 @@ enum CloudStructureAnalyzer {
             ).clamped(0.38...0.90)
 
         case .stratus:
-            let uniformity = max(0, 1 - region.brightnessStdDev * 4.0)
+            let uniformity = max(0.0, 1.0 - region.brightnessStdDev * 4.0)
             return (
                 0.48
                 + min(0.20, region.parentCoverage * 0.20)
@@ -583,17 +580,17 @@ enum CloudStructureAnalyzer {
             let boxArea = Double(max(1, boxWidth * boxHeight))
             let meanProbability = accumulator.probabilitySum / count
             let probabilityVariance = max(
-                0,
+                0.0,
                 accumulator.probabilitySquareSum / count - meanProbability * meanProbability
             )
             let meanBrightness = base == nil ? 0.65 : accumulator.brightnessSum / count
-            let brightnessVariance = base == nil ? 0 : max(
-                0,
+            let brightnessVariance = base == nil ? 0.0 : max(
+                0.0,
                 accumulator.brightnessSquareSum / count - meanBrightness * meanBrightness
             )
             let meanSaturation = base == nil ? 0.18 : accumulator.saturationSum / count
-            let saturationVariance = base == nil ? 0 : max(
-                0,
+            let saturationVariance = base == nil ? 0.0 : max(
+                0.0,
                 accumulator.saturationSquareSum / count - meanSaturation * meanSaturation
             )
             let perimeter = Double(max(1, accumulator.boundaryEdges))
@@ -620,6 +617,8 @@ enum CloudStructureAnalyzer {
                 maxY: accumulator.maxY,
                 centroidX: accumulator.sumX / count,
                 centroidY: accumulator.sumY / count,
+                normalizedWidth: Double(boxWidth) / Double(width),
+                normalizedHeight: Double(boxHeight) / Double(height),
                 meanProbability: meanProbability,
                 probabilityStdDev: sqrt(probabilityVariance),
                 highConfidenceFraction: Double(accumulator.highConfidencePixels) / count,

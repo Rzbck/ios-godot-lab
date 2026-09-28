@@ -94,23 +94,27 @@ final class CloudMassEstimatorTests: XCTestCase {
     }
 
     func testSkyGateRejectsCloudProbabilityOutsideSky() {
-        let result = CloudAnalyzer.gatedCloudMask(
+        let gate = CloudSemanticGate()
+        let result = gate.makeMask(
             cloudProbabilities: [0.90, 0.90, 0.20, 0.80],
             skyProbabilities: [0.90, 0.10, 0.90, 0.54],
-            cloudThreshold: 0.52,
-            skyThreshold: 0.55
+            blockerProbabilities: [0.0, 0.0, 0.0, 0.0],
+            classCoverage: .zero,
+            lowLight: false
         )
-        XCTAssertEqual(result, [true, false, false, false])
+        XCTAssertEqual(result.mask, [true, false, false, false])
     }
 
     func testSkyGateRejectsMismatchedMaps() {
-        let result = CloudAnalyzer.gatedCloudMask(
+        let gate = CloudSemanticGate()
+        let result = gate.makeMask(
             cloudProbabilities: [0.90, 0.90],
             skyProbabilities: [0.90],
-            cloudThreshold: 0.52,
-            skyThreshold: 0.55
+            blockerProbabilities: [0.0, 0.0],
+            classCoverage: .zero,
+            lowLight: false
         )
-        XCTAssertTrue(result.isEmpty)
+        XCTAssertTrue(result.mask.isEmpty)
     }
 
     func testSkyProbabilityResamplingKeepsNormalizedRegions() {

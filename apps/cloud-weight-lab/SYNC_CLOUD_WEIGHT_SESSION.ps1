@@ -10,6 +10,7 @@ param(
     [switch]$KeepFrames,
     [switch]$KeepRaw,
     [switch]$NoVideo,
+    [switch]$AnalysisPack,
     [switch]$OpenFolder
 )
 
@@ -267,6 +268,58 @@ function Make-DiagnosticVideo {
     return $Video
 }
 
+function New-AnalysisPack {
+    param([Parameter(Mandatory)][string]$OutDir)
+
+    $ManifestPath = Join-Path $OutDir 'manifest.json'
+    if (-not (Test-Path -LiteralPath $ManifestPath)) {
+        throw "manifest.json absent : $OutDir"
+    }
+
+    $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+    $Temp = Join-Path $OutDir '_ANALYSIS_PACK'
+
+    Remove-Item -LiteralPath $Temp -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $Temp -Force | Out-Null
+
+    foreach ($Name in @(
+        'manifest.json',
+        'SYNC-REPORT.json',
+        'telemetry.ndjson',
+        'events.ndjson',
+        'diagnostic-preview.mp4'
+    )) {
+        $Source = Join-Path $OutDir $Name
+        if (Test-Path -LiteralPath $Source) {
+            Copy-Item -LiteralPath $Source -Destination $Temp -Force
+        }
+    }
+
+    $Visual = Join-Path $OutDir 'visual'
+    if (Test-Path -LiteralPath $Visual) {
+        Copy-Item `
+            -LiteralPath $Visual `
+            -Destination (Join-Path $Temp 'visual') `
+            -Recurse `
+            -Force
+    }
+
+    $Zip = Join-Path $OutDir (
+        "ANALYSIS-PACK-$([string]$Manifest.sessionID).zip"
+    )
+
+    Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue
+
+    Compress-Archive `
+        -Path (Join-Path $Temp '*') `
+        -DestinationPath $Zip `
+        -CompressionLevel Optimal
+
+    Remove-Item -LiteralPath $Temp -Recurse -Force
+
+    return $Zip
+}
+
 function Sync-OneSession {
     param(
         [Parameter(Mandatory)]$SessionSummary,
@@ -472,6 +525,26 @@ foreach ($Session in $Selected) {
     $LastOutput = Sync-OneSession -SessionSummary $Session -BaseUrl $BaseUrl -Token $Token -Root $Root
 }
 
+$AnalysisZip = $null
+
+if ($AnalysisPack -and $null -ne $LastOutput) {
+    $AnalysisZip = New-AnalysisPack -OutDir $LastOutput
+
+    $SizeMB = [Math]::Round(
+        (Get-Item -LiteralPath $AnalysisZip).Length / 1MB,
+        1
+    )
+
+    Write-Host ""
+    Write-Host "ANALYSIS PACK = OK" -ForegroundColor Green
+    Write-Host "ZIP           = $AnalysisZip" -ForegroundColor Green
+    Write-Host "SIZE          = $SizeMB MB" -ForegroundColor Green
+}
+
 if ($OpenFolder -and $null -ne $LastOutput) {
-    Start-Process explorer.exe $LastOutput
+    if ($null -ne $AnalysisZip) {
+        Start-Process explorer.exe "/select,`"$AnalysisZip`""
+    } else {
+        Start-Process explorer.exe $LastOutput
+    }
 }

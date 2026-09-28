@@ -40,9 +40,9 @@ final class AdaptiveCloudAnalyzer {
     private let landscapeWidth = 544
     private let landscapeHeight = 304
     private let skyInputSize = 384
-    private let portraitCloudModel: MLModel?
-    private let landscapeCloudModel: MLModel?
-    private let skyModel: MLModel?
+    private var portraitCloudModel: MLModel?
+    private var landscapeCloudModel: MLModel?
+    private var skyModel: MLModel?
     private let semanticGate = CloudSemanticGate()
 
     private let skyInferenceQueue = DispatchQueue(

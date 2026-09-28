@@ -35,17 +35,14 @@ final class CloudTemporalStabilizer {
     private let maximumCentroidDistance = 0.22
     private let minimumIntersectionOverUnion = 0.035
 
-    // A large region can appear immediately. Small fragments must persist
-    // across several analyses before becoming user-visible.
     private let immediateConfirmationCoverage = 0.08
     private let confirmationHits = 3
 
-    // Early in a new track, allow a wrong first guess to correct itself.
-    // Once the physical track is established, cloud type must remain visually
-    // stable through temporary mask-size/classification swings.
-    private let initialKindConfirmationHits = 15
-    private let establishedKindConfirmationHits = 60
-    private let establishedKindAfterHits = 45
+    // Classification is now based on region morphology as well as coverage.
+    // Keep hysteresis, but do not freeze an early wrong label for ~2.5 s.
+    private let initialKindConfirmationHits = 6
+    private let establishedKindConfirmationHits = 18
+    private let establishedKindAfterHits = 30
 
     private(set) var lastStats = CloudTrackingStats(
         activeTracks: 0,
@@ -173,9 +170,6 @@ final class CloudTemporalStabilizer {
                 let newCoverage = max(0.0001, candidate.observation.coverage)
                 let coverageRatio = min(oldCoverage, newCoverage) / max(oldCoverage, newCoverage)
 
-                // Identity is geometric. Cloud type is deliberately excluded:
-                // classification can flicker while the physical cloud remains
-                // the same object.
                 let score = overlap * 0.52
                     + distanceScore * 0.35
                     + coverageRatio * 0.13
@@ -218,7 +212,7 @@ final class CloudTemporalStabilizer {
 
         let geometryAlpha = centroidDistance > 0.085 ? 0.90 : 0.70
         let measurementAlpha = centroidDistance > 0.085 ? 0.62 : 0.42
-        let stableKind = stabilizedKind(track: &next, incoming: newObservation.kind)
+        let stableKind = stabilizedKind(track: &next, incoming: newObservation)
 
         let smoothedObservation = CloudObservation(
             id: track.id,
@@ -232,8 +226,6 @@ final class CloudTemporalStabilizer {
             fieldOfViewDegrees: newObservation.fieldOfViewDegrees
         )
 
-        // Raw classification flicker must not move the mass estimate before the
-        // type itself has been accepted by the temporal hysteresis.
         let incomingAgreesWithStableKind = newObservation.kind == stableKind
         let targetEstimate = incomingAgreesWithStableKind ? newEstimate : oldEstimate
         let kindChanged = stableKind != oldObservation.kind
@@ -255,29 +247,60 @@ final class CloudTemporalStabilizer {
         return next
     }
 
-    private func stabilizedKind(track: inout Track, incoming: CloudKind) -> CloudKind {
-        let current = track.detection.observation.kind
-        guard incoming != current else {
+    private func stabilizedKind(
+        track: inout Track,
+        incoming: CloudObservation
+    ) -> CloudKind {
+        let currentObservation = track.detection.observation
+        let current = currentObservation.kind
+        let incomingKind = incoming.kind
+
+        guard incomingKind != current else {
             track.pendingKind = nil
             track.pendingKindCount = 0
             return current
         }
 
-        if track.pendingKind == incoming {
+        if track.pendingKind == incomingKind {
             track.pendingKindCount += 1
         } else {
-            track.pendingKind = incoming
+            track.pendingKind = incomingKind
             track.pendingKindCount = 1
         }
 
-        let requiredHits = track.hits < establishedKindAfterHits
+        var requiredHits = track.hits < establishedKindAfterHits
             ? initialKindConfirmationHits
             : establishedKindConfirmationHits
+
+        let currentIsLayer = current == .stratus || current == .stratocumulus
+        let incomingIsLayer = incomingKind == .stratus || incomingKind == .stratocumulus
+        let coverageRatio = incoming.coverage / max(0.001, currentObservation.coverage)
+
+        // A region that suddenly becomes a broad layer should not remain an
+        // obsolete "Cumulus" for seconds. This was directly visible in the
+        // long field collection. Conversely, leaving a layer still requires
+        // several consistent frames so one temporary split cannot flicker it.
+        if !currentIsLayer,
+           incomingIsLayer,
+           incoming.coverage >= 0.30,
+           coverageRatio >= 1.35 {
+            requiredHits = min(requiredHits, 4)
+        } else if currentIsLayer,
+                  !incomingIsLayer,
+                  incoming.coverage <= 0.24 {
+            requiredHits = min(requiredHits, 8)
+        } else if currentIsLayer && incomingIsLayer {
+            requiredHits = min(requiredHits, 10)
+        }
+
+        if incomingKind == .unknown {
+            requiredHits = max(requiredHits, 12)
+        }
 
         if track.pendingKindCount >= requiredHits {
             track.pendingKind = nil
             track.pendingKindCount = 0
-            return incoming
+            return incomingKind
         }
         return current
     }

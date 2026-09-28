@@ -30,7 +30,7 @@ final class CloudTemporalStabilizer {
     private var tracks: [Track] = []
     private var nextTrackID = 1
 
-    private let maximumMisses = 3
+    private let maximumMisses = 1
     private let maximumCentroidDistance = 0.22
     private let minimumIntersectionOverUnion = 0.035
     private let smallTrackConfirmationCoverage = 0.02

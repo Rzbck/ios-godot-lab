@@ -186,6 +186,7 @@ final class CloudDiagnosticsAPI {
                     "paired": bearerToken != nil,
                     "pairing_mode": "persistent_keychain_first_claim",
                     "active_session": sessionRecorder.activeSessionID() ?? "",
+                    "active_collection": sessionRecorder.activeCollectionID() ?? "",
                     "privacy": "local_persistent_bounded_sessions"
                 ])
             )
@@ -333,11 +334,26 @@ final class CloudDiagnosticsAPI {
                     return
                 }
 
-                sessionRecorder.endSession()
-                sessionRecorder.startSession(
-                    buildSHA: BuildInfo.gitSHA,
-                    version: BuildInfo.version
-                )
+                let finishCollection = components?.queryItems?
+                    .first(where: { $0.name == "finish_collection" })?
+                    .value == "1"
+
+                let restart = components?.queryItems?
+                    .first(where: { $0.name == "restart" })?
+                    .value != "0"
+
+                if finishCollection {
+                    sessionRecorder.finishCollection()
+                } else {
+                    sessionRecorder.endSession()
+
+                    if restart {
+                        sessionRecorder.startSession(
+                            buildSHA: BuildInfo.gitSHA,
+                            version: BuildInfo.version
+                        )
+                    }
+                }
 
                 send(
                     connection,
@@ -346,7 +362,8 @@ final class CloudDiagnosticsAPI {
                     body: json([
                         "ok": true,
                         "sealed_session": sessionID,
-                        "active_session": sessionRecorder.activeSessionID() ?? ""
+                        "active_session": sessionRecorder.activeSessionID() ?? "",
+                        "active_collection": sessionRecorder.activeCollectionID() ?? ""
                     ])
                 )
                 return

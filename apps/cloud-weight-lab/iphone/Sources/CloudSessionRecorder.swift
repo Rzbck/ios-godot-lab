@@ -64,6 +64,8 @@ final class CloudSessionRecorder {
     struct Manifest: Codable {
         let schemaVersion: Int
         let sessionID: String
+        let collectionID: String?
+        let segmentIndex: Int?
         let appVersion: String
         let buildSHA: String
         let startedAt: TimeInterval
@@ -82,6 +84,8 @@ final class CloudSessionRecorder {
 
     struct SessionSummary: Codable {
         let sessionID: String
+        let collectionID: String?
+        let segmentIndex: Int?
         let appVersion: String
         let buildSHA: String
         let startedAt: TimeInterval
@@ -101,6 +105,8 @@ final class CloudSessionRecorder {
 
     private final class ActiveSession {
         let id: String
+        let collectionID: String
+        let segmentIndex: Int
         let directory: URL
         let telemetryDirectory: URL
         let keyframesDirectory: URL
@@ -128,6 +134,8 @@ final class CloudSessionRecorder {
 
         init(
             id: String,
+            collectionID: String,
+            segmentIndex: Int,
             directory: URL,
             telemetryDirectory: URL,
             keyframesDirectory: URL,
@@ -141,6 +149,8 @@ final class CloudSessionRecorder {
             telemetryHandle: FileHandle
         ) {
             self.id = id
+            self.collectionID = collectionID
+            self.segmentIndex = segmentIndex
             self.directory = directory
             self.telemetryDirectory = telemetryDirectory
             self.keyframesDirectory = keyframesDirectory
@@ -159,7 +169,7 @@ final class CloudSessionRecorder {
     private let ioQueue = DispatchQueue(label: "cloudweight.session-recorder", qos: .utility)
     private let context = CIContext(options: [.cacheIntermediates: false])
 
-    private let schemaVersion = 2
+    private let schemaVersion = 3
     private let telemetryChunkRecordLimit = 5_000
     private let baselineSnapshotInterval: TimeInterval = 1.0
     private let burstSnapshotInterval: TimeInterval = 0.25
@@ -169,8 +179,18 @@ final class CloudSessionRecorder {
     private let maxSnapshotDimension = 640
     private let jpegQuality = 0.34
     private let maxSessionVisualBytes: Int64 = 320 * 1024 * 1024
-    private let maxGlobalBytes: Int64 = 512 * 1024 * 1024
-    private let maxStoredSessions = 8
+    private let maxGlobalBytes: Int64 = 1024 * 1024 * 1024
+    private let maxStoredSessions = 64
+
+    // A field collection survives normal backgrounding and process death.
+    // Eight hours is long enough for a walk/test session without accidentally
+    // mixing captures from another day.
+    private let collectionResumeWindow: TimeInterval = 8 * 60 * 60
+    private let collectionIDKey = "cloudweight.collection.id"
+    private let collectionBuildKey = "cloudweight.collection.build"
+    private let collectionLastActiveKey = "cloudweight.collection.lastActive"
+    private let collectionSegmentIndexKey = "cloudweight.collection.segmentIndex"
+    private let collectionDefaults = UserDefaults.standard
 
     private var rootDirectory: URL
     private var active: ActiveSession?
@@ -191,6 +211,7 @@ final class CloudSessionRecorder {
         ioQueue.sync {
             guard active == nil else { return }
 
+            let collection = nextCollectionSegment(buildSHA: buildSHA)
             let startedAt = Date().timeIntervalSince1970
             let id = "session-\(Int(startedAt * 1_000))-\(String(buildSHA.prefix(8)))"
             var directory = rootDirectory.appendingPathComponent(id, isDirectory: true)
@@ -225,6 +246,8 @@ final class CloudSessionRecorder {
 
             let session = ActiveSession(
                 id: id,
+                collectionID: collection.collectionID,
+                segmentIndex: collection.segmentIndex,
                 directory: directory,
                 telemetryDirectory: telemetryDirectory,
                 keyframesDirectory: keyframesDirectory,
@@ -237,27 +260,38 @@ final class CloudSessionRecorder {
                 buildSHA: buildSHA,
                 telemetryHandle: telemetryHandle
             )
+
             active = session
             persistManifest(session: session, state: "recording", endedAt: nil)
             pruneOldSessions(excluding: id)
         }
     }
-
     func endSession() {
         ioQueue.sync {
             guard let session = active else { return }
-            session.telemetryHandle.synchronizeFile()
-            session.telemetryHandle.closeFile()
-            persistManifest(
-                session: session,
-                state: "completed",
-                endedAt: Date().timeIntervalSince1970
-            )
+            finishActiveSession(session, state: "completed")
             active = nil
+            touchCollection(session.collectionID)
             pruneOldSessions(excluding: nil)
         }
     }
 
+    func finishCollection() {
+        ioQueue.sync {
+            if let session = active {
+                finishActiveSession(session, state: "completed")
+                active = nil
+            }
+            clearCurrentCollection()
+            pruneOldSessions(excluding: nil)
+        }
+    }
+
+    func activeCollectionID() -> String? {
+        ioQueue.sync {
+            active?.collectionID ?? collectionDefaults.string(forKey: collectionIDKey)
+        }
+    }
     func record(telemetry: CloudTelemetrySnapshot, detections: [CloudDetection]) {
         let timestamp = Date().timeIntervalSince1970
         let detectionRecords = detections.map(Self.detectionRecord)
@@ -471,6 +505,75 @@ final class CloudSessionRecorder {
         }
     }
 
+    private struct CollectionSegmentContext {
+        let collectionID: String
+        let segmentIndex: Int
+    }
+
+    private func nextCollectionSegment(buildSHA: String) -> CollectionSegmentContext {
+        let now = Date().timeIntervalSince1970
+        let existingID = collectionDefaults.string(forKey: collectionIDKey)
+        let existingBuild = collectionDefaults.string(forKey: collectionBuildKey)
+        let lastActive = collectionDefaults.double(forKey: collectionLastActiveKey)
+
+        let canResume =
+            existingID != nil
+            && existingBuild == buildSHA
+            && lastActive > 0
+            && now - lastActive <= collectionResumeWindow
+
+        let collectionID: String
+        let segmentIndex: Int
+
+        if canResume, let existingID {
+            collectionID = existingID
+            segmentIndex = collectionDefaults.integer(forKey: collectionSegmentIndexKey) + 1
+        } else {
+            collectionID = "collection-\(Int(now * 1_000))-\(String(buildSHA.prefix(8)))"
+            segmentIndex = 1
+        }
+
+        collectionDefaults.set(collectionID, forKey: collectionIDKey)
+        collectionDefaults.set(buildSHA, forKey: collectionBuildKey)
+        collectionDefaults.set(now, forKey: collectionLastActiveKey)
+        collectionDefaults.set(segmentIndex, forKey: collectionSegmentIndexKey)
+
+        return CollectionSegmentContext(
+            collectionID: collectionID,
+            segmentIndex: segmentIndex
+        )
+    }
+
+    private func touchCollection(_ collectionID: String) {
+        guard collectionDefaults.string(forKey: collectionIDKey) == collectionID else {
+            return
+        }
+        collectionDefaults.set(
+            Date().timeIntervalSince1970,
+            forKey: collectionLastActiveKey
+        )
+    }
+
+    private func clearCurrentCollection() {
+        collectionDefaults.removeObject(forKey: collectionIDKey)
+        collectionDefaults.removeObject(forKey: collectionBuildKey)
+        collectionDefaults.removeObject(forKey: collectionLastActiveKey)
+        collectionDefaults.removeObject(forKey: collectionSegmentIndexKey)
+    }
+
+    private func finishActiveSession(
+        _ session: ActiveSession,
+        state: String
+    ) {
+        session.telemetryHandle.synchronizeFile()
+        session.telemetryHandle.closeFile()
+        persistManifest(
+            session: session,
+            state: state,
+            endedAt: Date().timeIntervalSince1970
+        )
+    }
+
     private func telemetryChunkURL(in directory: URL, index: Int) -> URL {
         directory.appendingPathComponent(String(format: "telemetry-%04d.ndjson", index))
     }
@@ -599,6 +702,8 @@ final class CloudSessionRecorder {
         let manifest = Manifest(
             schemaVersion: schemaVersion,
             sessionID: session.id,
+            collectionID: session.collectionID,
+            segmentIndex: session.segmentIndex,
             appVersion: session.version,
             buildSHA: session.buildSHA,
             startedAt: session.startedAt,
@@ -625,6 +730,8 @@ final class CloudSessionRecorder {
         }
         return SessionSummary(
             sessionID: manifest.sessionID,
+            collectionID: manifest.collectionID,
+            segmentIndex: manifest.segmentIndex,
             appVersion: manifest.appVersion,
             buildSHA: manifest.buildSHA,
             startedAt: manifest.startedAt,
@@ -690,27 +797,53 @@ final class CloudSessionRecorder {
     }
 
     private func pruneOldSessions(excluding protectedID: String?) {
-        var items = sessionDirectories().compactMap { directory -> (URL, TimeInterval, Int64)? in
-            if directory.lastPathComponent == protectedID { return nil }
-            guard let summary = sessionSummary(directory: directory) else { return nil }
-            return (directory, summary.startedAt, summary.totalBytes)
-        }.sorted { $0.1 > $1.1 }
+        let protectedCollectionID =
+            active?.collectionID
+            ?? collectionDefaults.string(forKey: collectionIDKey)
 
-        while items.count > maxStoredSessions - (protectedID == nil ? 0 : 1) {
-            let doomed = items.removeLast()
+        var items = sessionDirectories().compactMap {
+            directory -> (URL, TimeInterval, Int64)? in
+
+            guard let summary = sessionSummary(directory: directory) else {
+                return nil
+            }
+
+            if summary.sessionID == protectedID {
+                return nil
+            }
+
+            if let protectedCollectionID,
+               summary.collectionID == protectedCollectionID {
+                return nil
+            }
+
+            return (
+                directory,
+                summary.startedAt,
+                summary.totalBytes
+            )
+        }
+        .sorted { $0.1 > $1.1 }
+
+        while sessionDirectories().count > maxStoredSessions,
+              let doomed = items.last {
+            items.removeLast()
             try? fileManager.removeItem(at: doomed.0)
         }
 
-        var totalBytes = sessionDirectories().reduce(Int64(0)) { partial, directory in
+        var totalBytes = sessionDirectories().reduce(Int64(0)) {
+            partial, directory in
             partial + directorySize(directory)
         }
-        while totalBytes > maxGlobalBytes, let doomed = items.last {
+
+        while totalBytes > maxGlobalBytes,
+              let doomed = items.last {
             items.removeLast()
-            totalBytes -= directorySize(doomed.0)
+            let bytes = directorySize(doomed.0)
             try? fileManager.removeItem(at: doomed.0)
+            totalBytes -= bytes
         }
     }
-
     private func sessionDirectories() -> [URL] {
         guard let urls = try? fileManager.contentsOfDirectory(
             at: rootDirectory,

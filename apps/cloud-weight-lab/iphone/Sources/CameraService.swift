@@ -62,10 +62,20 @@ final class CameraService: NSObject, ObservableObject {
     private var lowLightActive = false
     private var lowLightEnterStreak = 0
     private var lowLightExitStreak = 0
+    private var orientationNotificationsStarted = false
+    private var appLifecycleActive = false
 
     func requestAndStart() {
+        guard !appLifecycleActive else { return }
+        appLifecycleActive = true
+
         telemetryMonitor.reset()
-        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+
+        if !orientationNotificationsStarted {
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            orientationNotificationsStarted = true
+        }
+
         diagnosticsAPI.start()
         prepareAnalyzer()
 
@@ -131,8 +141,39 @@ final class CameraService: NSObject, ObservableObject {
         diagnosticsAPI.unpair()
     }
 
+    func pauseForBackground() {
+        guard appLifecycleActive else { return }
+        appLifecycleActive = false
+
+        diagnosticsAPI.stop()
+
+        captureQueue.async { [weak self] in
+            guard let self else { return }
+
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+
+            self.sessionRecorder.endSession()
+
+            self.analysisQueue.async {
+                self.stabilizer.reset()
+                self.overlayStabilizer.reset()
+                self.lastRawCoverage = nil
+                self.lastCaptureWidth = 0
+                self.lastCaptureHeight = 0
+            }
+        }
+    }
+
     func stop() {
-        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        appLifecycleActive = false
+
+        if orientationNotificationsStarted {
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+            orientationNotificationsStarted = false
+        }
+
         diagnosticsAPI.stop()
         rotationObservation = nil
         captureQueue.async { [weak self] in

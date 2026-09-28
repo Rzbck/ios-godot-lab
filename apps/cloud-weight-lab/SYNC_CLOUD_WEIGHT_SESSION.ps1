@@ -269,45 +269,135 @@ function Make-DiagnosticVideo {
 }
 
 function New-AnalysisPack {
-    param([Parameter(Mandatory)][string]$OutDir)
+    param(
+        [Parameter(Mandatory)][string[]]$OutDirs
+    )
 
-    $ManifestPath = Join-Path $OutDir 'manifest.json'
-    if (-not (Test-Path -LiteralPath $ManifestPath)) {
-        throw "manifest.json absent : $OutDir"
+    $Entries = @(
+        foreach ($OutDir in $OutDirs) {
+            $ManifestPath = Join-Path $OutDir 'manifest.json'
+            if (-not (Test-Path -LiteralPath $ManifestPath)) {
+                continue
+            }
+
+            $Manifest =
+                Get-Content -LiteralPath $ManifestPath -Raw |
+                ConvertFrom-Json
+
+            [pscustomobject]@{
+                OutDir = $OutDir
+                Manifest = $Manifest
+            }
+        }
+    ) | Sort-Object { [double]$_.Manifest.startedAt }
+
+    if ($Entries.Count -eq 0) {
+        throw 'Aucune session exploitable pour créer le pack.'
     }
 
-    $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
-    $Temp = Join-Path $OutDir '_ANALYSIS_PACK'
+    $FirstManifest = $Entries[0].Manifest
+    $CollectionID = [string]$FirstManifest.collectionID
+
+    if ([string]::IsNullOrWhiteSpace($CollectionID)) {
+        $CollectionID = [string]$FirstManifest.sessionID
+    }
+
+    $SessionsRoot = Split-Path -Parent $Entries[0].OutDir
+    $CloudRoot = Split-Path -Parent $SessionsRoot
+    $CollectionDir = Join-Path $CloudRoot "collections\$CollectionID"
+    $Temp = Join-Path $CollectionDir '_PACK'
 
     Remove-Item -LiteralPath $Temp -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $Temp -Force | Out-Null
 
-    foreach ($Name in @(
-        'manifest.json',
-        'SYNC-REPORT.json',
-        'telemetry.ndjson',
-        'events.ndjson',
-        'diagnostic-preview.mp4'
-    )) {
-        $Source = Join-Path $OutDir $Name
-        if (Test-Path -LiteralPath $Source) {
-            Copy-Item -LiteralPath $Source -Destination $Temp -Force
+    $SegmentsDir = Join-Path $Temp 'segments'
+    New-Item -ItemType Directory -Path $SegmentsDir -Force | Out-Null
+
+    $CombinedTelemetry = Join-Path $Temp 'telemetry.ndjson'
+    $CombinedEvents = Join-Path $Temp 'events.ndjson'
+
+    Remove-Item -LiteralPath $CombinedTelemetry -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $CombinedEvents -Force -ErrorAction SilentlyContinue
+
+    $TotalTelemetry = 0
+    $TotalEvents = 0
+    $TotalVisual = 0
+    $SegmentIDs = @()
+
+    foreach ($Entry in $Entries) {
+        $Manifest = $Entry.Manifest
+        $SessionID = [string]$Manifest.sessionID
+        $SegmentIDs += $SessionID
+
+        $Dest = Join-Path $SegmentsDir $SessionID
+        New-Item -ItemType Directory -Path $Dest -Force | Out-Null
+
+        foreach ($Name in @(
+            'manifest.json',
+            'SYNC-REPORT.json',
+            'telemetry.ndjson',
+            'events.ndjson',
+            'diagnostic-preview.mp4'
+        )) {
+            $Source = Join-Path $Entry.OutDir $Name
+            if (Test-Path -LiteralPath $Source) {
+                Copy-Item -LiteralPath $Source -Destination $Dest -Force
+            }
         }
+
+        $Telemetry = Join-Path $Entry.OutDir 'telemetry.ndjson'
+        if (Test-Path -LiteralPath $Telemetry) {
+            Get-Content -LiteralPath $Telemetry |
+                Add-Content -LiteralPath $CombinedTelemetry -Encoding UTF8
+        }
+
+        $Events = Join-Path $Entry.OutDir 'events.ndjson'
+        if (Test-Path -LiteralPath $Events) {
+            Get-Content -LiteralPath $Events |
+                Add-Content -LiteralPath $CombinedEvents -Encoding UTF8
+        }
+
+        $Visual = Join-Path $Entry.OutDir 'visual'
+        if (Test-Path -LiteralPath $Visual) {
+            Copy-Item `
+                -LiteralPath $Visual `
+                -Destination (Join-Path $Dest 'visual') `
+                -Recurse `
+                -Force
+        }
+
+        $TotalTelemetry += [int]$Manifest.telemetryRecords
+        $TotalEvents += [int]$Manifest.eventRecords
+        $TotalVisual += [int]$Manifest.visualFrames
     }
 
-    $Visual = Join-Path $OutDir 'visual'
-    if (Test-Path -LiteralPath $Visual) {
-        Copy-Item `
-            -LiteralPath $Visual `
-            -Destination (Join-Path $Temp 'visual') `
-            -Recurse `
-            -Force
+    $StartedAt = [double]$Entries[0].Manifest.startedAt
+    $LastManifest = $Entries[$Entries.Count - 1].Manifest
+
+    $CollectionReport = [ordered]@{
+        schemaVersion = 1
+        collectionID = $CollectionID
+        buildSHA = [string]$FirstManifest.buildSHA
+        appVersion = [string]$FirstManifest.appVersion
+        startedAt = $StartedAt
+        endedAt = $LastManifest.endedAt
+        segmentCount = $Entries.Count
+        segmentIDs = $SegmentIDs
+        telemetryRecords = $TotalTelemetry
+        eventRecords = $TotalEvents
+        visualFrames = $TotalVisual
+        generatedAt = (Get-Date).ToString('o')
     }
 
-    $Zip = Join-Path $OutDir (
-        "ANALYSIS-PACK-$([string]$Manifest.sessionID).zip"
-    )
+    $CollectionReport |
+        ConvertTo-Json -Depth 10 |
+        Set-Content `
+            -LiteralPath (Join-Path $Temp 'COLLECTION-REPORT.json') `
+            -Encoding UTF8
 
+    New-Item -ItemType Directory -Path $CollectionDir -Force | Out-Null
+
+    $Zip = Join-Path $CollectionDir "ANALYSIS-PACK-$CollectionID.zip"
     Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue
 
     Compress-Archive `
@@ -325,7 +415,8 @@ function Sync-OneSession {
         [Parameter(Mandatory)]$SessionSummary,
         [Parameter(Mandatory)][string]$BaseUrl,
         [Parameter(Mandatory)][string]$Token,
-        [Parameter(Mandatory)][string]$Root
+        [Parameter(Mandatory)][string]$Root,
+        [switch]$FinishCollection
     )
 
     $Id = [string]$SessionSummary.sessionID
@@ -337,8 +428,14 @@ function Sync-OneSession {
     if ([string]$Manifest.state -eq 'recording') {
         Write-Host 'SESSION ACTIVE = scellement automatique avant synchronisation...' -ForegroundColor DarkCyan
 
+        $SealUri = "$BaseUrl/api/v1/sessions/$Id/seal"
+
+        if ($FinishCollection) {
+            $SealUri += '?restart=0&finish_collection=1'
+        }
+
         $Seal = Invoke-ApiJson `
-            -Uri "$BaseUrl/api/v1/sessions/$Id/seal" `
+            -Uri $SealUri `
             -Token $Token `
             -Method POST `
             -TimeoutSec 8 `
@@ -466,7 +563,7 @@ function Sync-OneSession {
     }
     $Report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OutDir 'SYNC-REPORT.json') -Encoding UTF8
 
-    if ($null -ne $Video -and -not $KeepFrames) {
+    if ($null -ne $Video -and -not $KeepFrames -and -not $AnalysisPack) {
         Remove-Item -LiteralPath (Join-Path $OutDir 'visual\keyframes') -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath (Join-Path $OutDir 'visual\bursts') -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -497,38 +594,93 @@ $Sessions = @($SessionsPayload | ForEach-Object { $_ }) | Sort-Object {[double]$
 if ($Sessions.Count -eq 0) { throw 'Aucune session Cloud Weight enregistrée sur cet iPhone.' }
 
 $Selected = @()
+
 if ($AllSessions) {
-    $Selected = if ($AnyBuild) { $Sessions } else { @($Sessions | Where-Object { [string]$_.buildSHA -eq $CurrentBuild }) }
-    if ($Selected.Count -eq 0) { throw "Aucune session du build installé $CurrentBuild." }
-} elseif (-not [string]::IsNullOrWhiteSpace($SessionId)) {
-    $Selected = @($Sessions | Where-Object { [string]$_.sessionID -eq $SessionId })
-    if ($Selected.Count -eq 0) { throw "Session '$SessionId' introuvable." }
-} else {
-    $Candidates = if ($AnyBuild) { $Sessions } else { @($Sessions | Where-Object { [string]$_.buildSHA -eq $CurrentBuild }) }
+    $Selected = if ($AnyBuild) {
+        $Sessions
+    } else {
+        @($Sessions | Where-Object {
+            [string]$_.buildSHA -eq $CurrentBuild
+        })
+    }
+
+    if ($Selected.Count -eq 0) {
+        throw "Aucune session du build installé $CurrentBuild."
+    }
+}
+elseif (-not [string]::IsNullOrWhiteSpace($SessionId)) {
+    $Selected = @($Sessions | Where-Object {
+        [string]$_.sessionID -eq $SessionId
+    })
+
+    if ($Selected.Count -eq 0) {
+        throw "Session '$SessionId' introuvable."
+    }
+}
+else {
+    $Candidates = if ($AnyBuild) {
+        $Sessions
+    } else {
+        @($Sessions | Where-Object {
+            [string]$_.buildSHA -eq $CurrentBuild
+        })
+    }
+
     if ($Candidates.Count -eq 0) {
-        $AvailableBuilds = @($Sessions | Select-Object -ExpandProperty buildSHA -Unique) -join ', '
+        $AvailableBuilds =
+            @($Sessions |
+                Select-Object -ExpandProperty buildSHA -Unique) -join ', '
+
         throw "Aucune session correspondant au build actuellement installé $CurrentBuild. Builds présents : $AvailableBuilds"
     }
 
     $Newest = $Candidates[0]
-    $Selected = @($Newest)
+    $CollectionID = [string]$Newest.collectionID
 
-    if ([string]$Newest.state -eq 'recording') {
-        Write-Host "Session active la plus récente sélectionnée : $($Newest.sessionID)" -ForegroundColor DarkCyan
-    } else {
-        Write-Host "Session la plus récente du build courant sélectionnée : $($Newest.sessionID)" -ForegroundColor DarkCyan
+    if (
+        $AnalysisPack -and
+        -not [string]::IsNullOrWhiteSpace($CollectionID)
+    ) {
+        $Selected = @(
+            $Candidates |
+            Where-Object {
+                [string]$_.collectionID -eq $CollectionID
+            } |
+            Sort-Object { [double]$_.startedAt }
+        )
+
+        Write-Host ""
+        Write-Host "COLLECTION   = $CollectionID" -ForegroundColor Cyan
+        Write-Host "SEGMENTS     = $($Selected.Count)" -ForegroundColor Cyan
+    }
+    else {
+        $Selected = @($Newest)
     }
 }
 
+$Outputs = @()
 $LastOutput = $null
+
 foreach ($Session in $Selected) {
-    $LastOutput = Sync-OneSession -SessionSummary $Session -BaseUrl $BaseUrl -Token $Token -Root $Root
+    $FinishCollection =
+        $AnalysisPack -and
+        [string]$Session.state -eq 'recording'
+
+    $Output = Sync-OneSession `
+        -SessionSummary $Session `
+        -BaseUrl $BaseUrl `
+        -Token $Token `
+        -Root $Root `
+        -FinishCollection:$FinishCollection
+
+    $Outputs += $Output
+    $LastOutput = $Output
 }
 
 $AnalysisZip = $null
 
-if ($AnalysisPack -and $null -ne $LastOutput) {
-    $AnalysisZip = New-AnalysisPack -OutDir $LastOutput
+if ($AnalysisPack -and $Outputs.Count -gt 0) {
+    $AnalysisZip = New-AnalysisPack -OutDirs $Outputs
 
     $SizeMB = [Math]::Round(
         (Get-Item -LiteralPath $AnalysisZip).Length / 1MB,

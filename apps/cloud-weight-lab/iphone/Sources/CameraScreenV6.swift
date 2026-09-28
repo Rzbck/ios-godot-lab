@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CameraScreenV6: View {
+    @Environment(\.scenePhase) private var scenePhase
     private struct CloudGuide: Identifiable {
         let name: String
         let altitude: String
@@ -113,6 +114,21 @@ struct CameraScreenV6: View {
             camera.requestAndStart()
             withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
                 pulse = true
+            }
+        }
+        .onChange(of: scenePhase) { _, nextPhase in
+            switch nextPhase {
+            case .active:
+                camera.requestAndStart()
+
+            case .background:
+                camera.pauseForBackground()
+
+            case .inactive:
+                break
+
+            @unknown default:
+                break
             }
         }
         .onDisappear {

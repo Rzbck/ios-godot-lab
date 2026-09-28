@@ -322,6 +322,36 @@ final class CloudDiagnosticsAPI {
            pathParts[2] == "sessions" {
             let sessionID = pathParts[3]
 
+            if method == "POST", pathParts.count == 5, pathParts[4] == "seal" {
+                guard sessionRecorder.activeSessionID() == sessionID else {
+                    send(
+                        connection,
+                        status: 409,
+                        contentType: "application/json",
+                        body: json(["error": "session_not_recording"])
+                    )
+                    return
+                }
+
+                sessionRecorder.endSession()
+                sessionRecorder.startSession(
+                    buildSHA: BuildInfo.gitSHA,
+                    version: BuildInfo.version
+                )
+
+                send(
+                    connection,
+                    status: 200,
+                    contentType: "application/json",
+                    body: json([
+                        "ok": true,
+                        "sealed_session": sessionID,
+                        "active_session": sessionRecorder.activeSessionID() ?? ""
+                    ])
+                )
+                return
+            }
+
             if method == "GET", pathParts.count == 5, pathParts[4] == "manifest" {
                 guard let body = sessionRecorder.sessionManifestData(id: sessionID) else {
                     send(connection, status: 404, contentType: "application/json", body: json(["error": "session_not_found"])); return

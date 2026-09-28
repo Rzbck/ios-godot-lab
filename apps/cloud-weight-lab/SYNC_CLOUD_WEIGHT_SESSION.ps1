@@ -175,7 +175,7 @@ function Get-OrCreateApiSession {
     }
 
     if ($null -eq $PairResponse -or [string]::IsNullOrWhiteSpace([string]$PairResponse.token)) {
-        throw 'La connexion automatique n’a retourné aucun jeton.'
+        throw "La connexion automatique n'a retourné aucun jeton."
     }
 
     $Created = Save-ApiSession -Path $SessionPath -BaseUrl $BaseUrl -Token ([string]$PairResponse.token) -Build ([string]$PairResponse.build)
@@ -266,6 +266,30 @@ function Sync-OneSession {
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
     $Manifest = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/manifest" -Token $Token -TimeoutSec 8 -Attempts 3
+
+    if ([string]$Manifest.state -eq 'recording') {
+        Write-Host 'SESSION ACTIVE = scellement automatique avant synchronisation...' -ForegroundColor DarkCyan
+
+        $Seal = Invoke-ApiJson `
+            -Uri "$BaseUrl/api/v1/sessions/$Id/seal" `
+            -Token $Token `
+            -Method POST `
+            -TimeoutSec 8 `
+            -Attempts 3
+
+        if ($null -eq $Seal -or $Seal.ok -ne $true) {
+            throw "Impossible de figer automatiquement la session $Id."
+        }
+
+        $Manifest = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/manifest" -Token $Token -TimeoutSec 8 -Attempts 3
+
+        if ([string]$Manifest.state -eq 'recording') {
+            throw "La session $Id est encore active après scellement."
+        }
+
+        Write-Host "SESSION FIGEE = $Id" -ForegroundColor Green
+    }
+
     $Manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $OutDir 'manifest.json') -Encoding UTF8
     $FilesPayload = Invoke-ApiJson -Uri "$BaseUrl/api/v1/sessions/$Id/files" -Token $Token -TimeoutSec 15 -Attempts 3
     $Files = @($FilesPayload | ForEach-Object { $_ })
@@ -419,13 +443,13 @@ if ($AllSessions) {
         throw "Aucune session correspondant au build actuellement installé $CurrentBuild. Builds présents : $AvailableBuilds"
     }
 
-    $Finished = @($Candidates | Where-Object { [string]$_.state -ne 'recording' })
-    if ($Finished.Count -gt 0) {
-        $Selected = @($Finished[0])
-        Write-Host "Session du build courant sélectionnée : $($Finished[0].sessionID)" -ForegroundColor DarkCyan
+    $Newest = $Candidates[0]
+    $Selected = @($Newest)
+
+    if ([string]$Newest.state -eq 'recording') {
+        Write-Host "Session active la plus récente sélectionnée : $($Newest.sessionID)" -ForegroundColor DarkCyan
     } else {
-        $Selected = @($Candidates[0])
-        Write-Host 'Pas encore de session terminée pour ce build ; synchronisation de la session active.' -ForegroundColor Yellow
+        Write-Host "Session la plus récente du build courant sélectionnée : $($Newest.sessionID)" -ForegroundColor DarkCyan
     }
 }
 

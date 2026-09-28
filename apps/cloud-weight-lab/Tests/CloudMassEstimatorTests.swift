@@ -63,6 +63,17 @@ final class CloudMassEstimatorTests: XCTestCase {
         XCTAssertLessThan(low.confidence, high.confidence)
     }
 
+    func testRegionCenteredClearlyBelowHorizonIsRejected() {
+        let result = estimator.estimate(
+            from: observation(width: 0.80, height: 0.45),
+            cameraElevationDegrees: -15,
+            isLandscape: true,
+            motionReliable: true
+        )
+
+        XCTAssertNil(result)
+    }
+
     func testClassifierProfiles() {
         XCTAssertEqual(
             CloudAnalyzer.classify(

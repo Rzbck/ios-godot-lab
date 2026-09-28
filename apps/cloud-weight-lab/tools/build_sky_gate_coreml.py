@@ -18,6 +18,12 @@ TREE_CLASS_INDEX = 4
 PERSON_CLASS_INDEX = 12
 PLANT_CLASS_INDEX = 17
 WALL_CLASS_INDEX = 0
+FLOOR_CLASS_INDEX = 3
+ROAD_CLASS_INDEX = 6
+GRASS_CLASS_INDEX = 9
+SIDEWALK_CLASS_INDEX = 11
+EARTH_CLASS_INDEX = 13
+CAR_CLASS_INDEX = 20
 SOURCE_REPOSITORY = "https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512"
 SOURCE_REVISION = "489d5cd81a0b59fab9b7ea758d3548ebe99677da"
 SOURCE_WEIGHTS_SHA256 = "6ae39addd01de6b1b8bde2cf677d43a5cd733424b8d186de3f95d1c51fee23f9"
@@ -55,7 +61,16 @@ class SkySemanticModel(nn.Module):
         person = probabilities[:, PERSON_CLASS_INDEX : PERSON_CLASS_INDEX + 1, :, :]
         plant = probabilities[:, PLANT_CLASS_INDEX : PLANT_CLASS_INDEX + 1, :, :]
         wall = probabilities[:, WALL_CLASS_INDEX : WALL_CLASS_INDEX + 1, :, :]
-        blocker = torch.maximum(torch.maximum(building, tree), torch.maximum(person, plant))
+        floor = probabilities[:, FLOOR_CLASS_INDEX : FLOOR_CLASS_INDEX + 1, :, :]
+        road = probabilities[:, ROAD_CLASS_INDEX : ROAD_CLASS_INDEX + 1, :, :]
+        grass = probabilities[:, GRASS_CLASS_INDEX : GRASS_CLASS_INDEX + 1, :, :]
+        sidewalk = probabilities[:, SIDEWALK_CLASS_INDEX : SIDEWALK_CLASS_INDEX + 1, :, :]
+        earth = probabilities[:, EARTH_CLASS_INDEX : EARTH_CLASS_INDEX + 1, :, :]
+        car = probabilities[:, CAR_CLASS_INDEX : CAR_CLASS_INDEX + 1, :, :]
+
+        blocker = building
+        for semantic in (tree, person, plant, wall, floor, road, grass, sidewalk, earth, car):
+            blocker = torch.maximum(blocker, semantic)
 
         return (
             self._up(sky),
@@ -80,6 +95,12 @@ def load_model(config_path: Path, weights_path: Path) -> nn.Module:
         PERSON_CLASS_INDEX: "person",
         PLANT_CLASS_INDEX: "plant",
         WALL_CLASS_INDEX: "wall",
+        FLOOR_CLASS_INDEX: "floor",
+        ROAD_CLASS_INDEX: "road",
+        GRASS_CLASS_INDEX: "grass",
+        SIDEWALK_CLASS_INDEX: "sidewalk",
+        EARTH_CLASS_INDEX: "earth",
+        CAR_CLASS_INDEX: "car",
     }
     for index, label in expected.items():
         actual = str(config.id2label.get(index, "")).strip().lower()
@@ -174,7 +195,7 @@ def main() -> None:
     )
     mlmodel.user_defined_metadata["dataset"] = "ADE20K / scene_parse_150"
     mlmodel.user_defined_metadata["semantic_outputs"] = (
-        "sky, blocker=max(building,tree,person,plant), tree, building, person, plant, wall"
+        "sky, blocker=max(building,tree,person,plant,wall,floor,road,grass,sidewalk,earth,car), tree, building, person, plant, wall"
     )
     mlmodel.user_defined_metadata["capture"] = "torch.jit.trace"
 

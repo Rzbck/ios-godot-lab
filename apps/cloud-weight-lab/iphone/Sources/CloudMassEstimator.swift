@@ -113,6 +113,12 @@ final class CloudMassEstimator {
         let angularHeight = max(0.001, abs(top - bottom))
         let centerElevationDegrees = cameraElevationDegrees + centerVerticalOffset * 180.0 / .pi
 
+        // A cloud centroid cannot physically sit clearly below the horizon.
+        // Keep a small tolerance for CoreMotion / camera alignment error.
+        if motionReliable && centerElevationDegrees < -2.5 {
+            return nil
+        }
+
         let altitudeMid = geometricMean(kind.altitudeMeters)
         let waterMid = geometricMean(kind.waterContentGramsPerCubicMeter)
         let depthMid = geometricMean(kind.depthRatio)

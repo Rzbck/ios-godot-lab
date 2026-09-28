@@ -236,7 +236,8 @@ struct CameraScreenV6: View {
             .padding(.horizontal, 14)
             .padding(.top, 16)
             .padding(.bottom, 18)
-            .frame(width: 292, maxHeight: .infinity, alignment: .topLeading)
+            .frame(width: 292)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
             .background(.ultraThinMaterial)
             .overlay(alignment: .leading) {
                 Rectangle()

@@ -125,6 +125,44 @@ final class CloudAdaptiveAnalysisTests: XCTestCase {
         XCTAssertEqual(CloudStructureAnalyzer.classify(region), .cirrus)
     }
 
+    func testMorphologyIsIndependentOfPortraitLandscapePixelAspect() {
+        let portrait = makeRegion(
+            width: 0.72,
+            height: 0.20,
+            frameCoverage: 0.10,
+            parentCoverage: 0.10,
+            fill: 0.56,
+            boundaryRatio: 1.50,
+            compactness: 0.28,
+            brightnessStdDev: 0.08,
+            probabilityStdDev: 0.07,
+            edgeTouchCount: 0,
+            split: false,
+            brightness: 0.76,
+            saturation: 0.12
+        )
+        let landscape = makeRegion(
+            width: 0.72,
+            height: 0.20,
+            frameCoverage: 0.10,
+            parentCoverage: 0.10,
+            fill: 0.56,
+            boundaryRatio: 1.50,
+            compactness: 0.28,
+            brightnessStdDev: 0.08,
+            probabilityStdDev: 0.07,
+            edgeTouchCount: 0,
+            split: false,
+            brightness: 0.76,
+            saturation: 0.12
+        )
+
+        XCTAssertEqual(
+            CloudStructureAnalyzer.classify(portrait),
+            CloudStructureAnalyzer.classify(landscape)
+        )
+    }
+
     private func makeRegion(
         width: Double,
         height: Double,
@@ -155,6 +193,8 @@ final class CloudAdaptiveAnalysisTests: XCTestCase {
             maxY: pixelHeight - 1,
             centroidX: Double(pixelWidth) * 0.5,
             centroidY: Double(pixelHeight) * 0.5,
+            normalizedWidth: width,
+            normalizedHeight: height,
             meanProbability: 0.78,
             probabilityStdDev: probabilityStdDev,
             highConfidenceFraction: 0.58,

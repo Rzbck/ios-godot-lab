@@ -30,10 +30,16 @@ final class CloudTemporalStabilizer {
     private var tracks: [Track] = []
     private var nextTrackID = 1
 
-    private let maximumMisses = 1
+    private let maximumTransientMisses = 1
+    private let maximumMatureMisses = 3
     private let maximumCentroidDistance = 0.22
     private let minimumIntersectionOverUnion = 0.035
-    private let smallTrackConfirmationCoverage = 0.02
+
+    // A large region can appear immediately. Small fragments must persist
+    // across several analyses before becoming user-visible.
+    private let immediateConfirmationCoverage = 0.08
+    private let confirmationHits = 3
+
     private let kindConfirmationHits = 15
 
     private(set) var lastStats = CloudTrackingStats(
@@ -88,7 +94,12 @@ final class CloudTemporalStabilizer {
             }
         }
 
-        tracks.removeAll { $0.misses > maximumMisses }
+        tracks.removeAll { track in
+            let maximumMisses = track.hits >= confirmationHits
+                ? maximumMatureMisses
+                : maximumTransientMisses
+            return track.misses > maximumMisses
+        }
 
         var createdTracks = 0
         for index in detections.indices where !matchedDetectionIndices.contains(index) {
@@ -110,8 +121,9 @@ final class CloudTemporalStabilizer {
 
         let visible = tracks.filter { track in
             guard track.misses == 0 else { return false }
-            return track.hits >= 2
-                || track.detection.observation.coverage >= smallTrackConfirmationCoverage
+
+            return track.hits >= confirmationHits
+                || track.detection.observation.coverage >= immediateConfirmationCoverage
         }
 
         lastStats = CloudTrackingStats(
@@ -155,11 +167,13 @@ final class CloudTemporalStabilizer {
                 let oldCoverage = max(0.0001, existing.detection.observation.coverage)
                 let newCoverage = max(0.0001, candidate.observation.coverage)
                 let coverageRatio = min(oldCoverage, newCoverage) / max(oldCoverage, newCoverage)
-                let kindBonus = existing.detection.observation.kind == candidate.observation.kind ? 1.0 : 0.0
+
+                // Identity is geometric. Cloud type is deliberately excluded:
+                // classification can flicker while the physical cloud remains
+                // the same object.
                 let score = overlap * 0.52
-                    + distanceScore * 0.30
+                    + distanceScore * 0.35
                     + coverageRatio * 0.13
-                    + kindBonus * 0.05
 
                 result.append(
                     MatchCandidate(

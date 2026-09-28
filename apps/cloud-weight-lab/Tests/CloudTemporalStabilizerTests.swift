@@ -114,6 +114,75 @@ final class CloudTemporalStabilizerTests: XCTestCase {
         XCTAssertEqual(stabilizer.lastStats.activeTracks, 0)
     }
 
+    func testSmallFragmentNeedsThreeConsistentHits() throws {
+        let stabilizer = CloudTemporalStabilizer()
+
+        let first = stabilizer.update(raw: [
+            detection(
+                id: 0,
+                x: 0.40,
+                y: 0.40,
+                mass: 50_000,
+                coverage: 0.01
+            )
+        ])
+        XCTAssertTrue(first.isEmpty)
+
+        let second = stabilizer.update(raw: [
+            detection(
+                id: 1,
+                x: 0.405,
+                y: 0.40,
+                mass: 52_000,
+                coverage: 0.01
+            )
+        ])
+        XCTAssertTrue(second.isEmpty)
+
+        let third = stabilizer.update(raw: [
+            detection(
+                id: 2,
+                x: 0.41,
+                y: 0.40,
+                mass: 54_000,
+                coverage: 0.01
+            )
+        ])
+
+        XCTAssertEqual(third.count, 1)
+    }
+
+    func testMatureTrackSurvivesThreeMissesAndRecoversIdentity() throws {
+        let stabilizer = CloudTemporalStabilizer()
+
+        let first = try XCTUnwrap(
+            stabilizer.update(raw: [
+                detection(id: 0, x: 0.40, y: 0.40, mass: 500_000)
+            ]).first
+        )
+
+        _ = stabilizer.update(raw: [
+            detection(id: 1, x: 0.405, y: 0.40, mass: 505_000)
+        ])
+        _ = stabilizer.update(raw: [
+            detection(id: 2, x: 0.41, y: 0.40, mass: 510_000)
+        ])
+
+        XCTAssertTrue(stabilizer.update(raw: []).isEmpty)
+        XCTAssertTrue(stabilizer.update(raw: []).isEmpty)
+        XCTAssertTrue(stabilizer.update(raw: []).isEmpty)
+
+        XCTAssertEqual(stabilizer.lastStats.activeTracks, 1)
+
+        let recovered = try XCTUnwrap(
+            stabilizer.update(raw: [
+                detection(id: 99, x: 0.42, y: 0.405, mass: 515_000)
+            ]).first
+        )
+
+        XCTAssertEqual(recovered.id, first.id)
+    }
+
     func testTwoNearbyCloudsDoNotSwapIdsWhenInputOrderChanges() throws {
         let stabilizer = CloudTemporalStabilizer()
 
@@ -142,13 +211,14 @@ final class CloudTemporalStabilizerTests: XCTestCase {
         x: Double,
         y: Double,
         mass: Double,
-        kind: CloudKind = .cumulus
+        kind: CloudKind = .cumulus,
+        coverage: Double = 0.12
     ) -> CloudDetection {
         let observation = CloudObservation(
             id: id,
             kind: kind,
             confidence: 0.82,
-            coverage: 0.12,
+            coverage: coverage,
             bounds: CGRect(x: x, y: y, width: 0.24, height: 0.18),
             centroid: CGPoint(x: x + 0.12, y: y + 0.09),
             averageBrightness: 0.75,

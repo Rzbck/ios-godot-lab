@@ -20,6 +20,7 @@ PLANT_CLASS_INDEX = 17
 WALL_CLASS_INDEX = 0
 FLOOR_CLASS_INDEX = 3
 ROAD_CLASS_INDEX = 6
+WINDOWPANE_CLASS_INDEX = 8
 GRASS_CLASS_INDEX = 9
 SIDEWALK_CLASS_INDEX = 11
 EARTH_CLASS_INDEX = 13
@@ -63,13 +64,26 @@ class SkySemanticModel(nn.Module):
         wall = probabilities[:, WALL_CLASS_INDEX : WALL_CLASS_INDEX + 1, :, :]
         floor = probabilities[:, FLOOR_CLASS_INDEX : FLOOR_CLASS_INDEX + 1, :, :]
         road = probabilities[:, ROAD_CLASS_INDEX : ROAD_CLASS_INDEX + 1, :, :]
+        windowpane = probabilities[:, WINDOWPANE_CLASS_INDEX : WINDOWPANE_CLASS_INDEX + 1, :, :]
         grass = probabilities[:, GRASS_CLASS_INDEX : GRASS_CLASS_INDEX + 1, :, :]
         sidewalk = probabilities[:, SIDEWALK_CLASS_INDEX : SIDEWALK_CLASS_INDEX + 1, :, :]
         earth = probabilities[:, EARTH_CLASS_INDEX : EARTH_CLASS_INDEX + 1, :, :]
         car = probabilities[:, CAR_CLASS_INDEX : CAR_CLASS_INDEX + 1, :, :]
 
         blocker = building
-        for semantic in (tree, person, plant, wall, floor, road, grass, sidewalk, earth, car):
+        for semantic in (
+            tree,
+            person,
+            plant,
+            wall,
+            floor,
+            road,
+            windowpane,
+            grass,
+            sidewalk,
+            earth,
+            car,
+        ):
             blocker = torch.maximum(blocker, semantic)
 
         return (
@@ -97,6 +111,7 @@ def load_model(config_path: Path, weights_path: Path) -> nn.Module:
         WALL_CLASS_INDEX: "wall",
         FLOOR_CLASS_INDEX: "floor",
         ROAD_CLASS_INDEX: "road",
+        WINDOWPANE_CLASS_INDEX: "windowpane",
         GRASS_CLASS_INDEX: "grass",
         SIDEWALK_CLASS_INDEX: "sidewalk",
         EARTH_CLASS_INDEX: "earth",
@@ -195,7 +210,7 @@ def main() -> None:
     )
     mlmodel.user_defined_metadata["dataset"] = "ADE20K / scene_parse_150"
     mlmodel.user_defined_metadata["semantic_outputs"] = (
-        "sky, blocker=max(building,tree,person,plant,wall,floor,road,grass,sidewalk,earth,car), tree, building, person, plant, wall"
+        "sky, blocker=max(building,tree,person,plant,wall,floor,road,windowpane,grass,sidewalk,earth,car), tree, building, person, plant, wall"
     )
     mlmodel.user_defined_metadata["capture"] = "torch.jit.trace"
 

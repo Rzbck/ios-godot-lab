@@ -4,10 +4,15 @@ import Foundation
 final class CloudOverlayStabilizer {
     private var width = 0
     private var height = 0
+    private var lastValidatedOverlay: CGImage?
+    private var holdFramesRemaining = 0
+    private let maximumHoldFrames = 2
 
     func reset() {
         width = 0
         height = 0
+        lastValidatedOverlay = nil
+        holdFramesRemaining = 0
     }
 
     func update(_ image: CGImage?, detections: [CloudDetection]) -> CGImage? {
@@ -16,12 +21,14 @@ final class CloudOverlayStabilizer {
             return nil
         }
 
-        // Keep the raw segmentation visible for diagnostics even when the
-        // physical geometry rejects every mass estimate (for example a cloud
-        // image displayed on a monitor below the horizon).
+        // The normal camera UI must only show physically validated tracks.
+        // Raw segmentation is recorded separately by the diagnostic pipeline.
         guard !detections.isEmpty else {
-            reset()
-            return image
+            if holdFramesRemaining > 0, let lastValidatedOverlay {
+                holdFramesRemaining -= 1
+                return lastValidatedOverlay
+            }
+            return nil
         }
 
         guard let mask = alphaMask(from: image) else {
@@ -34,12 +41,16 @@ final class CloudOverlayStabilizer {
             height = image.height
         }
 
-        return makeOverlay(
+        let overlay = makeOverlay(
             mask: mask,
             detections: detections,
             width: width,
             height: height
         )
+
+        lastValidatedOverlay = overlay
+        holdFramesRemaining = overlay == nil ? 0 : maximumHoldFrames
+        return overlay
     }
 
     private func alphaMask(from image: CGImage) -> [UInt8]? {

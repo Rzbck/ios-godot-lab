@@ -458,16 +458,18 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
         let nextReport = telemetryMonitor.makeReport(buildSHA: BuildInfo.gitSHA)
 
         diagnosticsStore.record(telemetry: nextTelemetry, detections: stabilizedDetections)
+        // Diagnostics deliberately preserve the raw segmentation so false
+        // positives remain inspectable even though the normal UI hides them.
         diagnosticsStore.maybeCapture(
             sampleBuffer: sampleBuffer,
-            overlayImage: stabilizedOverlay,
+            overlayImage: rawAnalysis?.overlayImage,
             telemetry: nextTelemetry,
             detections: stabilizedDetections
         )
         sessionRecorder.record(telemetry: nextTelemetry, detections: stabilizedDetections)
         sessionRecorder.maybeCapture(
             sampleBuffer: sampleBuffer,
-            overlayImage: stabilizedOverlay,
+            overlayImage: rawAnalysis?.overlayImage,
             telemetry: nextTelemetry,
             detections: stabilizedDetections
         )

@@ -328,8 +328,8 @@ final class CloudSessionRecorder {
             let validatedCloud = !detections.isEmpty
                 || telemetry.trackingVisibleTracks > 0
             let semanticCloud =
-                telemetry.cloudCoveragePercent >= self.minimumSemanticVisualCoveragePercent
-                && telemetry.skyCoveragePercent >= 5.0
+                !telemetry.sceneRejected
+                && telemetry.cloudCoveragePercent >= self.minimumSemanticVisualCoveragePercent
             let significantTransition =
                 telemetry.maskChangePercent >= self.minimumVisualMaskChangePercent
 

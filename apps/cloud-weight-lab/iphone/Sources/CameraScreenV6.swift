@@ -1,8 +1,40 @@
 import SwiftUI
 
 struct CameraScreenV6: View {
+    private struct CloudGuide: Identifiable {
+        let name: String
+        let altitude: String
+        let summary: String
+
+        var id: String { name }
+    }
+
     @StateObject private var camera = CameraService()
     @State private var pulse = false
+    @State private var showCloudIndex = false
+
+    private let cloudGuides = [
+        CloudGuide(
+            name: "Cumulus",
+            altitude: "Souvent basse altitude",
+            summary: "Nuage gonflé aux contours marqués, souvent associé aux mouvements verticaux de l'air."
+        ),
+        CloudGuide(
+            name: "Stratocumulus",
+            altitude: "Basse altitude",
+            summary: "Grandes masses ou rouleaux arrondis formant souvent une couche discontinue."
+        ),
+        CloudGuide(
+            name: "Stratus",
+            altitude: "Très basse altitude",
+            summary: "Couche assez uniforme et étendue, parfois proche d'un brouillard élevé."
+        ),
+        CloudGuide(
+            name: "Cirrus",
+            altitude: "Haute altitude",
+            summary: "Nuages fins et fibreux principalement composés de cristaux de glace."
+        )
+    ]
 
     var body: some View {
         ZStack {
@@ -50,7 +82,33 @@ struct CameraScreenV6: View {
             .padding(.horizontal, 12)
             .padding(.top, 4)
             .padding(.bottom, 7)
+
+            if showCloudIndex {
+                cloudIndexPanel
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .zIndex(20)
+            } else {
+                cloudIndexHandle
+                    .zIndex(20)
+            }
         }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 36)
+                .onEnded { value in
+                    guard abs(value.translation.width) > abs(value.translation.height)
+                    else { return }
+
+                    if value.translation.width < -60 {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                            showCloudIndex = true
+                        }
+                    } else if value.translation.width > 60 {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                            showCloudIndex = false
+                        }
+                    }
+                }
+        )
         .task {
             camera.requestAndStart()
             withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
@@ -60,6 +118,133 @@ struct CameraScreenV6: View {
         .onDisappear {
             camera.stop()
         }
+    }
+
+    private var cloudIndexHandle: some View {
+        HStack {
+            Spacer()
+
+            Button {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                    showCloudIndex = true
+                }
+            } label: {
+                VStack(spacing: 2) {
+                    Image(systemName: "cloud.fill")
+                        .font(.system(size: 11, weight: .bold))
+                    Text("i")
+                        .font(.system(size: 8, weight: .black, design: .rounded))
+                }
+                .foregroundStyle(.white.opacity(0.78))
+                .frame(width: 27, height: 45)
+                .background(.black.opacity(0.28), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(.white.opacity(0.12), lineWidth: 0.8)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.trailing, 4)
+    }
+
+    private var cloudIndexPanel: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 50)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("INDEX NUAGES")
+                            .font(.system(size: 14, weight: .black, design: .rounded))
+                            .tracking(0.8)
+
+                        Text("Classification indicative")
+                            .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.48))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                            showCloudIndex = false
+                        }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .black))
+                            .frame(width: 30, height: 30)
+                            .background(.white.opacity(0.08), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Text("Glisse vers la droite pour revenir à la caméra.")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.50))
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 9) {
+                        ForEach(cloudGuides) { guide in
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Image(systemName: "cloud.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.white.opacity(0.72))
+
+                                    Text(guide.name.uppercased())
+                                        .font(.system(
+                                            size: 11,
+                                            weight: .black,
+                                            design: .rounded
+                                        ))
+
+                                    Spacer()
+                                }
+
+                                Text(guide.altitude)
+                                    .font(.system(
+                                        size: 8.5,
+                                        weight: .bold,
+                                        design: .rounded
+                                    ))
+                                    .foregroundStyle(.white.opacity(0.50))
+
+                                Text(guide.summary)
+                                    .font(.system(
+                                        size: 9.5,
+                                        weight: .medium,
+                                        design: .rounded
+                                    ))
+                                    .foregroundStyle(.white.opacity(0.78))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(11)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.black.opacity(0.23), in: RoundedRectangle(
+                                cornerRadius: 14,
+                                style: .continuous
+                            ))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(.white.opacity(0.08), lineWidth: 0.8)
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 16)
+            .padding(.bottom, 18)
+            .frame(width: 292, maxHeight: .infinity, alignment: .topLeading)
+            .background(.ultraThinMaterial)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(.white.opacity(0.10))
+                    .frame(width: 1)
+            }
+        }
+        .ignoresSafeArea()
     }
 
     private var compactHeader: some View {
@@ -78,6 +263,15 @@ struct CameraScreenV6: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
                     .background(.black.opacity(0.28), in: Capsule())
+            }
+
+            if !camera.analysisModelsReady {
+                Text("IA…")
+                    .font(.system(size: 8, weight: .black, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.60))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 5)
+                    .background(.black.opacity(0.24), in: Capsule())
             }
 
             Spacer()

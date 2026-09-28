@@ -21,8 +21,13 @@ final class CameraService: NSObject, ObservableObject {
     @Published private(set) var diagnosticReport = ""
     @Published private(set) var activeCamera: AVCaptureDevice?
     @Published private(set) var apiState: CloudDiagnosticsAPI.State = .stopped
+    @Published private(set) var analysisModelsReady = false
 
-    private let analyzer = CloudAnalyzer()
+    // Core ML is deliberately loaded off the UI thread so the camera preview
+    // can appear immediately at launch.
+    private var analyzer: CloudAnalyzer?
+    private var analyzerLoadStarted = false
+
     private let estimator = CloudMassEstimator()
     private let stabilizer = CloudTemporalStabilizer()
     private let overlayStabilizer = CloudOverlayStabilizer()
@@ -61,11 +66,7 @@ final class CameraService: NSObject, ObservableObject {
         telemetryMonitor.reset()
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         diagnosticsAPI.start()
-
-        guard analyzer.isReady else {
-            status = .failed(analyzer.loadError ?? "Modèle de segmentation indisponible")
-            return
-        }
+        prepareAnalyzer()
 
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -86,6 +87,36 @@ final class CameraService: NSObject, ObservableObject {
             status = .denied
         @unknown default:
             status = .failed("Autorisation caméra inconnue")
+        }
+    }
+
+    private func prepareAnalyzer() {
+        guard !analyzerLoadStarted else { return }
+        analyzerLoadStarted = true
+
+        // analysisQueue is also the inference queue. Loading here prevents
+        // inference callbacks from racing model construction while leaving
+        // AVCapturePreviewLayer free to start immediately.
+        analysisQueue.async { [weak self] in
+            guard let self else { return }
+
+            let loadedAnalyzer = CloudAnalyzer()
+
+            guard loadedAnalyzer.isReady else {
+                let message = loadedAnalyzer.loadError
+                    ?? "Modèle de segmentation indisponible"
+
+                DispatchQueue.main.async {
+                    self.status = .failed(message)
+                }
+                return
+            }
+
+            self.analyzer = loadedAnalyzer
+
+            DispatchQueue.main.async {
+                self.analysisModelsReady = true
+            }
         }
     }
 
@@ -327,13 +358,24 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
                 fieldOfViewDegrees: fieldOfViewDegrees
             )
             analyzerTiming = nil
-        } else {
+        } else if let analyzer {
             rawAnalysis = analyzer.analyze(
                 sampleBuffer: sampleBuffer,
                 fieldOfViewDegrees: fieldOfViewDegrees,
                 environment: CloudAnalysisEnvironment(lowLight: lowLightMode)
             )
             analyzerTiming = analyzer.lastTiming
+        } else {
+            // Preview remains usable while Core ML finishes loading.
+            rawAnalysis = CloudFrameAnalysis(
+                timestamp: Date(),
+                observations: [],
+                totalCoverage: 0,
+                overlayImage: nil,
+                engine: .ucloudNetCoreML,
+                fieldOfViewDegrees: fieldOfViewDegrees
+            )
+            analyzerTiming = nil
         }
 
         let rawCoverage = rawAnalysis?.totalCoverage ?? 0
@@ -347,7 +389,7 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate {
             overlayStabilizer.reset()
         }
         if geometryChanged {
-            analyzer.resetSemanticGate()
+            analyzer?.resetSemanticGate()
         }
         lastCaptureWidth = captureWidth
         lastCaptureHeight = captureHeight

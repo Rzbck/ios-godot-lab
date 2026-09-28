@@ -40,7 +40,12 @@ final class CloudTemporalStabilizer {
     private let immediateConfirmationCoverage = 0.08
     private let confirmationHits = 3
 
-    private let kindConfirmationHits = 15
+    // Early in a new track, allow a wrong first guess to correct itself.
+    // Once the physical track is established, cloud type must remain visually
+    // stable through temporary mask-size/classification swings.
+    private let initialKindConfirmationHits = 15
+    private let establishedKindConfirmationHits = 60
+    private let establishedKindAfterHits = 45
 
     private(set) var lastStats = CloudTrackingStats(
         activeTracks: 0,
@@ -265,7 +270,11 @@ final class CloudTemporalStabilizer {
             track.pendingKindCount = 1
         }
 
-        if track.pendingKindCount >= kindConfirmationHits {
+        let requiredHits = track.hits < establishedKindAfterHits
+            ? initialKindConfirmationHits
+            : establishedKindConfirmationHits
+
+        if track.pendingKindCount >= requiredHits {
             track.pendingKind = nil
             track.pendingKindCount = 0
             return incoming

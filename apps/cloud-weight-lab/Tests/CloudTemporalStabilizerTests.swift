@@ -58,6 +58,54 @@ final class CloudTemporalStabilizerTests: XCTestCase {
         }
     }
 
+    func testMatureTrackIgnoresShortClassificationSwing() throws {
+        let stabilizer = CloudTemporalStabilizer()
+
+        var latest: CloudDetection?
+
+        _ = stabilizer.update(raw: [
+            detection(
+                id: 0,
+                x: 0.40,
+                y: 0.40,
+                mass: 500_000,
+                kind: .cumulus
+            )
+        ])
+
+        for index in 0..<50 {
+            latest = stabilizer.update(raw: [
+                detection(
+                    id: index + 1,
+                    x: 0.40,
+                    y: 0.40,
+                    mass: 500_000,
+                    kind: .cumulus
+                )
+            ]).first
+        }
+
+        // Current bf895 diagnostics contained a ~43-frame Cumulus swing on
+        // an otherwise persistent Stratocumulus track. An established cloud
+        // must not rename itself because its segmented area temporarily moves.
+        for index in 0..<45 {
+            latest = stabilizer.update(raw: [
+                detection(
+                    id: index + 100,
+                    x: 0.40,
+                    y: 0.40,
+                    mass: 90_000,
+                    kind: .stratocumulus
+                )
+            ]).first
+        }
+
+        XCTAssertEqual(
+            try XCTUnwrap(latest).observation.kind,
+            .cumulus
+        )
+    }
+
     func testSustainedKindChangeEventuallySwitches() throws {
         let stabilizer = CloudTemporalStabilizer()
         _ = stabilizer.update(raw: [

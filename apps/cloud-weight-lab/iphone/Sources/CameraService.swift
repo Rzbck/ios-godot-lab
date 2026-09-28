@@ -44,6 +44,7 @@ final class CameraService: NSObject, ObservableObject {
 
     private let captureQueue = DispatchQueue(label: "cloudweight.capture", qos: .userInitiated)
     private let analysisQueue = DispatchQueue(label: "cloudweight.analysis", qos: .userInitiated)
+    private let modelLoadQueue = DispatchQueue(label: "cloudweight.model-load", qos: .userInitiated)
     private let rotationStateLock = NSLock()
     private var configured = false
     private var fieldOfViewDegrees = 65.0
@@ -94,10 +95,10 @@ final class CameraService: NSObject, ObservableObject {
         guard !analyzerLoadStarted else { return }
         analyzerLoadStarted = true
 
-        // analysisQueue is also the inference queue. Loading here prevents
-        // inference callbacks from racing model construction while leaving
-        // AVCapturePreviewLayer free to start immediately.
-        analysisQueue.async { [weak self] in
+        // Model construction must never block the camera analysis queue.
+        // Once loading finishes, ownership is handed to analysisQueue so
+        // captureOutput only reads/writes analyzer from one serial queue.
+        modelLoadQueue.async { [weak self] in
             guard let self else { return }
 
             let loadedAnalyzer = CloudAnalyzer()
@@ -112,10 +113,12 @@ final class CameraService: NSObject, ObservableObject {
                 return
             }
 
-            self.analyzer = loadedAnalyzer
+            self.analysisQueue.async {
+                self.analyzer = loadedAnalyzer
 
-            DispatchQueue.main.async {
-                self.analysisModelsReady = true
+                DispatchQueue.main.async {
+                    self.analysisModelsReady = true
+                }
             }
         }
     }

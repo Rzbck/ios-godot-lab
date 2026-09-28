@@ -35,6 +35,19 @@ final class CloudAnalyzer {
         let wall: [Double]
     }
 
+    private struct CachedSemanticFrame {
+        let sky: [Double]
+        let blocker: [Double]
+        let classCoverage: CloudSemanticClassCoverage
+        let sourceWidth: Int
+        let sourceHeight: Int
+        let targetWidth: Int
+        let targetHeight: Int
+        let completedAt: CFTimeInterval
+        let refreshMilliseconds: Double
+        let generation: Int
+    }
+
     private final class ParallelInferenceResults: @unchecked Sendable {
         private let lock = NSLock()
         private var semanticSquare: SkySemanticMaps?
@@ -92,6 +105,16 @@ final class CloudAnalyzer {
         label: "cloudweight.inference.cloud",
         qos: .userInitiated
     )
+
+    // SegFormer is expensive (~68 ms on the iPhone 13 mini in bf895).
+    // It now refreshes a semantic guard asynchronously instead of blocking
+    // every cloud-analysis frame.
+    private let semanticCacheLock = NSLock()
+    private var semanticCache: CachedSemanticFrame?
+    private var semanticRefreshInFlight = false
+    private var semanticEpoch = 0
+    private var semanticGeneration = 0
+    private var lastReportedSemanticGeneration = 0
 
     private var timingPreprocessingMilliseconds = 0.0
     private var timingSkyInferenceMilliseconds = 0.0
@@ -172,6 +195,13 @@ final class CloudAnalyzer {
 
     func resetSemanticGate() {
         semanticGate.reset()
+
+        semanticCacheLock.lock()
+        semanticEpoch += 1
+        semanticCache = nil
+        semanticRefreshInFlight = false
+        lastReportedSemanticGeneration = 0
+        semanticCacheLock.unlock()
     }
 
     func analyze(
@@ -197,12 +227,14 @@ final class CloudAnalyzer {
                 skyInferenceMilliseconds: timingSkyInferenceMilliseconds,
                 cloudInferenceMilliseconds: timingCloudInferenceMilliseconds,
                 inferenceWallMilliseconds: timingInferenceWallMilliseconds,
-                parallelOverlapMilliseconds: max(
-                    0,
-                    timingSkyInferenceMilliseconds
-                        + timingCloudInferenceMilliseconds
-                        - timingInferenceWallMilliseconds
-                ),
+                parallelOverlapMilliseconds: timingInferenceMode == "parallel"
+                    ? max(
+                        0,
+                        timingSkyInferenceMilliseconds
+                            + timingCloudInferenceMilliseconds
+                            - timingInferenceWallMilliseconds
+                    )
+                    : 0,
                 postprocessingMilliseconds: max(0, totalMilliseconds - knownMilliseconds),
                 skyCoveragePercent: metrics.map {
                     $0.skySceneActive
@@ -242,124 +274,69 @@ final class CloudAnalyzer {
                 from: cameraBuffer,
                 width: targetWidth,
                 height: targetHeight
-              ),
-              let skyInputBuffer = makeModelInput(
-                from: cameraBuffer,
-                width: skyInputSize,
-                height: skyInputSize
-              ),
-              let skyInputTensor = makeRGBTensor(
-                from: skyInputBuffer,
-                width: skyInputSize,
-                height: skyInputSize
               ) else {
             return nil
         }
 
         let thermal = ProcessInfo.processInfo.thermalState
-        let allowParallel = thermal == .nominal || thermal == .fair
-        timingInferenceMode = allowParallel ? "parallel" : "sequential_thermal"
+
+        // Refresh SegFormer independently. The current analysis never waits
+        // for it; it consumes the newest valid semantic snapshot instead.
+        scheduleSemanticRefreshIfNeeded(
+            cameraBuffer: cameraBuffer,
+            skyModel: skyModel,
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight,
+            targetWidth: targetWidth,
+            targetHeight: targetHeight,
+            thermal: thermal
+        )
+
         let wallStarted = CACurrentMediaTime()
-
-        let semanticSquare: SkySemanticMaps?
-        let cloudProbabilityMap: [Double]?
-        let skyMilliseconds: Double
-        let cloudMilliseconds: Double
-
-        if allowParallel {
-            let group = DispatchGroup()
-            let results = ParallelInferenceResults()
-
-            group.enter()
-            skyInferenceQueue.async { [self] in
-                let result = predictSkySemanticMaps(
-                    model: skyModel,
-                    inputTensor: skyInputTensor,
-                    width: skyInputSize,
-                    height: skyInputSize
-                )
-                results.setSky(result)
-                group.leave()
-            }
-
-            group.enter()
-            cloudInferenceQueue.async { [self] in
-                let result = predictImageProbabilityMap(
-                    model: cloudModel,
-                    inputBuffer: cloudInputBuffer,
-                    outputName: "cloud_probability",
-                    width: targetWidth,
-                    height: targetHeight
-                )
-                results.setCloud(result)
-                group.leave()
-            }
-            group.wait()
-
-            let snapshot = results.snapshot()
-            semanticSquare = snapshot.semanticSquare
-            cloudProbabilityMap = snapshot.cloudProbabilityMap
-            skyMilliseconds = snapshot.skyMilliseconds
-            cloudMilliseconds = snapshot.cloudMilliseconds
-        } else {
-            let skyResult = skyInferenceQueue.sync { [self] in
-                predictSkySemanticMaps(
-                    model: skyModel,
-                    inputTensor: skyInputTensor,
-                    width: skyInputSize,
-                    height: skyInputSize
-                )
-            }
-            semanticSquare = skyResult?.maps
-            skyMilliseconds = skyResult?.milliseconds ?? 0
-
-            let cloudResult = cloudInferenceQueue.sync { [self] in
-                predictImageProbabilityMap(
-                    model: cloudModel,
-                    inputBuffer: cloudInputBuffer,
-                    outputName: "cloud_probability",
-                    width: targetWidth,
-                    height: targetHeight
-                )
-            }
-            cloudProbabilityMap = cloudResult?.values
-            cloudMilliseconds = cloudResult?.milliseconds ?? 0
+        let cloudResult = cloudInferenceQueue.sync { [self] in
+            predictImageProbabilityMap(
+                model: cloudModel,
+                inputBuffer: cloudInputBuffer,
+                outputName: "cloud_probability",
+                width: targetWidth,
+                height: targetHeight
+            )
         }
 
-        timingInferenceWallMilliseconds = (CACurrentMediaTime() - wallStarted) * 1_000
-        timingSkyInferenceMilliseconds = skyMilliseconds
-        timingCloudInferenceMilliseconds = cloudMilliseconds
+        timingInferenceWallMilliseconds =
+            (CACurrentMediaTime() - wallStarted) * 1_000
+        timingCloudInferenceMilliseconds =
+            cloudResult?.milliseconds ?? 0
 
-        guard let semanticSquare, let cloudProbabilityMap else { return nil }
+        guard let cloudProbabilityMap = cloudResult?.values else {
+            return nil
+        }
 
-        let sky = resample(
-            semanticSquare.sky,
-            sourceWidth: skyInputSize,
-            sourceHeight: skyInputSize,
+        let semantic = semanticSnapshot(
+            sourceWidth: sourceWidth,
+            sourceHeight: sourceHeight,
             targetWidth: targetWidth,
             targetHeight: targetHeight
         )
-        let expandedBlockerSquare = Self.maxFilterProbabilityMap(
-            semanticSquare.blocker,
-            width: skyInputSize,
-            height: skyInputSize,
-            radius: 1
-        )
-        let blocker = resample(
-            expandedBlockerSquare,
-            sourceWidth: skyInputSize,
-            sourceHeight: skyInputSize,
-            targetWidth: targetWidth,
-            targetHeight: targetHeight
-        )
-        let classCoverage = CloudSemanticClassCoverage(
-            treePercent: Self.coveragePercent(semanticSquare.tree, threshold: 0.48),
-            buildingPercent: Self.coveragePercent(semanticSquare.building, threshold: 0.48),
-            personPercent: Self.coveragePercent(semanticSquare.person, threshold: 0.48),
-            plantPercent: Self.coveragePercent(semanticSquare.plant, threshold: 0.48),
-            wallPercent: Self.coveragePercent(semanticSquare.wall, threshold: 0.48)
-        )
 
+        timingSkyInferenceMilliseconds =
+            semantic.reportedRefreshMilliseconds
+
+        guard let semanticFrame = semantic.frame else {
+            // During cold start/orientation changes, keep the preview and
+            // cloud-model pipeline responsive while waiting for the first
+            // semantic guard. Never accept an unguarded mass detection.
+            timingInferenceMode = "cloud_waiting_semantic"
+            return emptyAnalysis(fieldOfViewDegrees: fieldOfViewDegrees)
+        }
+
+        timingInferenceMode = semantic.didReportRefresh
+            ? "cloud_cached_semantic_refresh"
+            : "cloud_cached_semantic"
+
+        let sky = semanticFrame.sky
+        let blocker = semanticFrame.blocker
+        let classCoverage = semanticFrame.classCoverage
         let gated = semanticGate.makeMask(
             cloudProbabilities: cloudProbabilityMap,
             skyProbabilities: sky,
@@ -518,6 +495,202 @@ final class CloudAnalyzer {
             ),
             (CACurrentMediaTime() - started) * 1_000
         )
+    }
+
+    private func semanticSnapshot(
+        sourceWidth: Int,
+        sourceHeight: Int,
+        targetWidth: Int,
+        targetHeight: Int
+    ) -> (
+        frame: CachedSemanticFrame?,
+        reportedRefreshMilliseconds: Double,
+        didReportRefresh: Bool
+    ) {
+        semanticCacheLock.lock()
+        defer { semanticCacheLock.unlock() }
+
+        guard let frame = semanticCache,
+              frame.sourceWidth == sourceWidth,
+              frame.sourceHeight == sourceHeight,
+              frame.targetWidth == targetWidth,
+              frame.targetHeight == targetHeight else {
+            return (nil, 0, false)
+        }
+
+        let didReportRefresh =
+            frame.generation != lastReportedSemanticGeneration
+
+        if didReportRefresh {
+            lastReportedSemanticGeneration = frame.generation
+        }
+
+        return (
+            frame,
+            didReportRefresh ? frame.refreshMilliseconds : 0,
+            didReportRefresh
+        )
+    }
+
+    private func scheduleSemanticRefreshIfNeeded(
+        cameraBuffer: CVPixelBuffer,
+        skyModel: MLModel,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        targetWidth: Int,
+        targetHeight: Int,
+        thermal: ProcessInfo.ThermalState
+    ) {
+        let now = CACurrentMediaTime()
+
+        // ~4 Hz nominal, ~3 Hz fair. Reduce further if the phone heats up.
+        let refreshInterval: CFTimeInterval
+        if thermal == .nominal {
+            refreshInterval = 0.25
+        } else if thermal == .fair {
+            refreshInterval = 0.35
+        } else {
+            refreshInterval = 0.65
+        }
+
+        semanticCacheLock.lock()
+
+        let geometryMatches = semanticCache.map {
+            $0.sourceWidth == sourceWidth
+                && $0.sourceHeight == sourceHeight
+                && $0.targetWidth == targetWidth
+                && $0.targetHeight == targetHeight
+        } ?? false
+
+        let age = semanticCache.map {
+            now - $0.completedAt
+        } ?? .infinity
+
+        let refreshNeeded =
+            !geometryMatches
+            || age >= refreshInterval
+
+        guard refreshNeeded, !semanticRefreshInFlight else {
+            semanticCacheLock.unlock()
+            return
+        }
+
+        semanticRefreshInFlight = true
+        let epoch = semanticEpoch
+        semanticCacheLock.unlock()
+
+        guard let skyInputBuffer = makeModelInput(
+                from: cameraBuffer,
+                width: skyInputSize,
+                height: skyInputSize
+              ),
+              let skyInputTensor = makeRGBTensor(
+                from: skyInputBuffer,
+                width: skyInputSize,
+                height: skyInputSize
+              ) else {
+            finishSemanticRefreshFailure(epoch: epoch)
+            return
+        }
+
+        let refreshStarted = CACurrentMediaTime()
+
+        skyInferenceQueue.async { [self] in
+            guard let result = predictSkySemanticMaps(
+                model: skyModel,
+                inputTensor: skyInputTensor,
+                width: skyInputSize,
+                height: skyInputSize
+            ) else {
+                finishSemanticRefreshFailure(epoch: epoch)
+                return
+            }
+
+            // Do all expensive semantic resizing/filtering on the semantic
+            // queue as well, so normal cloud frames only consume cached maps.
+            let expandedBlocker = Self.maxFilterProbabilityMap(
+                result.maps.blocker,
+                width: skyInputSize,
+                height: skyInputSize,
+                radius: 1
+            )
+
+            let sky = Self.resampleProbabilityMap(
+                result.maps.sky,
+                sourceWidth: skyInputSize,
+                sourceHeight: skyInputSize,
+                targetWidth: targetWidth,
+                targetHeight: targetHeight
+            )
+
+            let blocker = Self.resampleProbabilityMap(
+                expandedBlocker,
+                sourceWidth: skyInputSize,
+                sourceHeight: skyInputSize,
+                targetWidth: targetWidth,
+                targetHeight: targetHeight
+            )
+
+            let classCoverage = CloudSemanticClassCoverage(
+                treePercent: Self.coveragePercent(
+                    result.maps.tree,
+                    threshold: 0.48
+                ),
+                buildingPercent: Self.coveragePercent(
+                    result.maps.building,
+                    threshold: 0.48
+                ),
+                personPercent: Self.coveragePercent(
+                    result.maps.person,
+                    threshold: 0.48
+                ),
+                plantPercent: Self.coveragePercent(
+                    result.maps.plant,
+                    threshold: 0.48
+                ),
+                wallPercent: Self.coveragePercent(
+                    result.maps.wall,
+                    threshold: 0.48
+                )
+            )
+
+            let refreshMilliseconds =
+                (CACurrentMediaTime() - refreshStarted) * 1_000
+
+            semanticCacheLock.lock()
+            defer { semanticCacheLock.unlock() }
+
+            // Ignore an inference launched before an orientation/cache reset.
+            guard epoch == semanticEpoch else {
+                return
+            }
+
+            semanticGeneration += 1
+
+            semanticCache = CachedSemanticFrame(
+                sky: sky,
+                blocker: blocker,
+                classCoverage: classCoverage,
+                sourceWidth: sourceWidth,
+                sourceHeight: sourceHeight,
+                targetWidth: targetWidth,
+                targetHeight: targetHeight,
+                completedAt: CACurrentMediaTime(),
+                refreshMilliseconds: refreshMilliseconds,
+                generation: semanticGeneration
+            )
+
+            semanticRefreshInFlight = false
+        }
+    }
+
+    private func finishSemanticRefreshFailure(epoch: Int) {
+        semanticCacheLock.lock()
+        defer { semanticCacheLock.unlock() }
+
+        if epoch == semanticEpoch {
+            semanticRefreshInFlight = false
+        }
     }
 
     private func makeModelInput(

@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreGraphics
 import Foundation
 
 // Compatibility only: the analyzer core is the exact V8/V11 implementation.
@@ -18,6 +19,15 @@ extension CloudAnalyzer {
 
     func resetSemanticGate() {
         // The legacy analyzer has no persistent semantic-gate state to reset.
+    }
+}
+
+// CameraService still passes stabilized detections to the overlay API. The V8
+// display intentionally ignores them: detailed raw cloud contours stay visible
+// even while a small/new physical track is still being confirmed.
+extension CloudOverlayStabilizer {
+    func update(_ image: CGImage?, detections: [CloudDetection]) -> CGImage? {
+        update(image)
     }
 }
 

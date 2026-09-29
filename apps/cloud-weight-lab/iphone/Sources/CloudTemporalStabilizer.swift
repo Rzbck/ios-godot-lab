@@ -30,19 +30,11 @@ final class CloudTemporalStabilizer {
     private var tracks: [Track] = []
     private var nextTrackID = 1
 
-    private let maximumTransientMisses = 1
-    private let maximumMatureMisses = 3
+    private let maximumMisses = 1
     private let maximumCentroidDistance = 0.22
     private let minimumIntersectionOverUnion = 0.035
-
-    private let immediateConfirmationCoverage = 0.08
-    private let confirmationHits = 3
-
-    // Classification is now based on region morphology as well as coverage.
-    // Keep hysteresis, but do not freeze an early wrong label for ~2.5 s.
-    private let initialKindConfirmationHits = 6
-    private let establishedKindConfirmationHits = 18
-    private let establishedKindAfterHits = 30
+    private let smallTrackConfirmationCoverage = 0.02
+    private let kindConfirmationHits = 15
 
     private(set) var lastStats = CloudTrackingStats(
         activeTracks: 0,
@@ -96,12 +88,7 @@ final class CloudTemporalStabilizer {
             }
         }
 
-        tracks.removeAll { track in
-            let maximumMisses = track.hits >= confirmationHits
-                ? maximumMatureMisses
-                : maximumTransientMisses
-            return track.misses > maximumMisses
-        }
+        tracks.removeAll { $0.misses > maximumMisses }
 
         var createdTracks = 0
         for index in detections.indices where !matchedDetectionIndices.contains(index) {
@@ -123,9 +110,8 @@ final class CloudTemporalStabilizer {
 
         let visible = tracks.filter { track in
             guard track.misses == 0 else { return false }
-
-            return track.hits >= confirmationHits
-                || track.detection.observation.coverage >= immediateConfirmationCoverage
+            return track.hits >= 2
+                || track.detection.observation.coverage >= smallTrackConfirmationCoverage
         }
 
         lastStats = CloudTrackingStats(
@@ -169,10 +155,11 @@ final class CloudTemporalStabilizer {
                 let oldCoverage = max(0.0001, existing.detection.observation.coverage)
                 let newCoverage = max(0.0001, candidate.observation.coverage)
                 let coverageRatio = min(oldCoverage, newCoverage) / max(oldCoverage, newCoverage)
-
+                let kindBonus = existing.detection.observation.kind == candidate.observation.kind ? 1.0 : 0.0
                 let score = overlap * 0.52
-                    + distanceScore * 0.35
+                    + distanceScore * 0.30
                     + coverageRatio * 0.13
+                    + kindBonus * 0.05
 
                 result.append(
                     MatchCandidate(
@@ -212,7 +199,7 @@ final class CloudTemporalStabilizer {
 
         let geometryAlpha = centroidDistance > 0.085 ? 0.90 : 0.70
         let measurementAlpha = centroidDistance > 0.085 ? 0.62 : 0.42
-        let stableKind = stabilizedKind(track: &next, incoming: newObservation)
+        let stableKind = stabilizedKind(track: &next, incoming: newObservation.kind)
 
         let smoothedObservation = CloudObservation(
             id: track.id,
@@ -226,6 +213,8 @@ final class CloudTemporalStabilizer {
             fieldOfViewDegrees: newObservation.fieldOfViewDegrees
         )
 
+        // Raw classification flicker must not move the mass estimate before the
+        // type itself has been accepted by the temporal hysteresis.
         let incomingAgreesWithStableKind = newObservation.kind == stableKind
         let targetEstimate = incomingAgreesWithStableKind ? newEstimate : oldEstimate
         let kindChanged = stableKind != oldObservation.kind
@@ -247,60 +236,25 @@ final class CloudTemporalStabilizer {
         return next
     }
 
-    private func stabilizedKind(
-        track: inout Track,
-        incoming: CloudObservation
-    ) -> CloudKind {
-        let currentObservation = track.detection.observation
-        let current = currentObservation.kind
-        let incomingKind = incoming.kind
-
-        guard incomingKind != current else {
+    private func stabilizedKind(track: inout Track, incoming: CloudKind) -> CloudKind {
+        let current = track.detection.observation.kind
+        guard incoming != current else {
             track.pendingKind = nil
             track.pendingKindCount = 0
             return current
         }
 
-        if track.pendingKind == incomingKind {
+        if track.pendingKind == incoming {
             track.pendingKindCount += 1
         } else {
-            track.pendingKind = incomingKind
+            track.pendingKind = incoming
             track.pendingKindCount = 1
         }
 
-        var requiredHits = track.hits < establishedKindAfterHits
-            ? initialKindConfirmationHits
-            : establishedKindConfirmationHits
-
-        let currentIsLayer = current == .stratus || current == .stratocumulus
-        let incomingIsLayer = incomingKind == .stratus || incomingKind == .stratocumulus
-        let coverageRatio = incoming.coverage / max(0.001, currentObservation.coverage)
-
-        // A region that suddenly becomes a broad layer should not remain an
-        // obsolete "Cumulus" for seconds. This was directly visible in the
-        // long field collection. Conversely, leaving a layer still requires
-        // several consistent frames so one temporary split cannot flicker it.
-        if !currentIsLayer,
-           incomingIsLayer,
-           incoming.coverage >= 0.30,
-           coverageRatio >= 1.35 {
-            requiredHits = min(requiredHits, 4)
-        } else if currentIsLayer,
-                  !incomingIsLayer,
-                  incoming.coverage <= 0.24 {
-            requiredHits = min(requiredHits, 8)
-        } else if currentIsLayer && incomingIsLayer {
-            requiredHits = min(requiredHits, 10)
-        }
-
-        if incomingKind == .unknown {
-            requiredHits = max(requiredHits, 12)
-        }
-
-        if track.pendingKindCount >= requiredHits {
+        if track.pendingKindCount >= kindConfirmationHits {
             track.pendingKind = nil
             track.pendingKindCount = 0
-            return incomingKind
+            return incoming
         }
         return current
     }

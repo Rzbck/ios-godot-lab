@@ -4,14 +4,8 @@ import XCTest
 final class CloudTemporalStabilizerTests: XCTestCase {
     func testNearbyDetectionKeepsStableIdentity() throws {
         let stabilizer = CloudTemporalStabilizer()
-
-        let first = stabilizer.update(raw: [
-            detection(id: 0, x: 0.30, y: 0.30, mass: 100_000)
-        ])
-        let second = stabilizer.update(raw: [
-            detection(id: 7, x: 0.33, y: 0.31, mass: 120_000)
-        ])
-
+        let first = stabilizer.update(raw: [detection(id: 0, x: 0.30, y: 0.30, mass: 100_000)])
+        let second = stabilizer.update(raw: [detection(id: 7, x: 0.33, y: 0.31, mass: 120_000)])
         XCTAssertEqual(first.count, 1)
         XCTAssertEqual(second.count, 1)
         XCTAssertEqual(first[0].id, second[0].id)
@@ -19,40 +13,22 @@ final class CloudTemporalStabilizerTests: XCTestCase {
 
     func testMassJumpIsSmoothed() throws {
         let stabilizer = CloudTemporalStabilizer()
-
-        _ = stabilizer.update(raw: [
-            detection(id: 0, x: 0.40, y: 0.40, mass: 100_000)
-        ])
-        let second = try XCTUnwrap(
-            stabilizer.update(raw: [
-                detection(id: 1, x: 0.41, y: 0.40, mass: 500_000)
-            ]).first
-        )
-
+        _ = stabilizer.update(raw: [detection(id: 0, x: 0.40, y: 0.40, mass: 100_000)])
+        let second = try XCTUnwrap(stabilizer.update(raw: [detection(id: 1, x: 0.41, y: 0.40, mass: 500_000)]).first)
         XCTAssertGreaterThan(second.estimate.midpointKilograms, 100_000)
         XCTAssertLessThan(second.estimate.midpointKilograms, 500_000)
     }
 
     func testClassifierFlickerDoesNotImmediatelyMoveKindOrMass() throws {
         let stabilizer = CloudTemporalStabilizer()
-        let initial = try XCTUnwrap(
-            stabilizer.update(raw: [
-                detection(id: 0, x: 0.40, y: 0.40, mass: 500_000, kind: .cumulus)
-            ]).first
-        )
+        let initial = try XCTUnwrap(stabilizer.update(raw: [
+            detection(id: 0, x: 0.40, y: 0.40, mass: 500_000, kind: .cumulus)
+        ]).first)
 
         for index in 0..<14 {
-            let next = try XCTUnwrap(
-                stabilizer.update(raw: [
-                    detection(
-                        id: index + 1,
-                        x: 0.40,
-                        y: 0.40,
-                        mass: 80_000,
-                        kind: .stratocumulus
-                    )
-                ]).first
-            )
+            let next = try XCTUnwrap(stabilizer.update(raw: [
+                detection(id: index + 1, x: 0.40, y: 0.40, mass: 80_000, kind: .stratocumulus)
+            ]).first)
             XCTAssertEqual(next.observation.kind, .cumulus)
             XCTAssertGreaterThan(next.estimate.midpointKilograms, initial.estimate.midpointKilograms * 0.80)
         }
@@ -60,186 +36,110 @@ final class CloudTemporalStabilizerTests: XCTestCase {
 
     func testMatureTrackIgnoresShortClassificationSwing() throws {
         let stabilizer = CloudTemporalStabilizer()
-
         var latest: CloudDetection?
-
-        _ = stabilizer.update(raw: [
-            detection(
-                id: 0,
-                x: 0.40,
-                y: 0.40,
-                mass: 500_000,
-                kind: .cumulus
-            )
-        ])
+        _ = stabilizer.update(raw: [detection(id: 0, x: 0.40, y: 0.40, mass: 500_000, kind: .cumulus)])
 
         for index in 0..<50 {
             latest = stabilizer.update(raw: [
-                detection(
-                    id: index + 1,
-                    x: 0.40,
-                    y: 0.40,
-                    mass: 500_000,
-                    kind: .cumulus
-                )
+                detection(id: index + 1, x: 0.40, y: 0.40, mass: 500_000, kind: .cumulus)
             ]).first
         }
-
-        // Current bf895 diagnostics contained a ~43-frame Cumulus swing on
-        // an otherwise persistent Stratocumulus track. An established cloud
-        // must not rename itself because its segmented area temporarily moves.
         for index in 0..<45 {
             latest = stabilizer.update(raw: [
-                detection(
-                    id: index + 100,
-                    x: 0.40,
-                    y: 0.40,
-                    mass: 90_000,
-                    kind: .stratocumulus
-                )
+                detection(id: index + 100, x: 0.40, y: 0.40, mass: 90_000, kind: .stratocumulus)
             ]).first
         }
-
-        XCTAssertEqual(
-            try XCTUnwrap(latest).observation.kind,
-            .cumulus
-        )
+        XCTAssertEqual(try XCTUnwrap(latest).observation.kind, .cumulus)
     }
 
     func testSustainedKindChangeEventuallySwitches() throws {
         let stabilizer = CloudTemporalStabilizer()
-        _ = stabilizer.update(raw: [
-            detection(id: 0, x: 0.40, y: 0.40, mass: 500_000, kind: .cumulus)
-        ])
-
+        _ = stabilizer.update(raw: [detection(id: 0, x: 0.40, y: 0.40, mass: 500_000, kind: .cumulus)])
         var latest: CloudDetection?
         for index in 0..<15 {
             latest = stabilizer.update(raw: [
-                detection(
-                    id: index + 1,
-                    x: 0.40,
-                    y: 0.40,
-                    mass: 80_000,
-                    kind: .stratocumulus
-                )
+                detection(id: index + 1, x: 0.40, y: 0.40, mass: 80_000, kind: .stratocumulus)
             ]).first
         }
         XCTAssertEqual(try XCTUnwrap(latest).observation.kind, .stratocumulus)
     }
 
+    func testLargeCoverageGrowthBreaksStaleCumulusKind() throws {
+        let stabilizer = CloudTemporalStabilizer()
+        let first = try XCTUnwrap(stabilizer.update(raw: [
+            detection(id: 0, x: 0.18, y: 0.18, mass: 500_000, kind: .cumulus, coverage: 0.28)
+        ]).first)
+        XCTAssertEqual(first.observation.kind, .cumulus)
+
+        let grown = try XCTUnwrap(stabilizer.update(raw: [
+            detection(id: 1, x: 0.14, y: 0.14, mass: 180_000, kind: .stratocumulus, coverage: 0.67)
+        ]).first)
+        XCTAssertEqual(grown.id, first.id)
+        XCTAssertEqual(grown.observation.kind, .stratocumulus)
+    }
+
     func testSingleMissingAnalysisIsHiddenButIdentityRecovers() throws {
         let stabilizer = CloudTemporalStabilizer()
-
-        let first = try XCTUnwrap(
-            stabilizer.update(raw: [
-                detection(id: 0, x: 0.50, y: 0.45, mass: 220_000)
-            ]).first
-        )
-
-        let oneMiss = stabilizer.update(raw: [])
-        XCTAssertTrue(oneMiss.isEmpty)
+        let first = try XCTUnwrap(stabilizer.update(raw: [
+            detection(id: 0, x: 0.50, y: 0.45, mass: 220_000)
+        ]).first)
+        XCTAssertTrue(stabilizer.update(raw: []).isEmpty)
         XCTAssertEqual(stabilizer.lastStats.hiddenMissedTracks, 1)
         XCTAssertEqual(stabilizer.lastStats.activeTracks, 1)
 
-        let recovered = try XCTUnwrap(
-            stabilizer.update(raw: [
-                detection(id: 9, x: 0.515, y: 0.455, mass: 225_000)
-            ]).first
-        )
+        let recovered = try XCTUnwrap(stabilizer.update(raw: [
+            detection(id: 9, x: 0.515, y: 0.455, mass: 225_000)
+        ]).first)
         XCTAssertEqual(recovered.id, first.id)
         XCTAssertEqual(stabilizer.lastStats.hiddenMissedTracks, 0)
     }
 
     func testTwoMissesRemoveTrack() {
         let stabilizer = CloudTemporalStabilizer()
-
-        _ = stabilizer.update(raw: [
-            detection(id: 0, x: 0.50, y: 0.45, mass: 220_000)
-        ])
+        _ = stabilizer.update(raw: [detection(id: 0, x: 0.50, y: 0.45, mass: 220_000)])
         _ = stabilizer.update(raw: [])
         _ = stabilizer.update(raw: [])
-
         XCTAssertEqual(stabilizer.lastStats.activeTracks, 0)
     }
 
     func testSmallFragmentNeedsThreeConsistentHits() throws {
         let stabilizer = CloudTemporalStabilizer()
-
-        let first = stabilizer.update(raw: [
-            detection(
-                id: 0,
-                x: 0.40,
-                y: 0.40,
-                mass: 50_000,
-                coverage: 0.01
-            )
-        ])
-        XCTAssertTrue(first.isEmpty)
-
-        let second = stabilizer.update(raw: [
-            detection(
-                id: 1,
-                x: 0.405,
-                y: 0.40,
-                mass: 52_000,
-                coverage: 0.01
-            )
-        ])
-        XCTAssertTrue(second.isEmpty)
-
+        XCTAssertTrue(stabilizer.update(raw: [
+            detection(id: 0, x: 0.40, y: 0.40, mass: 50_000, coverage: 0.01)
+        ]).isEmpty)
+        XCTAssertTrue(stabilizer.update(raw: [
+            detection(id: 1, x: 0.405, y: 0.40, mass: 52_000, coverage: 0.01)
+        ]).isEmpty)
         let third = stabilizer.update(raw: [
-            detection(
-                id: 2,
-                x: 0.41,
-                y: 0.40,
-                mass: 54_000,
-                coverage: 0.01
-            )
+            detection(id: 2, x: 0.41, y: 0.40, mass: 54_000, coverage: 0.01)
         ])
-
         XCTAssertEqual(third.count, 1)
     }
 
     func testMatureTrackSurvivesThreeMissesAndRecoversIdentity() throws {
         let stabilizer = CloudTemporalStabilizer()
-
-        let first = try XCTUnwrap(
-            stabilizer.update(raw: [
-                detection(id: 0, x: 0.40, y: 0.40, mass: 500_000)
-            ]).first
-        )
-
-        _ = stabilizer.update(raw: [
-            detection(id: 1, x: 0.405, y: 0.40, mass: 505_000)
-        ])
-        _ = stabilizer.update(raw: [
-            detection(id: 2, x: 0.41, y: 0.40, mass: 510_000)
-        ])
-
+        let first = try XCTUnwrap(stabilizer.update(raw: [
+            detection(id: 0, x: 0.40, y: 0.40, mass: 500_000)
+        ]).first)
+        _ = stabilizer.update(raw: [detection(id: 1, x: 0.405, y: 0.40, mass: 505_000)])
+        _ = stabilizer.update(raw: [detection(id: 2, x: 0.41, y: 0.40, mass: 510_000)])
         XCTAssertTrue(stabilizer.update(raw: []).isEmpty)
         XCTAssertTrue(stabilizer.update(raw: []).isEmpty)
         XCTAssertTrue(stabilizer.update(raw: []).isEmpty)
-
         XCTAssertEqual(stabilizer.lastStats.activeTracks, 1)
-
-        let recovered = try XCTUnwrap(
-            stabilizer.update(raw: [
-                detection(id: 99, x: 0.42, y: 0.405, mass: 515_000)
-            ]).first
-        )
-
+        let recovered = try XCTUnwrap(stabilizer.update(raw: [
+            detection(id: 99, x: 0.42, y: 0.405, mass: 515_000)
+        ]).first)
         XCTAssertEqual(recovered.id, first.id)
     }
 
     func testTwoNearbyCloudsDoNotSwapIdsWhenInputOrderChanges() throws {
         let stabilizer = CloudTemporalStabilizer()
-
         let first = stabilizer.update(raw: [
             detection(id: 0, x: 0.18, y: 0.30, mass: 160_000),
             detection(id: 1, x: 0.58, y: 0.30, mass: 120_000)
         ])
         XCTAssertEqual(first.count, 2)
-
         let leftID = try XCTUnwrap(first.min(by: { $0.observation.centroid.x < $1.observation.centroid.x })?.id)
         let rightID = try XCTUnwrap(first.max(by: { $0.observation.centroid.x < $1.observation.centroid.x })?.id)
 
@@ -247,7 +147,6 @@ final class CloudTemporalStabilizerTests: XCTestCase {
             detection(id: 7, x: 0.56, y: 0.31, mass: 130_000),
             detection(id: 8, x: 0.20, y: 0.31, mass: 170_000)
         ])
-
         let leftSecond = try XCTUnwrap(second.min(by: { $0.observation.centroid.x < $1.observation.centroid.x }))
         let rightSecond = try XCTUnwrap(second.max(by: { $0.observation.centroid.x < $1.observation.centroid.x }))
         XCTAssertEqual(leftSecond.id, leftID)
@@ -262,13 +161,14 @@ final class CloudTemporalStabilizerTests: XCTestCase {
         kind: CloudKind = .cumulus,
         coverage: Double = 0.12
     ) -> CloudDetection {
+        let side = min(0.80, max(0.18, sqrt(coverage)))
         let observation = CloudObservation(
             id: id,
             kind: kind,
             confidence: 0.82,
             coverage: coverage,
-            bounds: CGRect(x: x, y: y, width: 0.24, height: 0.18),
-            centroid: CGPoint(x: x + 0.12, y: y + 0.09),
+            bounds: CGRect(x: x, y: y, width: side, height: side * 0.78),
+            centroid: CGPoint(x: x + side * 0.5, y: y + side * 0.39),
             averageBrightness: 0.75,
             averageSaturation: 0.14,
             fieldOfViewDegrees: 64

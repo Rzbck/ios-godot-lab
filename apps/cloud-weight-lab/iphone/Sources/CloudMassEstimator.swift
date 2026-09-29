@@ -35,10 +35,6 @@ final class CloudMassEstimator {
         motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, _ in
             guard let self, let motion else { return }
             let gravity = motion.gravity
-
-            // For the back camera the optical axis is approximately -Z. Since
-            // CMGravity points down, asin(gravity.z) gives camera elevation:
-            // 0° at horizon, +90° when the back camera points at zenith.
             let z = min(max(gravity.z, -1.0), 1.0)
             let measuredElevation = asin(z) * 180.0 / .pi
 
@@ -113,8 +109,6 @@ final class CloudMassEstimator {
         let angularHeight = max(0.001, abs(top - bottom))
         let centerElevationDegrees = cameraElevationDegrees + centerVerticalOffset * 180.0 / .pi
 
-        // A cloud centroid cannot physically sit clearly below the horizon.
-        // Keep a small tolerance for CoreMotion / camera alignment error.
         if motionReliable && centerElevationDegrees < -2.5 {
             return nil
         }
@@ -182,6 +176,21 @@ final class CloudMassEstimator {
         let fillQuality = (0.65 + 0.35 * sqrt(projectedFill)).clamped(0.65...1.0)
         let uncertaintyRatio = max(1.0, highMass / max(1.0, lowMass))
         let uncertaintyQuality = (1.0 / (1.0 + 0.16 * log(uncertaintyRatio))).clamped(0.35...1.0)
+
+        // Broad overcast regions are observable as cloud fields but are not a
+        // single discrete 3-D cloud. Keep them visible, while honestly lowering
+        // the confidence of the physical mass estimate.
+        let discreteObjectQuality: Double
+        if observation.coverage >= 0.70 {
+            discreteObjectQuality = 0.35
+        } else if observation.coverage >= 0.50 {
+            discreteObjectQuality = 0.55
+        } else if observation.coverage >= 0.32 {
+            discreteObjectQuality = 0.78
+        } else {
+            discreteObjectQuality = 1.0
+        }
+
         let confidence = (
             observation.confidence
                 * elevationQuality
@@ -189,6 +198,7 @@ final class CloudMassEstimator {
                 * kindQuality
                 * fillQuality
                 * uncertaintyQuality
+                * discreteObjectQuality
         ).clamped(0.04...0.90)
 
         return CloudMassEstimate(

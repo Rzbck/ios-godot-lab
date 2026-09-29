@@ -34,15 +34,9 @@ final class CloudTemporalStabilizer {
     private let maximumMatureMisses = 3
     private let maximumCentroidDistance = 0.22
     private let minimumIntersectionOverUnion = 0.035
-
-    // A large region can appear immediately. Small fragments must persist
-    // across several analyses before becoming user-visible.
     private let immediateConfirmationCoverage = 0.08
     private let confirmationHits = 3
 
-    // Early in a new track, allow a wrong first guess to correct itself.
-    // Once the physical track is established, cloud type must remain visually
-    // stable through temporary mask-size/classification swings.
     private let initialKindConfirmationHits = 15
     private let establishedKindConfirmationHits = 60
     private let establishedKindAfterHits = 45
@@ -126,7 +120,6 @@ final class CloudTemporalStabilizer {
 
         let visible = tracks.filter { track in
             guard track.misses == 0 else { return false }
-
             return track.hits >= confirmationHits
                 || track.detection.observation.coverage >= immediateConfirmationCoverage
         }
@@ -168,14 +161,17 @@ final class CloudTemporalStabilizer {
                     continue
                 }
 
-                let distanceScore = max(0, 1 - distance / maximumCentroidDistance)
                 let oldCoverage = max(0.0001, existing.detection.observation.coverage)
                 let newCoverage = max(0.0001, candidate.observation.coverage)
                 let coverageRatio = min(oldCoverage, newCoverage) / max(oldCoverage, newCoverage)
 
-                // Identity is geometric. Cloud type is deliberately excluded:
-                // classification can flicker while the physical cloud remains
-                // the same object.
+                // A tiny track suddenly swallowed by a very broad region is
+                // usually a merge, not continuity of the same physical cloud.
+                if coverageRatio < 0.28 && max(oldCoverage, newCoverage) >= 0.38 {
+                    continue
+                }
+
+                let distanceScore = max(0, 1 - distance / maximumCentroidDistance)
                 let score = overlap * 0.52
                     + distanceScore * 0.35
                     + coverageRatio * 0.13
@@ -207,6 +203,15 @@ final class CloudTemporalStabilizer {
         let oldEstimate = track.detection.estimate
         let newEstimate = incoming.estimate
 
+        let oldCoverage = max(0.0001, oldObservation.coverage)
+        let newCoverage = max(0.0001, newObservation.coverage)
+        let coverageRatio = min(oldCoverage, newCoverage) / max(oldCoverage, newCoverage)
+        let geometryOverlap = intersectionOverUnion(oldObservation.bounds, newObservation.bounds)
+        let majorGeometryChange = coverageRatio < 0.52
+            || (geometryOverlap < 0.20 && centroidDistance > 0.04)
+        let layerTransition = newObservation.coverage >= 0.42
+            && oldObservation.coverage < 0.34
+
         let measuredVelocity = CGPoint(
             x: newObservation.centroid.x - oldObservation.centroid.x,
             y: newObservation.centroid.y - oldObservation.centroid.y
@@ -218,7 +223,12 @@ final class CloudTemporalStabilizer {
 
         let geometryAlpha = centroidDistance > 0.085 ? 0.90 : 0.70
         let measurementAlpha = centroidDistance > 0.085 ? 0.62 : 0.42
-        let stableKind = stabilizedKind(track: &next, incoming: newObservation.kind)
+        let stableKind = stabilizedKind(
+            track: &next,
+            incoming: newObservation.kind,
+            majorGeometryChange: majorGeometryChange,
+            layerTransition: layerTransition
+        )
 
         let smoothedObservation = CloudObservation(
             id: track.id,
@@ -232,14 +242,12 @@ final class CloudTemporalStabilizer {
             fieldOfViewDegrees: newObservation.fieldOfViewDegrees
         )
 
-        // Raw classification flicker must not move the mass estimate before the
-        // type itself has been accepted by the temporal hysteresis.
         let incomingAgreesWithStableKind = newObservation.kind == stableKind
         let targetEstimate = incomingAgreesWithStableKind ? newEstimate : oldEstimate
         let kindChanged = stableKind != oldObservation.kind
         let massAlpha: Double
         if kindChanged {
-            massAlpha = 0.10
+            massAlpha = majorGeometryChange ? 0.28 : 0.10
         } else if incomingAgreesWithStableKind {
             massAlpha = centroidDistance > 0.085 ? 0.42 : 0.24
         } else {
@@ -247,7 +255,6 @@ final class CloudTemporalStabilizer {
         }
 
         let smoothedEstimate = blendEstimate(oldEstimate, targetEstimate, alpha: massAlpha)
-
         next.detection = CloudDetection(
             observation: smoothedObservation,
             estimate: smoothedEstimate
@@ -255,12 +262,26 @@ final class CloudTemporalStabilizer {
         return next
     }
 
-    private func stabilizedKind(track: inout Track, incoming: CloudKind) -> CloudKind {
+    private func stabilizedKind(
+        track: inout Track,
+        incoming: CloudKind,
+        majorGeometryChange: Bool,
+        layerTransition: Bool
+    ) -> CloudKind {
         let current = track.detection.observation.kind
         guard incoming != current else {
             track.pendingKind = nil
             track.pendingKindCount = 0
             return current
+        }
+
+        // The field ZIP showed Cumulus surviving while the same mask grew from
+        // ~28% to ~67% coverage. Crossing into a broad cloud layer must break
+        // that stale type immediately.
+        if layerTransition {
+            track.pendingKind = nil
+            track.pendingKindCount = 0
+            return incoming
         }
 
         if track.pendingKind == incoming {
@@ -270,9 +291,14 @@ final class CloudTemporalStabilizer {
             track.pendingKindCount = 1
         }
 
-        let requiredHits = track.hits < establishedKindAfterHits
-            ? initialKindConfirmationHits
-            : establishedKindConfirmationHits
+        let requiredHits: Int
+        if majorGeometryChange {
+            requiredHits = 3
+        } else {
+            requiredHits = track.hits < establishedKindAfterHits
+                ? initialKindConfirmationHits
+                : establishedKindConfirmationHits
+        }
 
         if track.pendingKindCount >= requiredHits {
             track.pendingKind = nil

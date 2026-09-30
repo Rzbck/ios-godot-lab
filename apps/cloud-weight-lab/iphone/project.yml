@@ -25,8 +25,8 @@ targets:
       path: Info.plist
       properties:
         CFBundleDisplayName: Cloud Weight
-        CFBundleShortVersionString: "0.13.0"
-        CFBundleVersion: "13"
+        CFBundleShortVersionString: "0.14.0"
+        CFBundleVersion: "14"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

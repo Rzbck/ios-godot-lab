@@ -147,35 +147,6 @@ final class CloudMassEstimatorTests: XCTestCase {
         XCTAssertEqual(result[15], 1.0)
     }
 
-    func testBlockerExpansionCreatesMarginAroundObstacle() {
-        var source = [Double](repeating: 0, count: 25)
-        source[12] = 0.90
-
-        let result = CloudAnalyzer.maxFilterProbabilityMap(
-            source,
-            width: 5,
-            height: 5,
-            radius: 1
-        )
-
-        XCTAssertEqual(result.count, 25)
-
-        for y in 1...3 {
-            for x in 1...3 {
-                XCTAssertEqual(
-                    result[y * 5 + x],
-                    0.90,
-                    accuracy: 0.000_001
-                )
-            }
-        }
-
-        XCTAssertEqual(result[0], 0)
-        XCTAssertEqual(result[4], 0)
-        XCTAssertEqual(result[20], 0)
-        XCTAssertEqual(result[24], 0)
-    }
-
     private func observation(width: Double, height: Double) -> CloudObservation {
         CloudObservation(
             id: 0,

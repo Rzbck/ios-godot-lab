@@ -31,7 +31,7 @@ env:
   UCLOUDNET_COMMIT: '799f25917361663a1ce2cf210c14a01c1ae45f15'
   UCLOUDNET_WEIGHT_BLOB: '12bc7b57460e1820bc303c7513c8f2eee9b4a47f'
   ADE20K_SEGFORMER_REVISION: '489d5cd81a0b59fab9b7ea758d3548ebe99677da'
-  ADE20K_SEGFORMER_SHA256: '6ae39addd01de6b1b8de2cf677d43a5cd733424b8d186de3f95d1c51fee23f9'
+  ADE20K_SEGFORMER_SHA256: '6ae39addd01de6b1b8bde2cf677d43a5cd733424b8d186de3f95d1c51fee23f9'
 
 jobs:
   build:
@@ -117,7 +117,9 @@ jobs:
           curl --fail --location --retry 3 --retry-delay 2 \
             "https://huggingface.co/nvidia/segformer-b0-finetuned-ade-512-512/resolve/${ADE20K_SEGFORMER_REVISION}/model.safetensors?download=true" \
             --output "$ADE_WEIGHTS"
-          echo "${ADE20K_SEGFORMER_SHA256}  ${ADE_WEIGHTS}" | shasum -a 256 -c -
+          test "${#ADE20K_SEGFORMER_SHA256}" -eq 64
+          ACTUAL_ADE_SHA256="$(shasum -a 256 "$ADE_WEIGHTS" | awk '{print $1}')"
+          test "$ACTUAL_ADE_SHA256" = "$ADE20K_SEGFORMER_SHA256"
           grep -Fq '"0": "wall"' "$ADE_CONFIG"
           grep -Fq '"1": "building"' "$ADE_CONFIG"
           grep -Fq '"2": "sky"' "$ADE_CONFIG"

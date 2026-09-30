@@ -20,6 +20,41 @@ final class CloudAnalyzerPostprocessingTests: XCTestCase {
         )
     }
 
+    func testFrameSpanningTexturedLayerGetsTopologyProbe() {
+        XCTAssertTrue(
+            CloudAnalyzer.shouldProbeTopology(
+                coverage: 0.82,
+                probabilityStdDev: 0.035
+            )
+        )
+    }
+
+    func testUniformBroadLayerDoesNotGetTopologyProbe() {
+        XCTAssertFalse(
+            CloudAnalyzer.shouldProbeTopology(
+                coverage: 0.82,
+                probabilityStdDev: 0.025
+            )
+        )
+    }
+
+    func testTopologySeedThresholdsStartAboveLegacyThreshold() {
+        let thresholds = CloudAnalyzer.topologySeedThresholds(
+            meanProbability: 0.68,
+            probabilityStdDev: 0.09
+        )
+
+        XCTAssertGreaterThanOrEqual(thresholds.count, 2)
+        XCTAssertGreaterThan(
+            thresholds[0],
+            thresholds[thresholds.count - 1]
+        )
+        XCTAssertGreaterThanOrEqual(
+            thresholds[thresholds.count - 1],
+            0.58
+        )
+    }
+
     func testBroadCloudFieldCannotBeClassifiedAsCumulus() {
         let kind = CloudAnalyzer.classify(
             coverage: 0.67,

@@ -1028,6 +1028,56 @@ final class CloudAnalyzer {
         coverage >= 0.20 && probabilityStdDev >= 0.055
     }
 
+    static func shouldProbeTopology(
+        coverage: Double,
+        probabilityStdDev: Double
+    ) -> Bool {
+        shouldSplitDenseComponent(
+            coverage: coverage,
+            probabilityStdDev: probabilityStdDev
+        )
+            || (coverage >= 0.55 && probabilityStdDev >= 0.030)
+    }
+
+    static func topologySeedThresholds(
+        meanProbability: Double,
+        probabilityStdDev: Double
+    ) -> [Double] {
+        let legacyThreshold = min(
+            0.90,
+            max(
+                0.58,
+                meanProbability + max(0.035, probabilityStdDev * 0.40)
+            )
+        )
+
+        let highThreshold = min(
+            0.96,
+            max(
+                legacyThreshold + 0.10,
+                meanProbability + probabilityStdDev * 1.35
+            )
+        )
+
+        let mediumThreshold = min(
+            highThreshold,
+            max(
+                legacyThreshold + 0.05,
+                meanProbability + probabilityStdDev * 0.85
+            )
+        )
+
+        var thresholds: [Double] = []
+
+        for threshold in [highThreshold, mediumThreshold, legacyThreshold] {
+            if !thresholds.contains(where: { abs($0 - threshold) < 0.005 }) {
+                thresholds.append(threshold)
+            }
+        }
+
+        return thresholds
+    }
+
     private func refineDenseComponents(
         _ extraction: (components: [Component], labels: [Int]),
         probabilities: [Double],
@@ -1039,7 +1089,7 @@ final class CloudAnalyzer {
 
         let totalPixels = width * height
         let candidates = extraction.components.filter {
-            Self.shouldSplitDenseComponent(
+            Self.shouldProbeTopology(
                 coverage: Double($0.area) / Double(totalPixels),
                 probabilityStdDev: $0.probabilityStdDev
             )
@@ -1089,90 +1139,133 @@ final class CloudAnalyzer {
         height: Int,
         maximumSeeds: Int
     ) -> [Seed] {
-        let threshold = min(
-            0.90,
-            max(
-                0.58,
-                parent.meanProbability + max(0.035, parent.probabilityStdDev * 0.40)
-            )
+        let thresholds = Self.topologySeedThresholds(
+            meanProbability: parent.meanProbability,
+            probabilityStdDev: parent.probabilityStdDev
         )
-        let minimumSeedArea = max(72, Int(Double(width * height) * 0.0012))
-        let offsets = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-        var visited = [Bool](repeating: false, count: labels.count)
-        var queue: [Int] = []
-        var seeds: [Seed] = []
 
-        for y in parent.minY...parent.maxY {
-            for x in parent.minX...parent.maxX {
-                let start = y * width + x
-                guard labels[start] == parent.label,
-                      !visited[start],
-                      probabilities[start] >= threshold else {
-                    continue
+        let minimumSeedArea = max(
+            64,
+            Int(Double(width * height) * 0.00055)
+        )
+
+        let minimumSeedSeparation = 0.045
+        let offsets = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+        func collectSeeds(at threshold: Double) -> [Seed] {
+            var visited = [Bool](repeating: false, count: labels.count)
+            var queue: [Int] = []
+            var seeds: [Seed] = []
+
+            for y in parent.minY...parent.maxY {
+                for x in parent.minX...parent.maxX {
+                    let start = y * width + x
+
+                    guard labels[start] == parent.label,
+                          !visited[start],
+                          probabilities[start] >= threshold else {
+                        continue
+                    }
+
+                    queue.removeAll(keepingCapacity: true)
+                    queue.append(start)
+                    visited[start] = true
+
+                    var cursor = 0
+                    var pixels: [Int] = []
+                    var sumX = 0.0
+                    var sumY = 0.0
+
+                    while cursor < queue.count {
+                        let index = queue[cursor]
+                        cursor += 1
+                        pixels.append(index)
+
+                        let px = index % width
+                        let py = index / width
+
+                        sumX += Double(px)
+                        sumY += Double(py)
+
+                        for (dx, dy) in offsets {
+                            let nx = px + dx
+                            let ny = py + dy
+
+                            guard nx >= parent.minX,
+                                  nx <= parent.maxX,
+                                  ny >= parent.minY,
+                                  ny <= parent.maxY else {
+                                continue
+                            }
+
+                            let next = ny * width + nx
+
+                            guard !visited[next],
+                                  labels[next] == parent.label,
+                                  probabilities[next] >= threshold else {
+                                continue
+                            }
+
+                            visited[next] = true
+                            queue.append(next)
+                        }
+                    }
+
+                    guard pixels.count >= minimumSeedArea else {
+                        continue
+                    }
+
+                    let count = Double(pixels.count)
+
+                    seeds.append(
+                        Seed(
+                            pixels: pixels,
+                            centroidX: sumX / count,
+                            centroidY: sumY / count
+                        )
+                    )
+                }
+            }
+
+            var selected: [Seed] = []
+
+            for seed in seeds.sorted(by: {
+                $0.pixels.count > $1.pixels.count
+            }) {
+                let separated = selected.allSatisfy { existing in
+                    let dx =
+                        (seed.centroidX - existing.centroidX)
+                        / Double(width)
+
+                    let dy =
+                        (seed.centroidY - existing.centroidY)
+                        / Double(height)
+
+                    return sqrt(dx * dx + dy * dy)
+                        >= minimumSeedSeparation
                 }
 
-                queue.removeAll(keepingCapacity: true)
-                queue.append(start)
-                visited[start] = true
-                var cursor = 0
-                var pixels: [Int] = []
-                var sumX = 0.0
-                var sumY = 0.0
+                if separated {
+                    selected.append(seed)
 
-                while cursor < queue.count {
-                    let index = queue[cursor]
-                    cursor += 1
-                    pixels.append(index)
-                    let px = index % width
-                    let py = index / width
-                    sumX += Double(px)
-                    sumY += Double(py)
-
-                    for (dx, dy) in offsets {
-                        let nx = px + dx
-                        let ny = py + dy
-                        guard nx >= parent.minX,
-                              nx <= parent.maxX,
-                              ny >= parent.minY,
-                              ny <= parent.maxY else {
-                            continue
-                        }
-                        let next = ny * width + nx
-                        guard !visited[next],
-                              labels[next] == parent.label,
-                              probabilities[next] >= threshold else {
-                            continue
-                        }
-                        visited[next] = true
-                        queue.append(next)
+                    if selected.count >= maximumSeeds {
+                        break
                     }
                 }
+            }
 
-                guard pixels.count >= minimumSeedArea else { continue }
-                let count = Double(pixels.count)
-                seeds.append(
-                    Seed(
-                        pixels: pixels,
-                        centroidX: sumX / count,
-                        centroidY: sumY / count
-                    )
-                )
+            return selected
+        }
+
+        for threshold in thresholds {
+            let seeds = collectSeeds(at: threshold)
+
+            if seeds.count >= 2 {
+                return seeds
             }
         }
 
-        var selected: [Seed] = []
-        for seed in seeds.sorted(by: { $0.pixels.count > $1.pixels.count }) {
-            let separated = selected.allSatisfy { existing in
-                let dx = (seed.centroidX - existing.centroidX) / Double(width)
-                let dy = (seed.centroidY - existing.centroidY) / Double(height)
-                return sqrt(dx * dx + dy * dy) >= 0.065
-            }
-            if separated {
-                selected.append(seed)
-                if selected.count >= maximumSeeds { break }
-            }
-        }
-        return selected
+        return []
     }
 
     private func split(

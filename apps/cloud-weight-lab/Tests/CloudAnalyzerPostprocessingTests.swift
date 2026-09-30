@@ -2,47 +2,47 @@ import XCTest
 @testable import CloudWeightLab
 
 final class CloudAnalyzerPostprocessingTests: XCTestCase {
-    func testDenseTexturedFieldIsEligibleForTopologySplit() {
-        XCTAssertTrue(
-            CloudAnalyzer.shouldSplitDenseComponent(
-                coverage: 0.67,
-                probabilityStdDev: 0.09
-            )
+    func testStrictGateRejectsStrongCloudWithoutLocalSkyProof() {
+        let mask = CloudAnalyzer.gatedCloudMask(
+            cloudProbabilities: [0.95],
+            skyProbabilities: [0.20],
+            cloudThreshold: 0.52,
+            skyThreshold: 0.55
         )
+
+        XCTAssertEqual(mask, [false])
     }
 
-    func testUniformDenseLayerIsNotForcedIntoArtificialPatches() {
-        XCTAssertFalse(
-            CloudAnalyzer.shouldSplitDenseComponent(
-                coverage: 0.82,
-                probabilityStdDev: 0.025
-            )
+    func testStrictGatePreservesGapInsteadOfWeakSemanticBridge() {
+        let mask = CloudAnalyzer.gatedCloudMask(
+            cloudProbabilities: [0.80, 0.82, 0.90, 0.81, 0.79],
+            skyProbabilities: [0.80, 0.72, 0.30, 0.74, 0.77],
+            cloudThreshold: 0.52,
+            skyThreshold: 0.55
         )
+
+        XCTAssertEqual(mask, [true, true, false, true, true])
     }
 
-    func testBroadCloudFieldCannotBeClassifiedAsCumulus() {
-        let kind = CloudAnalyzer.classify(
-            coverage: 0.67,
-            aspectRatio: 1.15,
-            brightness: 0.72,
-            saturation: 0.12,
-            fill: 0.88,
-            probabilityStdDev: 0.08,
-            brightnessStdDev: 0.13
+    func testStrictGateKeepsCloudWhenBothModelsAgree() {
+        let mask = CloudAnalyzer.gatedCloudMask(
+            cloudProbabilities: [0.40, 0.60, 0.91],
+            skyProbabilities: [0.90, 0.70, 0.88],
+            cloudThreshold: 0.52,
+            skyThreshold: 0.55
         )
-        XCTAssertEqual(kind, .stratocumulus)
+
+        XCTAssertEqual(mask, [false, true, true])
     }
 
-    func testUniformBroadLayerClassifiesAsStratus() {
-        let kind = CloudAnalyzer.classify(
-            coverage: 0.78,
-            aspectRatio: 1.3,
-            brightness: 0.68,
-            saturation: 0.10,
-            fill: 0.91,
-            probabilityStdDev: 0.02,
-            brightnessStdDev: 0.04
+    func testStrictGateRejectsMismatchedProbabilityMaps() {
+        let mask = CloudAnalyzer.gatedCloudMask(
+            cloudProbabilities: [0.80, 0.82],
+            skyProbabilities: [0.80],
+            cloudThreshold: 0.52,
+            skyThreshold: 0.55
         )
-        XCTAssertEqual(kind, .stratus)
+
+        XCTAssertTrue(mask.isEmpty)
     }
 }

@@ -1,189 +1,143 @@
-# HANDOFF — Cloud Weight Lab V13 WIP
+# HANDOFF — Cloud Weight Lab V14 legacy control
 
-## Objectif actuel
+## Objectif
 
-Application iPhone temps réel qui segmente les nuages, suit des régions persistantes et estime leur masse.
+Retrouver une segmentation détaillée et stable sur iPhone après les régressions de fusion en gros « pâtés », tout en conservant le shell moderne : tracking, estimateur de masse, portrait/paysage, diagnostics persistants, ZIP terrain et pipeline IPA exact-SHA.
 
-Priorités actuelles :
+Priorités :
 
-1. retrouver la finesse de segmentation et la stabilité visuelle des anciennes bonnes versions ;
-2. éviter les gros « pâtés » / fusions de nuages distincts ;
-3. contenir les faux positifs sans rogner les vrais contours ;
-4. tracking stable et IDs cohérents ;
-5. latence réelle < 30 ms sur iPhone 13 mini ;
-6. conserver le workflow collecte longue durée + ZIP diagnostic + exact-SHA IPA.
+1. valider physiquement que les nuages distincts redeviennent des régions distinctes ;
+2. mesurer stabilité, faux positifs et latence sur iPhone 13 mini ;
+3. ne réintroduire aucune logique adaptative/topologique avant comparaison terrain ;
+4. conserver le pipeline exact-SHA et la collecte persistante déjà validée.
 
-Ne jamais confondre compilation/CI, IPA générée, installation iLoader et validation physique iPhone.
+Ne jamais confondre CI/build, IPA générée, IPA installée et validation physique iPhone.
 
-## Dépôt / worktree / branche
+## Dépôt / branche / worktree
 
 - dépôt : `Rzbck/ios-godot-lab`
 - app : `apps/cloud-weight-lab`
-- branche active : `fix/cloud-weight-twilight-autosync-v12-20260927`
-- worktree Windows attendu : `E:\_Project\IOS APP\ios-godot-lab\worktrees\cloud-weight-twilight-autosync-v12`
+- branche active V14 : `fix/cloud-weight-legacy-control-v14-20260930`
+- branche de départ : `fix/cloud-weight-twilight-autosync-v12-20260927`
+- base de branche V14 : `7978ea414065aca582cffd287ccf500da5c78f62`
+- checkpoint code + métadonnées V14 avant ce commit documentaire : `fb2f386887f03a62439d806ce00b94edad0481e5`
+- worktree Windows recommandé : `E:\_Project\IOS APP\ios-godot-lab\worktrees\cloud-weight-legacy-control-v14`
 - `main` hors chantier
-- base V11 historique : `c69a673e9dc00355ae744a651341ae5379c9029f`
-- dernier build terrain V12 avec collecte persistante : `a9ffaca0fe557b59a09526fdc704a9725cf69f7e`
-- **checkpoint code V13 courant avant le commit documentaire de ce HANDOFF** : `978aa8337ba3b6ead8f127df1150deb691f473ad`
-- commit code : `feat(cloud-weight-lab): refine dense cloud fields for v13`
 
-À la reprise, vérifier immédiatement branche, HEAD, git status local, dernier run CI et artifact exact-SHA. Le commit contenant ce HANDOFF sera nécessairement postérieur au checkpoint code `978aa833...`.
+À toute reprise, vérifier `git status`, branche, HEAD réel, dernier run CI et artifact exact-SHA. Le commit contenant ce HANDOFF est nécessairement postérieur à `fb2f386...`.
 
-## Version au checkpoint `978aa833...`
+## Version
 
-- app : `0.13.0`
-- build : `13`
+- app : `0.14.0`
+- build : `14`
 
-## État CI actuel — IMPORTANT
+## Pourquoi V14
 
-GitHub Actions :
+Les packs terrain V13 ont montré que la régression est structurelle : le gate relaxé / fallback pouvait créer des ponts, puis les connected components formaient une grande région. Le split V13 pouvait redistribuer les pixels d'un parent géant entre plusieurs IDs, mais ne recréait pas les vrais espaces entre nuages. Les refreshs du cache SegFormer asynchrone étaient aussi associés à de forts changements de masque.
 
-- run : `36610852240` (#153)
-- SHA : `978aa8337ba3b6ead8f127df1150deb691f473ad`
-- branche : `fix/cloud-weight-twilight-autosync-v12-20260927`
-- conclusion : **FAILURE**
-- job : `109551583813`
-- étapes Core ML : SUCCESS
-- génération projet Xcode : SUCCESS
-- étape `Compile app and unit tests for simulator` : **FAILURE**
-- build device : SKIPPED
-- package IPA : SKIPPED
-- upload artifact : SKIPPED
+Le pivot historique est le refactor `1039a7cabe76d239726b7e1bf7d1378c1352aa23` (`route analyzer through adaptive pipeline`).
 
-**Il n'existe donc pas encore d'IPA V13 valide pour `978aa833...`.**
+## Architecture V14 contrôle
 
-Ne jamais dire que V13 est compilée ou testée tant qu'un nouveau SHA n'a pas une CI complète SUCCESS et un artifact exact-SHA.
+`CloudAnalyzer.swift` restaure le cœur legacy V8/V11 :
 
-## Pourquoi V13 a été créée
+- UCloudNet portrait/paysage ;
+- seuil cloud `0.52` ;
+- SegFormer ciel calculé sur la même frame ;
+- seuil ciel strict `0.55` ;
+- géométrie : `cloud >= 0.52 && sky >= 0.55` ;
+- cleanup legacy ;
+- connected components legacy ;
+- maximum 8 régions ;
+- pas de cache SegFormer asynchrone dans la géométrie ;
+- pas de relaxed-sky gate ;
+- pas de strong-cloud fallback ;
+- pas de dense topology splitter / seed redistribution.
 
-Les tests physiques récents ont montré une forte régression de qualité par rapport aux anciennes bonnes versions :
+Le shell moderne est conservé :
 
-- gros blocs/fusions au lieu de contours détaillés ;
-- plusieurs structures nuageuses réunies en une seule région ;
-- instabilité du masque / changements brusques ;
-- faux positifs ;
-- classification parfois stale (ex. un track initialement Cumulus reste Cumulus alors que sa région grossit fortement) ;
-- performance qui se dégrade quand la couverture nuageuse devient très grande.
+- `CameraService` et lifecycle ;
+- `CloudTemporalStabilizer` pour les détections/IDs ;
+- estimateur de masse angle-aware ;
+- diagnostics / telemetry ;
+- collection persistante multi-ouvertures ;
+- ZIP `ANALYSIS-PACK` ;
+- orientation portrait/paysage ;
+- updater exact-SHA + iLoader.
 
-Le pack terrain `a9ffaca0...` avait confirmé notamment :
+Pour cette build contrôle, l'overlay affiché reprend le contour raw legacy afin que la stabilisation ne puisse pas masquer la géométrie à évaluer.
 
-- forte proportion de frames couvertes avec 1 seul composant géant ;
-- corrélation très forte entre couverture et coût de post-traitement ;
-- refresh SegFormer associé à davantage de changements de masque / créations de tracks ;
-- comportement terrain collecte multi-ouvertures et récupération ZIP validé physiquement.
+`LegacyAnalyzerCompatibility.swift` adapte seulement les signatures/télémétries modernes au cœur legacy ; il ne doit pas modifier la géométrie.
 
-## Changements V13 au checkpoint `978aa833...`
+## Tests / compilation
 
-### Segmentation / géométrie
+Les tests V13 dépendant de fonctions topologiques supprimées ont été remplacés/retirés lorsqu'ils ne correspondaient plus au moteur actif.
 
-`CloudAnalyzer.swift` a été refactoré pour :
+Cas de régression ajouté : un pixel de forte probabilité cloud mais sans preuve locale de ciel strict ne doit pas relier deux zones ; le gap doit rester un gap.
 
-- utiliser une connectivité 4-voisins au lieu de ponts diagonaux 8-voisins ;
-- cleanup cardinal qui ne remplit plus les gaps diagonaux ;
-- calculer aire/statistiques pendant l'extraction sans conserver un énorme tableau de pixels par composant ;
-- détecter les composants denses et variables via `probabilityStdDev` ;
-- tenter de découper un gros composant à partir de plusieurs noyaux UCloudNet haute confiance séparés ;
-- reconstruire les labels après split ;
-- échantillonner les statistiques couleur au lieu de reparcourir chaque pixel de gros composants ;
-- classifier avec couverture + aspect + fill + variance UCloudNet + variance de luminosité ;
-- traiter un champ très couvrant comme Stratus/Stratocumulus plutôt qu'un énorme Cumulus.
+Attention : le workflow utilise `build-for-testing`. Il compile l'app et la cible XCTest mais n'exécute pas les XCTest. Ne pas dire « tests passés » sans exécution explicite.
 
-### Stabilisation sémantique
+## CI connue
 
-Le cache SegFormer reste asynchrone. V13 ajoute un lissage seulement lorsque la différence de carte sémantique est faible ; les gros changements de scène sont appliqués immédiatement pour éviter de mélanger une vieille carte avec une nouvelle vue caméra.
+Run de contrôle avant stamp V14 final :
 
-### Tracking / type
+- run : `36705513149` (#160)
+- SHA : `bef6d05d3a44b78c41d22d05b75adfeecebb1fff`
+- conclusion : **SUCCESS**
+- compile simulateur + cible de tests : SUCCESS
+- build device non signé : SUCCESS
+- vérification bundle : SUCCESS
+- package IPA exact-SHA : SUCCESS
+- upload artifact : SUCCESS
 
-`CloudTemporalStabilizer.swift` :
+Le commit `fb2f386887f03a62439d806ce00b94edad0481e5` ajoute uniquement l'identité V14 (`0.14.0`, build `14`) et des métadonnées d'artifact cohérentes avec le moteur legacy. Après ce HANDOFF, vérifier la CI du HEAD documentaire final ; ne jamais réutiliser l'artifact #160 comme artifact final V14 si le HEAD a changé.
 
-- rejette comme continuité un match où une petite région est soudain absorbée dans une très grosse région ;
-- détecte les changements majeurs de géométrie ;
-- raccourcit fortement l'hystérésis de type lors d'un changement géométrique majeur ;
-- changement immédiat de type lors du passage d'un objet discret vers une large couche afin d'éviter le « giant stale Cumulus » observé sur le terrain.
+## Collecte terrain à préserver
 
-### Masse
+Le système persistant issu de `a9ffaca0fe557b59a09526fdc704a9725cf69f7e` reste intact :
 
-`CloudMassEstimator.swift` conserve l'estimateur angle-aware, mais baisse la confiance physique pour les régions très couvrantes : une couche de ciel couvert peut être visible, mais ne doit pas être présentée avec la même confiance qu'un nuage discret.
-
-### Tests ajoutés/modifiés
-
-Des cas de tracking couvrent notamment la croissance importante de couverture afin d'éviter qu'un Cumulus stale reste affiché après transformation en grande couche.
-
-Attention : le workflow actuel compile la cible XCTest avec `build-for-testing`; il ne faut pas parler de tests exécutés tant qu'ils ne sont pas réellement lancés.
-
-## État historique / branches à ne pas confondre
-
-Une branche d'essai `fix/cloud-weight-legacy-quality-v12-20260929` existe avec le SHA `c1ce3f932d40040c3327071b13853ba2eeb507cb` et le run #152 en échec. Elle servait à un replay historique V8/V11/SkyWater, mais **ce n'est pas le chantier actif actuel**.
-
-Ne pas revenir automatiquement dessus ni présenter son état comme celui de la branche V13 actuelle.
-
-## Pipeline exact-SHA à conserver
-
-Workflow normal :
-
-1. modifier uniquement la branche active dédiée ;
-2. commit/push ;
-3. GitHub Actions exact-SHA ;
-4. seulement si CI complète SUCCESS : récupérer l'artifact via `apps/cloud-weight-lab/UPDATE_CLOUD_WEIGHT_LAB.ps1` ;
-5. installer l'IPA avec iLoader ;
-6. valider physiquement sur iPhone ;
-7. récupérer les diagnostics avec `SYNC_CLOUD_WEIGHT_SESSION.ps1 -AnalysisPack`.
-
-Le script updater existant doit rester le workflow normal. Ne pas inventer un second downloader concurrent.
-
-## Collecte terrain validée à conserver
-
-Le système de collection persistante introduit à `a9ffaca0...` est important et ne doit pas être cassé :
-
-- plusieurs ouvertures/fermetures/verrouillages de l'app rejoignent la même collection ;
+- plusieurs ouvertures / fermetures / verrouillages dans une collection ;
 - segments persistants ;
-- récupération finale en un seul `ANALYSIS-PACK-collection-....zip` ;
-- récupération d'une session interrompue validée sur un test terrain d'environ 98 minutes ;
-- lifecycle background/active et reset tracking/overlay déjà intégrés.
+- récupération finale en un ZIP ;
+- reprise après interruption déjà validée physiquement ;
+- aucun nouveau downloader ou mécanisme concurrent.
 
 ## Ce qui est validé
 
-- workflow exact-SHA historique ;
-- collecte multi-segments et ZIP terrain sur `a9ffaca0...` ;
-- modèle terrain ayant fourni des diagnostics exploitables ;
-- changements V13 présents dans Git au checkpoint `978aa833...` ;
-- compilation/build des modèles Core ML dans la CI #153.
+- cœur legacy intégré au shell moderne ;
+- compilation simulateur de la build contrôle `bef6d05...` ;
+- build device non signé `bef6d05...` ;
+- packaging/upload IPA exact-SHA `bef6d05...` ;
+- métadonnées V14 présentes dans le checkpoint `fb2f386...` ;
+- pipeline exact-SHA historique ;
+- collecte persistante historique.
 
-## Ce qui n'est PAS validé
+## Ce qui n'est PAS encore validé
 
-- compilation Swift V13 ;
-- build device V13 ;
-- IPA V13 ;
-- installation V13 ;
-- finesse de segmentation V13 sur iPhone ;
-- stabilité V13 ;
-- faux positifs V13 ;
-- performance V13 <30 ms ;
-- thermique longue durée V13 ;
-- tests XCTest réellement exécutés.
+- CI complète du HEAD documentaire final ;
+- installation de V14 sur iPhone ;
+- finesse réelle des contours V14 ;
+- disparition des fusions massives V14 ;
+- faux positifs V14 ;
+- stabilité tracking/IDs V14 ;
+- latence réelle V14 sur iPhone 13 mini ;
+- objectif < 30 ms ;
+- thermique longue durée ;
+- XCTest réellement exécutés.
 
-## Prochaine étape EXACTE
+## Prochaine étape exacte
 
-1. Vérifier HEAD réel de `fix/cloud-weight-twilight-autosync-v12-20260927` et ne pas supposer qu'il est encore `978aa833...` après le commit HANDOFF.
-2. Ouvrir le log du job GitHub Actions `109551583813`, run #153, et extraire la/les erreur(s) Swift de l'étape `Compile app and unit tests for simulator`.
-3. Corriger **uniquement** l'erreur de compilation ; ne pas modifier la géométrie/segmentation V13 tant qu'elle n'a pas été testée physiquement.
-4. Commit/push sur la même branche dédiée.
-5. Attendre une CI complète SUCCESS : compile simulator/test target + build device + contract + package IPA + artifact exact-SHA.
-6. Mettre à jour ce HANDOFF avec le nouveau SHA/run/artifact.
-7. Utiliser `UPDATE_CLOUD_WEIGHT_LAB.ps1 -OpenFolder`, puis iLoader.
-8. Test physique ciblé :
-   - ciel avec plusieurs petits/moyens nuages séparés ;
-   - ciel très couvert/complexe ;
-   - arbres/bâtiments/route/intérieur pour faux positifs ;
-   - mouvements de caméra + portrait/paysage ;
-   - vérifier stabilité des contours et IDs ;
-   - vérifier que plusieurs structures ne deviennent plus un seul gros pâté ;
-   - mesurer analyse P50/P95 et thermique.
-9. Récupérer un seul ZIP avec :
+1. Vérifier HEAD réel de `fix/cloud-weight-legacy-control-v14-20260930` et la CI correspondante.
+2. Exiger une CI complète SUCCESS du même SHA : simulateur/test target + build device + contract + package + upload.
+3. Créer/synchroniser le worktree Windows V14 sans écraser les autres worktrees.
+4. Utiliser exclusivement `apps/cloud-weight-lab/UPDATE_CLOUD_WEIGHT_LAB.ps1 -OpenFolder` pour récupérer l'IPA exact-SHA.
+5. Installer avec iLoader.
+6. Test physique ciblé : plusieurs petits/moyens nuages séparés, ciel très couvert, arbres/bâtiments/route/intérieur, mouvements caméra, portrait/paysage, contours, IDs, latence et thermique.
+7. Récupérer le pack terrain avec :
 
 ```powershell
 & {
-    $W = 'E:\_Project\IOS APP\ios-godot-lab\worktrees\cloud-weight-twilight-autosync-v12'
+    $W = 'E:\_Project\IOS APP\ios-godot-lab\worktrees\cloud-weight-legacy-control-v14'
     Set-Location $W
     .\apps\cloud-weight-lab\SYNC_CLOUD_WEIGHT_SESSION.ps1 `
         -KeepFrames `
@@ -192,28 +146,28 @@ Le système de collection persistante introduit à `a9ffaca0...` est important e
 }
 ```
 
-10. Comparer V13 au pack terrain précédent avant tout nouveau changement de seuil/modèle.
+8. Comparer V14 aux packs précédents avant toute nouvelle optimisation.
 
 ## À ne pas modifier
 
 - `main` ;
-- autres apps du dépôt ;
+- autres apps ;
 - pipeline exact-SHA / updater / iLoader ;
-- collecte persistante déjà validée ;
-- estimateur angle-aware hors correction prouvée ;
-- seuils/modèles au hasard ;
+- collecte persistante ;
+- estimateur de masse sans preuve de régression ;
+- seuils `0.52` / `0.55` avant le premier test physique V14 ;
+- ne pas réintroduire cache SegFormer async, gate relaxé, fallback fort ou splitter topologique avant validation comparative ;
 - pas de merge/release sans accord utilisateur.
 
 ## Critères de sortie
 
-Le chantier n'est pas prêt tant que :
+Le chantier n'est pas considéré terminé tant que :
 
 - CI exact-SHA complète SUCCESS ;
-- IPA exact-SHA récupérable ;
-- segmentation physiquement détaillée et stable ;
-- plus de fusion massive systématique des nuages complexes ;
-- faux positifs contenus ;
-- tracking stable ;
-- latence réelle mesurée sur iPhone idéalement <30 ms ;
-- thermique acceptable ;
-- validation matérielle explicitement documentée.
+- IPA exact-SHA récupérable et installée ;
+- segmentation détaillée validée physiquement ;
+- pas de fusion massive systématique ;
+- faux positifs acceptables ;
+- tracking/IDs acceptables ;
+- latence/thermique mesurées ;
+- validation iPhone explicitement documentée.

@@ -31,7 +31,7 @@ env:
   UCLOUDNET_COMMIT: '799f25917361663a1ce2cf210c14a01c1ae45f15'
   UCLOUDNET_WEIGHT_BLOB: '12bc7b57460e1820bc303c7513c8f2eee9b4a47f'
   ADE20K_SEGFORMER_REVISION: '489d5cd81a0b59fab9b7ea758d3548ebe99677da'
-  ADE20K_SEGFORMER_SHA256: '6ae39addd01de6b1b8bde2cf677d43a5cd733424b8d186de3f95d1c51fee23f9'
+  ADE20K_SEGFORMER_SHA256: '6ae39addd01de6b1b8de2cf677d43a5cd733424b8d186de3f95d1c51fee23f9'
 
 jobs:
   build:
@@ -147,7 +147,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:12}"
           cat > "$APP_DIR/iphone/Sources/BuildInfo.swift" <<EOF
           enum BuildInfo {
-              static let version = "0.12.0"
+              static let version = "0.13.0"
               static let gitSHA = "$SHORT_SHA"
           }
           EOF
@@ -209,7 +209,7 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$APP_PATH/Info.plist" >/dev/null
           /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$APP_PATH/Info.plist" >/dev/null
           grep -Fq "${GITHUB_SHA:0:12}" "$APP_DIR/iphone/Sources/BuildInfo.swift"
-          grep -Fq '0.12.0' "$APP_DIR/iphone/Sources/BuildInfo.swift"
+          grep -Fq '0.13.0' "$APP_DIR/iphone/Sources/BuildInfo.swift"
           test -n "$(find "$APP_PATH" -type d -name 'CloudSegmentation.mlmodelc' -print -quit)"
           test -n "$(find "$APP_PATH" -type d -name 'CloudSegmentationLandscape.mlmodelc' -print -quit)"
           test -n "$(find "$APP_PATH" -type d -name 'SkySegmentation.mlmodelc' -print -quit)"
@@ -231,7 +231,7 @@ jobs:
           cat > "$OUT/BUILD-METADATA.json" <<EOF
           {
             "app": "Cloud Weight Lab",
-            "version": "0.12.0",
+            "version": "0.13.0",
             "sha": "$GITHUB_SHA",
             "bundle_id": "com.rzbck.cloudweightlab",
             "artifact": "$IPA",
@@ -258,5 +258,3 @@ jobs:
           name: cloud-weight-lab-${{ github.sha }}
           path: build/cloud-weight-lab/
           if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
